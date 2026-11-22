@@ -106,9 +106,8 @@ class AtomicWriteTests(unittest.TestCase):
         environment = {"LANEFATHER_STATE": str(self.tmp / "state"), "LANEFATHER_SETTINGS": str(self.tmp / "settings.json"),
                        "LANEFATHER_REGISTRY": str(self.tmp / "projects.json")}
         with unittest.mock.patch.dict(os.environ, environment):
-            config.use(config.Config())
-            self.addCleanup(config.use, None)
-            self.durable(self.tmp / "state" / "a.json", lambda: state.save({"id": "a", "status": "planned"}))
+            store = state.Store(config.DEFAULT)
+            self.durable(self.tmp / "state" / "a.json", lambda: store.save({"id": "a", "status": "planned"}))
             self.durable(self.tmp / "settings.json", lambda: settings.write({"review.start": "manual"}, None))
             self.durable(self.tmp / "projects.json", lambda: registry.note(config.load(repo / ".lanefather.toml")))
             install = importlib.import_module("install")
@@ -137,7 +136,7 @@ class CutShortRecordTests(unittest.TestCase):
     """A lane record a crash left empty or half written names itself; it is not 'no lane'."""
 
     def setUp(self):
-        from lanefather import config
+        from lanefather import config, state
         self.tmp = pathlib.Path(tempfile.mkdtemp(prefix="lane-state-"))
         self.addCleanup(shutil.rmtree, self.tmp, True)
         self.state = self.tmp / "state"
@@ -145,16 +144,14 @@ class CutShortRecordTests(unittest.TestCase):
         patcher = unittest.mock.patch.dict(os.environ, {"LANEFATHER_STATE": str(self.state)})
         patcher.start()
         self.addCleanup(patcher.stop)
-        config.use(config.Config())
-        self.addCleanup(config.use, None)
+        self.store = state.Store(config.DEFAULT, directory=self.state)
 
     def test_load_reports_a_cut_short_record(self):
-        from lanefather import state
         from lanefather.errors import LaneError
         for text in ("", '{\n  "id": "a",\n  "status": "act'):
             (self.state / "a.json").write_text(text)
             with self.assertRaises(LaneError) as caught:
-                state.load("a")
+                self.store.load("a")
             self.assertIn("cut short", str(caught.exception))
             self.assertIn(str(self.state / "a.json"), str(caught.exception))
             self.assertNotIn("no lane", str(caught.exception))
@@ -162,14 +159,14 @@ class CutShortRecordTests(unittest.TestCase):
     def test_listing_the_lanes_reports_a_cut_short_record_rather_than_dropping_its_claims(self):
         from lanefather import state
         from lanefather.errors import LaneError
-        state.save({"id": "b", "status": "active", "claims": ["src/**"]})
+        self.store.save({"id": "b", "status": "active", "claims": ["src/**"]})
         (self.state / "a.json").write_text("")
         for strict in (False, True):
             with self.assertRaises(LaneError) as caught:
-                state.Store(state.config.current()).lanes(strict=strict)
+                self.store.lanes(strict=strict)
             self.assertIn("cut short", str(caught.exception))
         with self.assertRaises(LaneError):
-            state.occupying()
+            state.occupying(self.store.lanes())
 
     def test_show_reports_a_cut_short_record(self):
         from lanefather import show
@@ -184,36 +181,32 @@ class CutShortRecordTests(unittest.TestCase):
         self.assertEqual(str(caught.exception), "no lane b")
 
     def test_a_read_only_listing_names_the_damaged_record_beside_the_healthy_lanes(self):
-        from lanefather import state
-        state.save({"id": "b", "status": "active", "claims": ["src/**"]})
+        self.store.save({"id": "b", "status": "active", "claims": ["src/**"]})
         (self.state / "a.json").write_text("")
         damaged: list[pathlib.Path] = []
-        found = state.Store(state.config.current()).lanes(damaged=damaged)
+        found = self.store.lanes(damaged=damaged)
         self.assertEqual([r["id"] for r in found], ["b"])
         self.assertEqual(damaged, [self.state / "a.json"])
 
     def test_a_missing_record_is_still_no_lane(self):
-        from lanefather import state
         from lanefather.errors import LaneError
         with self.assertRaises(LaneError) as caught:
-            state.load("a")
+            self.store.load("a")
         self.assertIn("no lane a", str(caught.exception))
-        self.assertEqual(state.lanes(), [])
+        self.assertEqual(self.store.lanes(), [])
 
     def test_a_saved_record_round_trips(self):
-        from lanefather import state
-        state.save({"id": "a", "status": "planned"})
-        self.assertEqual(state.load("a")["status"], "planned")
+        self.store.save({"id": "a", "status": "planned"})
+        self.assertEqual(self.store.load("a")["status"], "planned")
         self.assertEqual(sorted(p.name for p in self.state.iterdir()), ["a.json"])
 
     def test_a_newer_schema_is_refused_rather_than_rewritten(self):
         import json
 
-        from lanefather import state
         from lanefather.errors import LaneError
         future = {"schema": 2, "id": "future", "status": "planned", "claims": ["docs/**"]}
         (self.state / "future.json").write_text(json.dumps(future))
-        for action in (lambda: state.load("future"), lambda: state.lanes()):
+        for action in (lambda: self.store.load("future"), lambda: self.store.lanes()):
             with self.assertRaises(LaneError) as caught:
                 action()
             self.assertIn("schema 2, newer than this lanefather's 1", str(caught.exception))

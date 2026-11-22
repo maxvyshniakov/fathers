@@ -142,9 +142,9 @@ class LifecycleTableTests(unittest.TestCase):
     def test_transition_does_not_consult_config_current(self) -> None:
         from lanefather import config, lifecycle
         self._seed("x", "planned")
-        with mock.patch.object(config, "current", side_effect=AssertionError("must not call config.current()")):
-            result = lifecycle.transition(self.store, "x", "adopt", worktree="/tmp/wt", branch="lane/x")
-            kept_rec = lifecycle.set_keep(self.store, "x", True)
+        self.assertFalse(hasattr(config, "current"))
+        result = lifecycle.transition(self.store, "x", "adopt", worktree="/tmp/wt", branch="lane/x")
+        kept_rec = lifecycle.set_keep(self.store, "x", True)
         self.assertEqual(result["status"], "active")
         self.assertTrue(kept_rec["keep"])
 
@@ -265,15 +265,13 @@ class LifecycleRaceTests(LaneCase):
         self.lane("check", lane_id, cwd=wt)
         return wt
 
-    def _in_process_context(self):
-        from lanefather import config
+    def _in_process_store(self) -> Any:
+        from lanefather import config, state
         env_patch = mock.patch.dict(os.environ, self.env)
         env_patch.start()
         self.addCleanup(env_patch.stop)
         cfg = config.load(self.repo / ".lanefather.toml")
-        config.use(cfg)
-        self.addCleanup(config.use, None)
-        return cfg
+        return state.Store(cfg, directory=self.state)
 
     def test_concurrent_settle_lane_with_locked_worktree_ends_done(self) -> None:
         from lanefather import done, postmerge, state
@@ -283,8 +281,7 @@ class LifecycleRaceTests(LaneCase):
         self.lane("keep", "r", "--off")
         state.write_json(self.state / "r.review.json", {"version": 1, "lane": "r", "status": "exempt",
                                                         "reason": "test"})
-        cfg = self._in_process_context()
-        store = state.Store(cfg, directory=self.state)
+        store = self._in_process_store()
 
         lock_seen = threading.Event()
         finish_done = threading.Event()
@@ -338,7 +335,7 @@ class LifecycleRaceTests(LaneCase):
         from lanefather.errors import LaneError
 
         wt = self._prepare_active_lane("c", claim="lib/a.txt", file_path="lib/a.txt")
-        self._in_process_context()
+        store = self._in_process_store()
 
         entered_merge = threading.Event()
         concurrent_done = threading.Event()
@@ -356,7 +353,7 @@ class LifecycleRaceTests(LaneCase):
 
         def run_land() -> None:
             try:
-                land.land(args)
+                land.land(args, store)
             except BaseException as exc:  # pragma: no cover
                 errors.append(exc)
 
@@ -364,9 +361,9 @@ class LifecycleRaceTests(LaneCase):
             entered_merge.wait(timeout=10.0)
             try:
                 # Simulate `check` widening claims and re-adopting/recording agent while `land` holds `.land.lock`.
-                claims.widen_claims("c", ["lib/widened.txt"])
+                claims.widen_claims(store, "c", ["lib/widened.txt"])
                 rec = self.record("c")
-                lanes.adopt_worktree(rec, str(wt), rec["branch"], agent="codex")
+                lanes.adopt_worktree(store, rec, str(wt), rec["branch"], agent="codex")
             except BaseException as exc:  # pragma: no cover
                 errors.append(exc)
             finally:
@@ -389,7 +386,7 @@ class LifecycleRaceTests(LaneCase):
         # And a late auto-adopt after `land` saved is refused and leaves the lane `landed`.
         stale = dict(final, status="planned")
         with self.assertRaises(LaneError):
-            lanes.adopt_worktree(stale, str(wt), final["branch"], agent="codex")
+            lanes.adopt_worktree(store, stale, str(wt), final["branch"], agent="codex")
         self.assertEqual(self.record("c")["status"], "landed")
 
 

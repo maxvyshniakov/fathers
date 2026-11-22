@@ -47,14 +47,14 @@ SEVERITIES = review_record.SEVERITIES
 LaneFinding = tuple[Record, dict[str, Any]]
 
 
-def asked_reviewers(args: Any) -> tuple[str, ...]:
+def asked_reviewers(args: Any, project: config.Config = config.DEFAULT) -> tuple[str, ...]:
     """`--reviewer ALIAS|both` (fathers#155): the reviewers this one review runs whatever the Codex limit; `both`
     is the configured panel, else Sol and Opus. () lets the panel or the models file choose."""
     asked: str | None = getattr(args, "reviewer", None)
     if not asked:
         return ()
     if asked == "both":
-        return config.current().review_panel or ("sol", "opus")
+        return project.review_panel or ("sol", "opus")
     return (asked,)
 
 
@@ -62,9 +62,8 @@ def asked_reviewers(args: Any) -> tuple[str, ...]:
 FAMILIES = {"claude-code": "anthropic", "codex": "openai", "antigravity": "google", "t3-code": "google"}
 
 
-def implementer_family(lane_id: str) -> str | None:
+def implementer_family(store: state.Store, lane_id: str) -> str | None:
     """The implementer's model family: that of the agent whose `check` wrote the lane's receipt, None unknown."""
-    store = state.Store(config.current())
     check_data = receipts.read(store, lane_id) or {}
     family = FAMILIES.get(str(check_data.get("agent")))
     if family:
@@ -87,35 +86,33 @@ def implementer_family(lane_id: str) -> str | None:
     return None
 
 
-def steering() -> tuple[str, ...]:
-    cfg = config.current()
-    return cfg.steering + ((cfg.rules_dir.rstrip("/") + "/**",) if cfg.rules_dir else ())
+def steering(project: config.Config = config.DEFAULT) -> tuple[str, ...]:
+    return project.steering + ((project.rules_dir.rstrip("/") + "/**",) if project.rules_dir else ())
 
 
-def documentation_only(paths: list[str]) -> bool:
+def documentation_only(paths: list[str], project: config.Config = config.DEFAULT) -> bool:
     """Whether a merge changes only documentation, *.md and docs/**, and none of the steering files."""
-    globs = steering()
+    globs = steering(project)
     return all(
-        (p.endswith(".md") or p.startswith("docs/")) and not any(claims.matches(s, p) for s in globs)
+        (p.endswith(".md") or p.startswith("docs/")) and not any(claims.matches(s, p, project=project) for s in globs)
         for p in paths
     )
 
 
-def valid_fix_parents(record: Record, store: state.Store | None = None) -> Iterator[str]:
-    resolved_store = store if store is not None else state.Store(config.current())
+def valid_fix_parents(record: Record, store: state.Store) -> Iterator[str]:
     for parent in state.fix_parents(record):
         try:
             review_record.ReviewRecord.fix_parent(
-                resolved_store, parent, record["common_dir"], "review exemption refused"
+                store, parent, record["common_dir"], "review exemption refused"
             )
         except LaneError:
             continue
         yield parent
 
 
-def review_exemption(record: Record) -> str | None:
+def review_exemption(record: Record, store: state.Store | None = None) -> str | None:
     parents = state.fix_parents(record)
-    if parents != list(valid_fix_parents(record)):
+    if store is not None and parents != list(valid_fix_parents(record, store)):
         parents = []
     if len(parents) == 1:
         return f"the fix round of {parents[0]}'s review, which nobody reviews again"
@@ -147,26 +144,30 @@ def review_range(record: Record) -> tuple[str, str]:
     return tip, git(main, "merge-base", against, tip)
 
 
-def coding_standards(main: str, tip: str) -> str:
+def coding_standards(main: str, tip: str, project: config.Config = config.DEFAULT) -> str:
     """The coding standards of the reviewed tree, else of the project the config belongs to."""
-    name = config.current().coding_standards
+    name = project.coding_standards
     shown = subprocess.run(["git", "show", f"{tip}:{name}"], cwd=main, capture_output=True, text=True)
     if shown.returncode == 0:
         return shown.stdout.strip()
-    path = config.current().path
+    path = project.path
     try:
         return (path.parent / name).read_text().strip() if path else f"(no {name})"
     except OSError:
         return f"(no {name})"
 
 
-def ticket_text(record: Record) -> str:
+def ticket_text(record: Record, project: config.Config = config.DEFAULT) -> str:
     if record["ticket"] == "none":
         return "The lane has no ticket."
-    data, error = github.issue_view(record["ticket"], json_fields="title,body", common=record["common_dir"])
+    data, error = github.issue_view(
+        record["ticket"], json_fields="title,body", common=record["common_dir"], project=project
+    )
     if data is None:
         return f"Ticket #{record['ticket']} (gh could not read it: {error[:300]})"
-    return f"Ticket #{record['ticket']}: {data.get('title', '')}\n\n{data.get('body', '')}".strip()  # pyright: ignore[reportUnknownMemberType]
+    title = str(data.get("title") or "")
+    body = str(data.get("body") or "")
+    return f"Ticket #{record['ticket']}: {title}\n\n{body}".strip()
 
 
 def review_about(label: str, fields: dict[str, Any]) -> dict[str, Any]:
@@ -177,6 +178,7 @@ def review_about(label: str, fields: dict[str, Any]) -> dict[str, Any]:
 
 
 def perform_review(
+    store: state.Store,
     label: str,
     fields: dict[str, Any],
     main: str,
@@ -191,7 +193,6 @@ def perform_review(
 ) -> review_record.ReviewRecord:
     """Review base...tip with Sol, or Opus when Sol may not or cannot run; write and return the ReviewRecord.
     `finalize` completes a finished receipt before anyone can read it as finished."""
-    store = state.Store(config.current())
     runner = reviewer.Reviewer(store.project)
     pid = os.getpid()
     started_rev = review_record.ReviewRecord.begin(
@@ -203,7 +204,7 @@ def perform_review(
         effort=runner.effort,
         force=force,
     )
-    reviews = store.directory / "reviews"
+    reviews = store.reviews_dir
     reviews.mkdir(parents=True, exist_ok=True)
     output, log = reviews / f"{label}.md", reviews / f"{label}.log"
     log.write_text("")
@@ -212,8 +213,8 @@ def perform_review(
     error_text: str | None = None
     finished_payload: dict[str, Any] = {}
     try:
-        with terminable(), worktrees.review_checkout(main, label, tip) as checkout:
-            standards = coding_standards(main, tip)
+        with terminable(), worktrees.review_checkout(store, main, label, tip) as checkout:
+            standards = coding_standards(main, tip, store.project)
             answer = runner.run(
                 label,
                 checkout,
@@ -315,6 +316,7 @@ def perform_review(
                 else {}
             ),
         },
+        store=store,
     )
     return completed
 
@@ -323,7 +325,9 @@ def review_lines(
     rev: review_record.ReviewRecord,
     *,
     record: Record | None = None,
+    prog: str | None = None,
 ) -> list[str]:
+    cmd_prog = prog or rev.prog
     raw = rev.raw or {}
     label = str(raw.get("label") or rev.label)
     verdict = rev.verdict
@@ -369,13 +373,14 @@ def review_lines(
         )
     for f in findings:
         where = f"{f['file']}:{f['line']}" if f.get("file") and f.get("line") else f.get("file") or "-"
-        mark = f.get("mark")
+        raw_mark: Any = f.get("mark")
+        mark = cast(dict[str, Any], raw_mark) if isinstance(raw_mark, dict) else None
         marked = (
             ""
             if not mark
-            else f"  [fixed: {mark['merge'][:10]}]"
-            if mark["kind"] == "fixed"
-            else f"  [rejected: {mark['reason']}]"
+            else f"  [fixed: {str(mark['merge'])[:10]}]"
+            if mark.get("kind") == "fixed"
+            else f"  [rejected: {mark.get('reason')}]"
         )
         category = f" [{f['category']}]" if f.get("category") else ""
         by = f" ({f['reviewer']})" if f.get("reviewer") else ""
@@ -385,7 +390,7 @@ def review_lines(
         lines.append(f"Ticket: {raw['issue']}")
     elif raw.get("issue_error"):
         lines.append(
-            f"Ticket not filed: {raw['issue_error']}; {config.prog()} review --overall "
+            f"Ticket not filed: {raw['issue_error']}; {cmd_prog} review --overall "
             f"{str(raw.get('tip', ''))[:10]} files it again"
         )
     pre_land = rev.pre_land_fix(record)
@@ -398,34 +403,34 @@ def review_lines(
         if pre_land is not None:
             lines.append(
                 "Mark each finding: "
-                + review_record.mark_help(label).replace("<merge>", "<fix-commit>|" + label)
+                + review_record.mark_help(label, prog=cmd_prog).replace("<merge>", "<fix-commit>|" + label)
             )
         else:
             lines.append(
                 "Mark each finding: "
-                + review_record.mark_help(label)
+                + review_record.mark_help(label, prog=cmd_prog)
                 + "; the fix round runs in the lane's worktree on a follow-up lane: "
-                + f"{config.prog()} review {label} --fix-lane"
+                + f"{cmd_prog} review {label} --fix-lane"
             )
     return lines
 
 
-def review_start_manual() -> bool:
+def review_start_manual(project: config.Config = config.DEFAULT) -> bool:
     """LANEFATHER_REVIEW_START when set, else this machine's `review.start` setting."""
-    found = config.current().env("REVIEW_START")
+    found = project.env("REVIEW_START")
     return found == "manual" if found else settings.value("review.start") == "manual"
 
 
-def review_start_source() -> str:
+def review_start_source(project: config.Config = config.DEFAULT) -> str:
     """What made land skip the review, for its message."""
-    if config.current().env("REVIEW_START"):
-        return f"{config.current().env_names('REVIEW_START')}=manual"
+    if project.env("REVIEW_START"):
+        return f"{project.env_names('REVIEW_START')}=manual"
     return "lanefather settings review.start=manual"
 
 
-def self_argv() -> list[str]:
+def self_argv(project: config.Config = config.DEFAULT) -> list[str]:
     """This lanefather, run again with the same config."""
-    path = config.current().path
+    path = project.path
     return [sys.executable, "-m", "lanefather", *(("--config", str(path)) if path else ())]
 
 
@@ -435,15 +440,16 @@ def self_env(**extra: str) -> dict[str, str]:
     return dict(os.environ, PYTHONPATH=package_parent + (os.pathsep + python_path if python_path else ""), **extra)
 
 
-def spawn_review(label: str, fields: dict[str, Any], argv: list[str], cwd: str) -> review_record.ReviewRecord:
+def spawn_review(
+    store: state.Store, label: str, fields: dict[str, Any], argv: list[str], cwd: str
+) -> review_record.ReviewRecord:
     """Start `lanefather review ...` detached, with its own log, and record it as running; nobody waits for it."""
-    store = state.Store(config.current())
-    log = journal.log_path(f"review-{label}")
+    log = store.log_path(f"review-{label}")
     rev = review_record.ReviewRecord.spawn_and_begin(
         store,
         label,
         fields,
-        cmd=[*self_argv(), "review", *argv],
+        cmd=[*self_argv(store.project), "review", *argv],
         cwd=cwd,
         env=self_env(LANEFATHER_REVIEW_LOG=str(log)),
         log=log,
@@ -455,13 +461,13 @@ def spawn_review(label: str, fields: dict[str, Any], argv: list[str], cwd: str) 
         kind="review.started",
         **review_about(label, fields),
         details={"pid": raw.get("pid"), "log": str(log)},
+        store=store,
     )
     return rev
 
 
-def start_lane_review(record: Record) -> str:
+def start_lane_review(store: state.Store, record: Record) -> str:
     """At land: an exempt receipt, or the review in the background. The line land prints."""
-    store = state.Store(config.current())
     lane_id = record["id"]
     rev = review_record.ReviewRecord.load(store, lane_id)
     verdict = rev.verdict
@@ -489,9 +495,10 @@ def start_lane_review(record: Record) -> str:
             kind="review.kept",
             lane=record,
             details={"status": kept_status, "since": raw.get("started") or raw.get("finished")},
+            store=store,
         )
         return f"review kept: {rev.summary()[1]}"
-    exempt = review_exemption(record)
+    exempt = review_exemption(record, store)
     if exempt:
         review_record.ReviewRecord.exempt(
             store,
@@ -504,11 +511,13 @@ def start_lane_review(record: Record) -> str:
             kind="review.exempted",
             lane=record,
             details={"exempt": exempt},
+            store=store,
         )
         return f"review exempt: {exempt}"
-    if review_start_manual():
-        return f"review not started ({review_start_source()}): run {config.prog()} review {lane_id}"
+    if review_start_manual(store.project):
+        return f"review not started ({review_start_source(store.project)}): run {store.prog} review {lane_id}"
     started = spawn_review(
+        store,
         lane_id,
         {"kind": "lane", "lane": lane_id, "ticket": record["ticket"]},
         [lane_id],
@@ -518,8 +527,7 @@ def start_lane_review(record: Record) -> str:
     return f"review started in the background (pid {started_raw.get('pid')}, log {started_raw.get('log')})"
 
 
-def review_lane(args: Any) -> int:
-    store = state.Store(config.current())
+def review_lane(args: Any, store: state.Store) -> int:
     record = store.load(args.id)
     existing = review_record.ReviewRecord.load(store, args.id)
     verdict = existing.verdict
@@ -529,7 +537,7 @@ def review_lane(args: Any) -> int:
     incomplete_panel = isinstance(verdict, review_record.PartialPanel)
     has_existing = already_finished or incomplete_panel or isinstance(verdict, review_record.Exempt) or elsewhere
     if has_existing and not args.force_reason:
-        print("\n".join(review_lines(existing, record=record)))
+        print("\n".join(review_lines(existing, record=record, prog=store.prog)))
         if incomplete_panel:
             print(f"Lane {args.id}: {existing.summary()[1]}")
             return 1
@@ -543,27 +551,29 @@ def review_lane(args: Any) -> int:
             level="warn",
             lane=record,
             details={"command": "review", "reason": args.force_reason, "refusals": ["reviewed again"]},
+            store=store,
         )
-    exempt = review_exemption(record)
+    exempt = review_exemption(record, store)
     if exempt and not args.force_reason:
-        start_lane_review(record)
+        start_lane_review(store, record)
         print(f"Review of {args.id}: exempt ({exempt})")
         return 0
     tip, base = review_range(record)
     completed = perform_review(
+        store,
         args.id,
         {"kind": "lane", "lane": args.id, "ticket": record["ticket"]},
         main_checkout(record["common_dir"]),
         base,
         tip,
-        ticket_text(record),
-        family=implementer_family(args.id),
-        reviewers=asked_reviewers(args),
+        ticket_text(record, store.project),
+        family=implementer_family(store, args.id),
+        reviewers=asked_reviewers(args, store.project),
         force=bool(args.force_reason),
     )
     if record.get("pre_land_fix"):
         record = store.update(args.id, lambda latest: latest.pop("pre_land_fix", None) is not None)
-    print("\n".join(review_lines(completed, record=record)))
+    print("\n".join(review_lines(completed, record=record, prog=store.prog)))
     if isinstance(completed.verdict, review_record.PartialPanel):
         print(f"Lane {args.id}: {completed.summary()[1]}")
         return 1
@@ -574,9 +584,8 @@ def review_lane(args: Any) -> int:
     return 0
 
 
-def compare(args: Any) -> int:
+def compare(args: Any, store: state.Store) -> int:
     """`review <id> --compare`: who found what and what held up, one block per reviewer with its marks."""
-    store = state.Store(config.current())
     rev = review_record.ReviewRecord.load(store, args.id)
     if not rev.has_finished_receipt or rev.raw is None:
         raise LaneError(f"lane {args.id} has no finished review to compare ({rev.summary()[1]})")
@@ -626,8 +635,7 @@ def compare(args: Any) -> int:
     return 0
 
 
-def mark_review(args: Any) -> int:
-    store = state.Store(config.current())
+def mark_review(args: Any, store: state.Store) -> int:
     record = store.load(args.id)
     result = review_record.ReviewRecord.mark(store, record, args.mark)
     for app in result.applied:
@@ -637,8 +645,9 @@ def mark_review(args: Any) -> int:
             kind="finding.marked",
             lane=args.id,
             details={"finding": app.finding_n, "mark": app.kind, "merge": app.merge, "reason": app.reason},
+            store=store,
         )
-    print("\n".join(review_lines(result.review, record=record)))
+    print("\n".join(review_lines(result.review, record=record, prog=store.prog)))
     complete, words = result.review.summary()
     if complete:
         journal.ledger(
@@ -646,6 +655,7 @@ def mark_review(args: Any) -> int:
             kind="review.marked",
             lane=args.id,
             details={"fixed": result.fixed_count, "rejected": result.rejected_count},
+            store=store,
         )
         done.settle_lane(store, args.id, mode=postmerge.CompletionMode.AUTO_AFTER_REVIEW)
     else:
@@ -654,6 +664,7 @@ def mark_review(args: Any) -> int:
 
 
 def fix_claims(
+    store: state.Store,
     source: review_record.ReviewRecord | dict[str, Any],
     fix_id: str,
     common: str | None = None,
@@ -665,7 +676,7 @@ def fix_claims(
     found: list[str] = []
     held: list[str] = []
     lines: list[str] = []
-    others = [r for r in state.occupying(state.of_project(state.lanes(), common)) if r["id"] != fix_id]
+    others = [r for r in state.occupying(state.of_project(store.lanes(), common)) if r["id"] != fix_id]
     findings = source.findings if isinstance(source, review_record.ReviewRecord) else source.get("findings", [])
     for finding in findings:
         path = posixpath.normpath(finding.get("file") or ".")
@@ -675,21 +686,21 @@ def fix_claims(
             (other, claim)
             for other in others
             for claim in other["claims"]
-            if claims.claims_overlap(path, claim)
+            if claims.claims_overlap(path, claim, project=store.project)
         ]
         if holders:
             held.append(path)
             lines.append(
                 f"{path} stays out of the fix lane's claims: "
                 + ", ".join(f"lane {o['id']} (#{o['ticket']}) claims {c}" for o, c in holders)
-                + f"; {config.prog()} check warns if the fix changes it"
+                + f"; {store.prog} check warns if the fix changes it"
             )
         else:
             found.append(path)
     return found, lines
 
 
-def fix_base(record: Record, cwd: str) -> str:
+def fix_base(record: Record, cwd: str, *, prog: str = "lanefather") -> str:
     """The branch a fix lane starts from (lanefather#1): the one checked out in the worktree the lane landed into,
     else its registration's base when that is a branch; either must hold the landed merge. A lane registered at a
     literal commit keeps that commit as its own base, which lacks what it landed."""
@@ -705,7 +716,7 @@ def fix_base(record: Record, cwd: str) -> str:
             and git_ok(cwd, "merge-base", "--is-ancestor", merge, ref)
         ):
             return ref
-    prog, lane_id = config.prog(), record["id"]
+    lane_id = record["id"]
     if not integration:
         where = "its landed record names no integration worktree"
         todo = "check out the branch it landed on in an integration worktree and give that branch to the fix lane"
@@ -725,12 +736,11 @@ def fix_base(record: Record, cwd: str) -> str:
     )
 
 
-def pre_land_fix_round(args: Any, record: Record, worktree: str) -> int:
+def pre_land_fix_round(store: state.Store, args: Any, record: Record, worktree: str) -> int:
     """One truthful pre-land fix round on a reviewed active candidate (fathers#197, fathers#216): stores the reviewed
     SHA and finding linkage in `<id>.review.json` without landing the defective original or running a second blind
     review."""
-    prog = config.prog()
-    store = state.Store(config.current())
+    prog = store.prog
     _updated, fix_round = review_record.ReviewRecord.open_pre_land_fix(store, record, worktree)
     unmarked = list(fix_round.findings)
     reviewed_sha = fix_round.reviewed_sha
@@ -744,6 +754,7 @@ def pre_land_fix_round(args: Any, record: Record, worktree: str) -> int:
             "worktree": worktree,
             "findings": unmarked,
         },
+        store=store,
     )
     numbered = ", ".join(f"#{n}" for n in unmarked)
     print(
@@ -753,19 +764,18 @@ def pre_land_fix_round(args: Any, record: Record, worktree: str) -> int:
     print(
         f"Commit the fix on {record['branch']} on top of {reviewed_sha[:10]} (do not amend away the reviewed "
         f"commit), run {prog} check {args.id}, mark each finding ("
-        + review_record.mark_help(args.id).replace("<merge>", "<fix-commit>|" + args.id)
+        + review_record.mark_help(args.id, prog=prog).replace("<merge>", "<fix-commit>|" + args.id)
         + f"), then {prog} land {args.id} (its review is kept without a second blind review)."
     )
     return 0
 
 
-def hand_over(args: Any) -> int:
+def hand_over(args: Any, store: state.Store) -> int:
     """The fix round: for a landed lane, a follow-up lane <id>-review-fixes takes over the landed lane's worktree,
     where the resumed agent keeps its context (a resumed agent is fenced to its own worktree); its land is the fix
     and gets no review of its own. For an active reviewed candidate (fathers#197), opens one truthful pre-land fix
     round on the same active lane, preserving the reviewed SHA and finding linkage."""
-    store = state.Store(config.current())
-    prog = store.project.command
+    prog = store.prog
     record = store.load(args.id)
     lane_state = record["status"]
     if not (lifecycle.active(record) or lifecycle.awaiting_done(record)):
@@ -779,12 +789,14 @@ def hand_over(args: Any) -> int:
     if not os.path.isdir(worktree):
         raise LaneError(f"hand-over refused: lane {args.id}'s worktree {worktree} does not exist")
     if lifecycle.active(record):
-        return pre_land_fix_round(args, record, worktree)
+        return pre_land_fix_round(store, args, record, worktree)
     parent_rev = review_record.ReviewRecord.fix_parent(store, args.id, record["common_dir"], "hand-over refused")
     fix_id = f"{args.id}-review-fixes"
     main = main_checkout(record["common_dir"])
-    fix_paths, held = fix_claims(parent_rev, fix_id, record["common_dir"])
-    fix, record = lanes.hand_over_fix_lane(store, record, fix_id, fix_paths, fix_base(record, main), args.force_reason)
+    fix_paths, held = fix_claims(store, parent_rev, fix_id, record["common_dir"])
+    fix, record = lanes.hand_over_fix_lane(
+        store, record, fix_id, fix_paths, fix_base(record, main, prog=prog), args.force_reason
+    )
     for line in held:
         print(f"lane: {line}")
     review_record.ReviewRecord.attach_fix_lane(store, args.id, fix_id)
@@ -793,11 +805,12 @@ def hand_over(args: Any) -> int:
         kind="review.handed_over",
         lane=record,
         details={"to": fix_id, "worktree": fix["worktree"]},
+        store=store,
     )
     print(
         f"The fix round runs in {fix['worktree']}: git checkout -B {fix['branch']} {fix['base']}, fix each finding "
         f"that holds, commit, then {prog} check {fix_id} and report. Its land needs no review. Then mark "
-        f"{args.id}'s findings: " + review_record.mark_help(args.id).replace("<merge>", fix_id + "|<merge>")
+        f"{args.id}'s findings: " + review_record.mark_help(args.id, prog=prog).replace("<merge>", fix_id + "|<merge>")
     )
     return 0
 
@@ -806,17 +819,16 @@ def ship_review_label(sha: str) -> str:
     return f"ship-{sha[:12]}"
 
 
-def start_overall_review(cwd: str, sha: str, base: str) -> str:
+def start_overall_review(store: state.Store, cwd: str, sha: str, base: str) -> str:
     """After promote --ship: the one overall review of base..sha in the background; it never holds the ship."""
-    prog = config.prog()
-    store = state.Store(config.current())
+    prog = store.prog
     label = ship_review_label(sha)
     rev = review_record.ReviewRecord.load(store, label)
     verdict = rev.verdict
     if isinstance(verdict, (review_record.Unmarked, review_record.Complete)):
         return (
             f"overall review of {sha[:10]} already ran: "
-            + ticket_state(retry_ticket(label, common_dir(cwd)))
+            + ticket_state(retry_ticket(store, label, common_dir(cwd)))
             + f"; {prog} review --overall {sha[:10]} prints it"
         )
     if isinstance(verdict, review_record.PartialPanel):
@@ -829,9 +841,9 @@ def start_overall_review(cwd: str, sha: str, base: str) -> str:
     if git_ok(cwd, "merge-base", "--is-ancestor", sha, base):
         return f"no overall review: {base[:10]} already holds {sha[:10]}"
     argv = ["--overall", sha, "--since", base]
-    if review_start_manual():
-        return f"overall review not started ({review_start_source()}): run {prog} review {' '.join(argv)}"
-    started = spawn_review(label, {"kind": "overall", "sha": sha, "base": base}, argv, cwd)
+    if review_start_manual(store.project):
+        return f"overall review not started ({review_start_source(store.project)}): run {prog} review {' '.join(argv)}"
+    started = spawn_review(store, label, {"kind": "overall", "sha": sha, "base": base}, argv, cwd)
     started_raw = started.raw or {}
     return (
         f"overall review of {base[:10]}..{sha[:10]} started in the background (pid {started_raw.get('pid')}, log "
@@ -839,7 +851,7 @@ def start_overall_review(cwd: str, sha: str, base: str) -> str:
     )
 
 
-def file_ticket(payload: dict[str, Any], common: str) -> None:
+def file_ticket(store: state.Store, payload: dict[str, Any], common: str) -> None:
     """The overall review's findings as one issue, a checklist, for the queue (owner decision on #570)."""
     findings = payload.get("findings", [])
     if not findings or payload.get("issue"):
@@ -857,15 +869,16 @@ def file_ticket(payload: dict[str, Any], common: str) -> None:
         items.append(f"- [ ] **{f['severity']}**{category}{where} {f['title']}")
         items += [f"  {line}" for line in f.get("detail", "").splitlines() if line.strip()]
     body = (
-        f"Found by the overall review before main (`{config.prog()} promote --ship`) of "
+        f"Found by the overall review before main (`{store.prog} promote --ship`) of "
         f"{payload['base'][:10]}..{payload['tip'][:10]}, by {payload.get('model')} at {payload.get('effort')} "
-        f"effort. For {config.current().queue_name}: split what holds into tickets there, and tick each item "
+        f"effort. For {store.project.queue_name}: split what holds into tickets there, and tick each item "
         f"once it is fixed or rejected.\n\n" + "\n".join(items) + "\n"
     )
     issue_url, issue_error = github.issue_create(
         f"Overall review of {payload['tip'][:10]}: {len(findings)} findings",
         body,
         common=common,
+        project=store.project,
     )
     if issue_url:
         payload["issue"] = issue_url
@@ -879,17 +892,17 @@ def file_ticket(payload: dict[str, Any], common: str) -> None:
         level="info" if payload.get("issue") else "warn",
         subject={"type": "review", "id": payload["label"]},
         details={"issue": payload.get("issue"), "error": payload.get("issue_error")},
+        store=store,
     )
 
 
-def retry_ticket(label: str, common: str) -> review_record.ReviewRecord:
+def retry_ticket(store: state.Store, label: str, common: str) -> review_record.ReviewRecord:
     """File the ticket of a finished overall review whose filing failed, without reviewing again."""
-    store = state.Store(config.current())
     with store.locked(f"review-{label}"):
         rev = review_record.ReviewRecord.load(store, label)
         if rev.has_finished_receipt and rev.findings and rev.raw is not None and not rev.raw.get("issue"):
             draft = dict(rev.raw)
-            file_ticket(draft, common)
+            file_ticket(store, draft, common)
             return review_record.ReviewRecord.record_ticket(
                 store,
                 label,
@@ -906,9 +919,8 @@ def ticket_state(rev: review_record.ReviewRecord) -> str:
     return f"ticket {raw['issue']}" if raw.get("issue") else f"the ticket is not filed ({raw.get('issue_error')})"
 
 
-def overall_review(args: Any) -> int:
-    prog = config.prog()
-    store = state.Store(config.current())
+def overall_review(args: Any, store: state.Store) -> int:
+    prog = store.prog
     panel_required = store.project.review_panel_required
     cwd = os.getcwd()
     common = common_dir(cwd)
@@ -917,15 +929,15 @@ def overall_review(args: Any) -> int:
     existing = review_record.ReviewRecord.load(store, label)
     verdict = existing.verdict
     if isinstance(verdict, (review_record.Unmarked, review_record.Complete)) and not args.force_reason:
-        retried = retry_ticket(label, common)
-        print("\n".join(review_lines(retried)))
+        retried = retry_ticket(store, label, common)
+        print("\n".join(review_lines(retried, prog=prog)))
         return 1 if (retried.raw or {}).get("issue_error") else 0
     if isinstance(verdict, review_record.PartialPanel) and not args.force_reason:
-        print("\n".join(review_lines(existing)))
+        print("\n".join(review_lines(existing, prog=prog)))
         print(f"Overall review {label}: {existing.summary()[1]}")
         return 1
     if isinstance(verdict, review_record.Running) and verdict.pid != os.getpid() and not args.force_reason:
-        print("\n".join(review_lines(existing)))
+        print("\n".join(review_lines(existing, prog=prog)))
         return 0
     # A rerun of a failed or killed review keeps its base.
     saved_base = str(existing.raw["base"]) if existing.raw and existing.raw.get("base") else None
@@ -945,9 +957,10 @@ def overall_review(args: Any) -> int:
             review_record.derive_verdict(finished, panel_required=panel_required),
             (review_record.Unmarked, review_record.Complete),
         ):
-            file_ticket(finished, common)
+            file_ticket(store, finished, common)
 
     completed = perform_review(
+        store,
         label,
         {"kind": "overall", "sha": sha},
         main_checkout(common),
@@ -955,10 +968,10 @@ def overall_review(args: Any) -> int:
         sha,
         subject,
         finalize=_finalize_overall,
-        reviewers=asked_reviewers(args),
+        reviewers=asked_reviewers(args, store.project),
         force=bool(args.force_reason),
     )
-    print("\n".join(review_lines(completed)))
+    print("\n".join(review_lines(completed, prog=prog)))
     if isinstance(completed.verdict, review_record.PartialPanel):
         print(f"Overall review {label}: {completed.summary()[1]}")
         return 1
@@ -966,21 +979,21 @@ def overall_review(args: Any) -> int:
     return 0 if finished_ok and not (completed.raw or {}).get("issue_error") else 1
 
 
-def review(args: Any) -> int:
+def review(args: Any, store: state.Store) -> int:
     if args.overall:
-        return overall_review(args)
+        return overall_review(args, store)
     if not args.id:
         raise LaneError("give a lane id, or --overall <sha> --since <base>")
     reviewer_flag = getattr(args, "reviewer", None)
     if reviewer_flag and (args.mark or getattr(args, "compare", False) or args.fix_lane):
         raise LaneError("--reviewer chooses who reviews; it does not combine with --mark, --compare or --fix-lane")
     if getattr(args, "compare", False):
-        return compare(args)
+        return compare(args, store)
     if args.mark:
-        return mark_review(args)
+        return mark_review(args, store)
     if args.fix_lane:
-        return hand_over(args)
-    return review_lane(args)
+        return hand_over(args, store)
+    return review_lane(args, store)
 
 
 def landing_findings(record: Record, store: state.Store) -> tuple[list[LaneFinding], list[LaneFinding]]:
@@ -1000,8 +1013,9 @@ def landing_findings(record: Record, store: state.Store) -> tuple[list[LaneFindi
     return held, reported
 
 
-def fix_round_commands(records: Iterable[Record], alongside: Iterable[str] = ()) -> list[str]:
-    prog = config.prog()
+def fix_round_commands(
+    records: Iterable[Record], alongside: Iterable[str] = (), *, prog: str = "lanefather"
+) -> list[str]:
     lines: list[str] = []
     landed: list[Record] = []
     for record in records:

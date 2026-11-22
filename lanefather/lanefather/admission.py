@@ -270,13 +270,13 @@ def current_floor(project: config.Config) -> host.Floor:
     return host.disk_floor(project, cap, records, unknown)
 
 
-def floor_here() -> host.Floor:
+def floor_here(project: config.Config | None = None) -> host.Floor:
     """The floor start applies in the project the command runs in, else to a project without lanes on this machine:
     what capabilities, a project hook and the settings row report."""
     try:
-        return current_floor(config.current())
+        return current_floor(project or config.DEFAULT)
     except LaneError:
-        return current_floor(config.Config())
+        return current_floor(config.DEFAULT)
 
 
 def evaluate(project: config.Config, records: list[state.Record], common: str | None = None, *,

@@ -22,24 +22,24 @@ import statistics
 from typing import Any
 from xml.etree import ElementTree
 
-from . import config, review_record, state
+from . import review_record, state
 from .journal import now, parse_time
 
 VERSION = 1
 KEEP_MONTHS = 12
 
 
-def directory() -> Path:
-    path = state.state_dir() / "history"
-    path.mkdir(exist_ok=True)
+def directory(store: state.Store) -> Path:
+    path = store.history_dir
+    path.mkdir(parents=True, exist_ok=True)
     return path
 
 
-def append(kind: str, **fields: Any) -> None:
+def append(store: state.Store, kind: str, **fields: Any) -> None:
     """Append one line to this month's file; never fails the caller."""
     line = {"v": VERSION, "kind": kind, "at": now(), **{k: v for k, v in fields.items() if v is not None}}
     try:
-        folder = directory()
+        folder = directory(store)
         month = datetime.datetime.now(datetime.UTC).strftime("%Y-%m")
         with open(folder / f"{month}.jsonl", "a", encoding="utf-8") as handle:
             handle.write(json.dumps(line, sort_keys=True) + "\n")
@@ -49,12 +49,12 @@ def append(kind: str, **fields: Any) -> None:
         return
 
 
-def read(days: float | None = None) -> list[dict[str, Any]]:
+def read(store: state.Store, days: float | None = None) -> list[dict[str, Any]]:
     """Every line of the window (the last `days`, else everything kept), oldest first."""
     cutoff = (datetime.datetime.now(datetime.UTC) - datetime.timedelta(days=days)) if days else None
     found: list[dict[str, Any]] = []
     try:
-        files = sorted(directory().glob("*.jsonl"))
+        files = sorted(directory(store).glob("*.jsonl"))
     except OSError:
         return []
     for path in files:
@@ -82,10 +82,10 @@ def read(days: float | None = None) -> list[dict[str, Any]]:
     return found
 
 
-def has_flake(check: str, tree: str, days: float = 60) -> bool:
+def has_flake(store: state.Store, check: str, tree: str, days: float = 60) -> bool:
     """Whether the history already marks the check a flake on the tree: one red-to-green is one flake."""
     return any(line["kind"] == "flake" and line.get("check") == check and line.get("tree") == tree
-               for line in read(days))
+               for line in read(store, days))
 
 
 def junit_failures(path: Any) -> list[str]:
@@ -107,8 +107,8 @@ def _positive_int(value: Any) -> int | None:
     return value if type(value) is int and value > 0 else None
 
 
-def record_run(report: dict[str, Any] | None, *, lane: str | None, phase: str, tree: str | None, run: str,
-               started: str, finished: str, seconds: float, checks: list[str] | None = None,
+def record_run(store: state.Store, report: dict[str, Any] | None, *, lane: str | None, phase: str, tree: str | None,
+               run: str, started: str, finished: str, seconds: float, checks: list[str] | None = None,
                jobs: int | None = None) -> None:
     """One "check" line per row of a verify report; a run without a report gets one line for the run."""
     given: list[Any] = (report or {}).get("checks", [])
@@ -116,20 +116,21 @@ def record_run(report: dict[str, Any] | None, *, lane: str | None, phase: str, t
     lease = (report or {}).get("lease")
     report_jobs = _positive_int(jobs) or _positive_int((report or {}).get("jobs"))
     if not rows:
-        append("check", lane=lane, phase=phase, tree=tree, check=",".join(checks or []) or None, status="no report",
-               seconds=seconds, started=started, finished=finished, run=run, lease=lease, jobs=report_jobs)
+        append(store, "check", lane=lane, phase=phase, tree=tree, check=",".join(checks or []) or None,
+               status="no report", seconds=seconds, started=started, finished=finished, run=run, lease=lease,
+               jobs=report_jobs)
         return
     for row in rows:
-        append("check", lane=lane, phase=phase, tree=tree, check=row["id"], status=row.get("status"),
+        append(store, "check", lane=lane, phase=phase, tree=tree, check=row["id"], status=row.get("status"),
                seconds=row.get("seconds"), started=row.get("started") or started,
                finished=row.get("finished") or finished, run=run, lease=row.get("lease") or lease,
                junit=row.get("junit"), jobs=_positive_int(row.get("jobs")) or report_jobs)
 
 
-def flake(check: str, *, lane: str | None, tree: str, failed_at: str | None, how: str, junit: Any = None,
-          phase: str | None = None) -> None:
-    append("flake", lane=lane, phase=phase, tree=tree, check=check, failed_at=failed_at, passed_at=now(), how=how,
-           tests=junit_failures(junit) or None)
+def flake(store: state.Store, check: str, *, lane: str | None, tree: str, failed_at: str | None, how: str,
+          junit: Any = None, phase: str | None = None) -> None:
+    append(store, "flake", lane=lane, phase=phase, tree=tree, check=check, failed_at=failed_at, passed_at=now(),
+           how=how, tests=junit_failures(junit) or None)
 
 
 def percentile(values: list[float], fraction: float) -> float:
@@ -139,9 +140,9 @@ def percentile(values: list[float], fraction: float) -> float:
     return statistics.quantiles(ordered, n=100, method="inclusive")[round(fraction * 100) - 1]
 
 
-def stats(days: float | None = 7, lane: str | None = None) -> dict[str, Any]:
+def stats(store: state.Store, days: float | None = 7, lane: str | None = None) -> dict[str, Any]:
     """Per check over the window: runs, failures, flakes, p50 and p90 seconds of its runs with a duration."""
-    lines = [line for line in read(days) if lane is None or line.get("lane") == lane]
+    lines = [line for line in read(store, days) if lane is None or line.get("lane") == lane]
     table: dict[str, dict[str, Any]] = {}
     for line in lines:
         check = line.get("check")
@@ -166,15 +167,14 @@ def stats(days: float | None = 7, lane: str | None = None) -> dict[str, Any]:
                            total_seconds=round(sum(seconds), 3)))
     checks.sort(key=lambda r: (-(r["total_seconds"] or 0), r["check"]))
     return {"v": VERSION, "days": days, "lane": lane, "lines": len(lines), "checks": checks,
-            "reviewers": reviewer_totals(days, lane)}
+            "reviewers": reviewer_totals(store, days, lane)}
 
 
-def reviewer_totals(days: float | None = 7, lane: str | None = None) -> list[dict[str, Any]]:
+def reviewer_totals(store: state.Store, days: float | None = 7, lane: str | None = None) -> list[dict[str, Any]]:
     """Per reviewer (fathers#151), over the finished review receipts of the window (and lane): reviews, failed
     panel runs, findings by severity and their marks, via ReviewRecord.reviewer_views and review_record.mark_counts."""
     cutoff = (datetime.datetime.now(datetime.UTC) - datetime.timedelta(days=days)) if days else None
     table: dict[str, dict[str, Any]] = {}
-    store = state.Store(config.current())
     for rev in review_record.ReviewRecord.all(store):
         raw = rev.raw or {}
         if not rev.has_finished_receipt or (lane is not None and raw.get("lane") != lane):
@@ -201,8 +201,8 @@ def reviewer_totals(days: float | None = 7, lane: str | None = None) -> list[dic
     return sorted(table.values(), key=lambda r: r["reviewer"])
 
 
-def command(args: Any) -> int:
-    report = stats(None if args.days == 0 else args.days, args.lane)
+def command(args: Any, store: state.Store) -> int:
+    report = stats(store, None if args.days == 0 else args.days, args.lane)
     if args.json:
         print(json.dumps(report))
         return 0

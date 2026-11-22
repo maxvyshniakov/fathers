@@ -71,21 +71,22 @@ class ArchitectureGuardTests(unittest.TestCase):
         self.assertEqual(offenders, [], f"subprocess call of verify_path outside verify.py: {offenders}")
 
     def test_review_does_not_import_checks(self):
-        path = PACKAGE_DIR / "review.py"
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        imported_checks: list[str] = []
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                for alias in node.names:
-                    if alias.name == "checks" or alias.name.endswith(".checks"):
-                        imported_checks.append(f"line {node.lineno}: import {alias.name}")
-            elif isinstance(node, ast.ImportFrom):
-                if node.module == "checks" or (node.module or "").endswith(".checks"):
-                    imported_checks.append(f"line {node.lineno}: from {node.module} import ...")
-                for alias in node.names:
-                    if alias.name == "checks":
-                        imported_checks.append(f"line {node.lineno}: from {node.module} import checks")
-        self.assertEqual(imported_checks, [])
+        for mod_name in ("review.py", "land.py"):
+            path = PACKAGE_DIR / mod_name
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            imported_checks: list[str] = []
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    for alias in node.names:
+                        if alias.name == "checks" or alias.name.endswith(".checks"):
+                            imported_checks.append(f"{mod_name}:{node.lineno}: import {alias.name}")
+                elif isinstance(node, ast.ImportFrom):
+                    if node.module == "checks" or (node.module or "").endswith(".checks"):
+                        imported_checks.append(f"{mod_name}:{node.lineno}: from {node.module} import ...")
+                    for alias in node.names:
+                        if alias.name == "checks":
+                            imported_checks.append(f"{mod_name}:{node.lineno}: from {node.module} import checks")
+            self.assertEqual(imported_checks, [])
 
 
 class VerifyUnitTests(unittest.TestCase):
@@ -108,28 +109,29 @@ class VerifyUnitTests(unittest.TestCase):
         self.assertEqual(signal.getsignal(signal.SIGTERM), previous)
 
     def test_lease_timeout_raises_lease_timed_out(self):
-        from lanefather import config, slots, verify
-        config.use(config.Config(project="Test"))
-        self.addCleanup(config.use, None)
-        tmp = pathlib.Path(self.id().replace(".", "_"))
+        import shutil
+        import tempfile
+
+        from lanefather import config, slots, state, verify
+        scratch = pathlib.Path(tempfile.mkdtemp(prefix="test-timeout-"))
+        self.addCleanup(shutil.rmtree, scratch, True)
+        store = state.Store(config.Config(project="Test"), directory=scratch / "state")
         with (unittest.mock.patch.object(slots, "command", return_value="/bin/slotfather"),
               unittest.mock.patch.object(slots, "leased", return_value=False),
               unittest.mock.patch.object(verify, "tree_of", return_value=None),
-              unittest.mock.patch.object(verify.journal, "log_path",
-                                         return_value=pathlib.Path(f"/tmp/test-timeout-{os.getpid()}.log")),
               unittest.mock.patch.object(verify.subprocess, "Popen") as popen_mock):
             proc = unittest.mock.MagicMock()
             proc.wait.return_value = slots.TIMED_OUT
             proc.poll.return_value = slots.TIMED_OUT
             popen_mock.return_value = proc
             run = verify.Run(
-                tmp, verify.Selection.checks(["lib-check"]), "lane-a-alone", "rerun", 2,
+                scratch, verify.Selection.checks(["lib-check"]), "lane-a-alone", "rerun", 2,
+                store=store,
                 meta={"lane": "a", "check": "lib-check"}, ticket="42",
                 run_type={"plan": "abc", "checks": "1"},
                 lease=verify.Lease(wait=12.0, kind="rerun"),
                 wait_for_load=False, stoppable=True,
             )
-            self.addCleanup(run.log.unlink, missing_ok=True)
             with self.assertRaisesRegex(verify.LeaseTimedOut, r"no lease of 2 slot\(s\) within 12 s"):
                 run.execute()
 
@@ -259,26 +261,26 @@ class VerifyCallSitePinTests(LaneCase):
         self.assertEqual(perf_meta["checks"], "0")
 
     def test_check_stages_prepare_select_run_record_accept_explicit_values(self):
-        from lanefather import checks, config
+        from lanefather import checks, config, state
         wt = self.created("stages", "lib/**")
         self.commit(wt, {"lib/api.txt": "foo\nbar\n"})
         with unittest.mock.patch.dict(os.environ, self.env, clear=False):
-            config.use(config.load(config.find(wt)))
-            self.addCleanup(config.use, None)
-            prepared = checks.prepare("stages", agent="codex")
+            cfg = config.load(config.find(wt))
+            store = state.Store(cfg, directory=self.state)
+            prepared = checks.prepare(store, "stages", agent="codex")
             self.assertEqual(prepared.record["id"], "stages")
-            selection = checks.select(prepared, rerun=False, slots_override=1)
+            selection = checks.select(store, prepared, rerun=False, slots_override=1)
             assert selection is not None
             self.assertEqual(selection.decision, {"jobs": 1, "override": "--slots"})
-            executed = checks.run(prepared, selection)
-            rc = checks.record(prepared, selection, executed)
+            executed = checks.run(store, prepared, selection)
+            rc = checks.record(store, prepared, selection, executed)
             self.assertEqual(rc, 0)
             receipt: dict[str, Any] = json.loads((self.state / "stages.receipt.json").read_text())
             self.assertEqual(receipt["status"], "green")
             self.assertEqual(receipt["agent"], "codex")
             # Re-selecting the same green tree short-circuits to None.
-            again = checks.prepare("stages")
-            self.assertIsNone(checks.select(again, rerun=False, slots_override=None))
+            again = checks.prepare(store, "stages")
+            self.assertIsNone(checks.select(store, again, rerun=False, slots_override=None))
 
 
 class VerifyProgressHeartbeatTests(LaneCase):
@@ -428,6 +430,235 @@ class ProgressTrackerUnitTests(ScratchCase):
             handle.write(b"ok\n....")
         tracker.poll(11.5)
         self.assertIsNone(tracker.observed_test)
+
+
+class PureClassificationTableTests(unittest.TestCase):
+    """Zero-I/O table tests for pure classification planning and evaluation (fathers#234)."""
+
+    def test_pure_classification_transition_table_zero_io(self) -> None:
+        from lanefather import verify
+
+        base_sha = "1234567890abcdef" * 2 + "12345678"
+        load_sample: dict[str, Any] = {"first_run": [0.1, 0.2, 0.3], "alone": [0.2, 0.3, 0.4]}
+        log_path = pathlib.Path("/tmp/rerun.log")
+
+        with (
+            unittest.mock.patch.object(subprocess, "run", side_effect=AssertionError("zero I/O violated")),
+            unittest.mock.patch.object(subprocess, "Popen", side_effect=AssertionError("zero I/O violated")),
+            unittest.mock.patch.object(os.path, "isdir", side_effect=AssertionError("zero I/O violated")),
+        ):
+            # 0. Green run returns None.
+            green_fresh: list[dict[str, Any]] = [{"suite": "lib", "status": "passed", "failed_checks": []}]
+            self.assertIsNone(verify.plan_classification(green_fresh, {"checks": []}, cap=3, only_supported=False))
+
+            # 1. Environment failure returns a skipped classification dict with green=False.
+            env_report: dict[str, Any] = {
+                "environment": {"class": "rust-drift", "detail": "rustc changed"},
+                "checks": [{"id": "native-check", "status": "failed"}],
+            }
+            env_fresh: list[dict[str, Any]] = [
+                {"suite": "native", "status": "failed", "failed_checks": ["native-check"], "environment": "rust-drift"}
+            ]
+            env_out = verify.plan_classification(env_fresh, env_report, cap=3, only_supported=False)
+            assert isinstance(env_out, dict)
+            self.assertIn("environment: rust-drift", str(env_out.get("skipped") or ""))
+            self.assertFalse(env_out["green"])
+
+            # 2. First-tier stopped (#639): skips alone rerun (`still_red` populated immediately);
+            #    pre-existing base failure makes classification `green=True` and `first=True`.
+            stop_report: dict[str, Any] = {
+                "stopped": {"failed": ["structure-check"], "not_run": 2},
+                "checks": [{"id": "structure-check", "status": "failed"}],
+            }
+            stop_fresh: list[dict[str, Any]] = [
+                {"suite": "structure", "status": "failed", "failed_checks": ["structure-check"]},
+                {"suite": "lib", "status": "not_run", "failed_checks": []},
+            ]
+            stop_plan = verify.plan_classification(stop_fresh, stop_report, cap=3, only_supported=False)
+            assert isinstance(stop_plan, verify.ClassificationPlan)
+            self.assertTrue(stop_plan.first)
+            self.assertEqual(stop_plan.active_rerun, ["structure-check"])
+            self.assertEqual(stop_plan.still_red, ["structure-check"])
+            self.assertEqual(stop_plan.entries["structure-check"]["alone"]["status"], "not rerun")
+            base_pre = verify.evaluate_base_row(
+                "structure-check",
+                stop_plan.entries["structure-check"],
+                base=base_sha,
+                present=True,
+                row={"status": "failed", "exit": 1},
+                base_log=log_path,
+            )
+            self.assertEqual(base_pre["class"], verify.CheckClass.PRE_EXISTING)
+            stop_out = verify.finalize_classification(
+                base_sha,
+                stop_plan,
+                {"structure-check": base_pre},
+                load=load_sample,
+                runs=[],
+            )
+            self.assertTrue(stop_out["first"])
+            self.assertTrue(stop_out["green"])
+
+            # 3. Reruns cap + dependency-blocked (#195) + --only (#147) outside_failed_tests on initial report.
+            mixed_report: dict[str, Any] = {
+                "capabilities": ["only"],
+                "checks": [
+                    {"id": "c1", "status": "failed", "failed_tests": ["t1.ts"]},
+                    {"id": "c2", "status": "failed", "failed_tests": ["t2.ts"], "outside_failed_tests": ["leak.ts"]},
+                    {"id": "c3", "status": "failed", "failed_tests": ["t3.ts"]},
+                    {"id": "c4", "status": "blocked", "blocked_by": ["c1"]},
+                ],
+            }
+            mixed_fresh: list[dict[str, Any]] = [{
+                "suite": "verify",
+                "status": "failed",
+                "failed_checks": ["c1", "c2", "c3"],
+                "blocked_checks": ["c4"],
+            }]
+            mixed_plan = verify.plan_classification(mixed_fresh, mixed_report, cap=2, only_supported=True)
+            assert isinstance(mixed_plan, verify.ClassificationPlan)
+            self.assertEqual(mixed_plan.active_rerun, ["c1"])
+            self.assertEqual(mixed_plan.alone_tests, ["t1.ts"])
+            self.assertEqual(mixed_plan.blocked_rows, {"c4": ["c1"]})
+            self.assertEqual(mixed_plan.entries["c2"]["class"], verify.CheckClass.UNCLASSIFIED)
+            self.assertIn("outside failed_tests", str(mixed_plan.entries["c2"]["reason"]))
+            self.assertEqual(mixed_plan.entries["c3"]["class"], verify.CheckClass.UNCLASSIFIED)
+            self.assertIn("only the first 2", str(mixed_plan.entries["c3"]["reason"]))
+
+            # 4. Alone row transitions: passed -> flaky-under-load; blocked -> dependency-blocked;
+            #    outside_failed_tests -> unclassified; problem (timeout) -> unclassified; failed -> needs_base=True;
+            #    unrun -> unclassified.
+            first_row: dict[str, Any] = {"id": "c1", "status": "failed"}
+            entry_flaky, need_flaky = verify.evaluate_alone_row(
+                "c1",
+                {"status": "passed", "exit": 0},
+                first_row=first_row,
+                log=log_path,
+                problem=None,
+                load=load_sample,
+                check_tests=["t1.ts"],
+            )
+            self.assertFalse(need_flaky)
+            self.assertEqual(entry_flaky["class"], verify.CheckClass.FLAKY_UNDER_LOAD)
+            self.assertEqual(entry_flaky["tests"], ["t1.ts"])
+
+            entry_blk, need_blk = verify.evaluate_alone_row(
+                "c1",
+                {"status": "blocked", "blocked_by": ["build"]},
+                first_row=first_row,
+                log=log_path,
+                problem=None,
+                load=load_sample,
+            )
+            self.assertFalse(need_blk)
+            self.assertEqual(entry_blk["class"], verify.CheckClass.DEPENDENCY_BLOCKED)
+
+            entry_out, need_out = verify.evaluate_alone_row(
+                "c1",
+                {"status": "failed", "exit": 1, "failed_tests": ["other.ts"]},
+                first_row=first_row,
+                log=log_path,
+                problem=None,
+                load=load_sample,
+                check_tests=["t1.ts"],
+            )
+            self.assertFalse(need_out)
+            self.assertEqual(entry_out["class"], verify.CheckClass.UNCLASSIFIED)
+            self.assertEqual(entry_out["outside_failed_tests"], ["other.ts"])
+
+            entry_timeout, need_timeout = verify.evaluate_alone_row(
+                "c1",
+                {"status": "not_run"},
+                first_row=first_row,
+                log=None,
+                problem="no lease of 2 slot(s) within 1 s",
+                load=load_sample,
+            )
+            self.assertFalse(need_timeout)
+            self.assertEqual(entry_timeout["class"], verify.CheckClass.UNCLASSIFIED)
+            self.assertIn("no lease", str(entry_timeout["reason"]))
+
+            entry_unrun, need_unrun = verify.evaluate_alone_row(
+                "c1",
+                {"status": "unrun", "exit": None},
+                first_row=first_row,
+                log=log_path,
+                problem=None,
+                load=load_sample,
+            )
+            self.assertFalse(need_unrun)
+            self.assertEqual(entry_unrun["class"], verify.CheckClass.UNCLASSIFIED)
+
+            entry_fail, need_fail = verify.evaluate_alone_row(
+                "c1",
+                {"status": "failed", "exit": 1, "failed_tests": ["t1.ts"]},
+                first_row=first_row,
+                log=log_path,
+                problem=None,
+                load=load_sample,
+                check_tests=["t1.ts"],
+            )
+            self.assertTrue(need_fail)
+            self.assertEqual(entry_fail["alone"]["status"], "failed")
+
+            # 5. Base row transitions: absent -> regression; passed -> regression; failed -> pre-existing;
+            #    blocked -> unclassified.
+            absent_entry = verify.evaluate_base_row("c1", entry_fail, base=base_sha, present=False)
+            self.assertEqual(absent_entry["class"], verify.CheckClass.REGRESSION)
+            self.assertEqual(absent_entry["base"]["status"], "absent")
+
+            reg_entry = verify.evaluate_base_row(
+                "c1",
+                entry_fail,
+                base=base_sha,
+                present=True,
+                row={"status": "passed", "exit": 0},
+                base_log=log_path,
+            )
+            self.assertEqual(reg_entry["class"], verify.CheckClass.REGRESSION)
+
+            pre_entry = verify.evaluate_base_row(
+                "c1",
+                entry_fail,
+                base=base_sha,
+                present=True,
+                row={"status": "failed", "exit": 1},
+                base_log=log_path,
+            )
+            self.assertEqual(pre_entry["class"], verify.CheckClass.PRE_EXISTING)
+
+            uncls_base = verify.evaluate_base_row(
+                "c1",
+                entry_fail,
+                base=base_sha,
+                present=True,
+                row={"status": "blocked", "blocked_by": ["fixture-build"]},
+                base_log=log_path,
+            )
+            self.assertEqual(uncls_base["class"], verify.CheckClass.UNCLASSIFIED)
+            self.assertIn("blocked by fixture-build", str(uncls_base["reason"]))
+
+            # 6. Unaccounted suite failure keeps classification red even when all classified checks are landable.
+            unaccounted_fresh: list[dict[str, Any]] = [
+                {"suite": "lib", "status": "failed", "failed_checks": ["c1"]},
+                {"suite": "mystery", "status": "failed", "failed_checks": []},
+            ]
+            unaccounted_plan = verify.plan_classification(
+                unaccounted_fresh,
+                {"checks": [{"id": "c1", "status": "failed"}]},
+                cap=2,
+                only_supported=False,
+            )
+            assert isinstance(unaccounted_plan, verify.ClassificationPlan)
+            self.assertEqual(unaccounted_plan.unaccounted, ["mystery"])
+            unaccounted_out = verify.finalize_classification(
+                base_sha,
+                unaccounted_plan,
+                {"c1": entry_flaky},
+                load=load_sample,
+                runs=[],
+            )
+            self.assertFalse(unaccounted_out["green"])
 
 
 if __name__ == "__main__":

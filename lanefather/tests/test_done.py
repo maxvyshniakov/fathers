@@ -230,8 +230,6 @@ class DoneReadinessUnifiedTests(LaneCase):
 
         with mock.patch.dict(os.environ, self.env, clear=False):
             cfg = config.load(self.integration / ".lanefather.toml")
-            config.use(cfg)
-            self.addCleanup(config.use, None)
             store = state.Store(cfg, directory=self.state)
             rec = store.load("a")
 

@@ -13,7 +13,7 @@ from .gitops import git, main_checkout
 
 def gh_command(project: config.Config | None = None) -> str:
     """The configured `gh` command (`LANEFATHER_GH`), defaulting to `gh`."""
-    return (project or config.current()).env("GH") or "gh"
+    return (project or config.DEFAULT).env("GH") or "gh"
 
 
 def origin_repo(common: str) -> str | None:
@@ -31,7 +31,7 @@ def repo_args(common: str) -> list[str]:
 
 def repository(common: str, rule: config.Tickets | None = None) -> str | None:
     """`owner/name` for `gh`: the configured `[tickets] repo`, else `origin`'s GitHub repository."""
-    active_rule = rule or config.current().tickets
+    active_rule = rule or config.DEFAULT.tickets
     if active_rule.repo:
         return active_rule.repo
     return origin_repo(common)
@@ -145,22 +145,30 @@ def issue_comment(
     number: str,
     body: str,
     *,
+    project: config.Config | None = None,
     env: Mapping[str, str] | None = None,
     timeout: float | None = None,
 ) -> str | None:
     """Comment on an issue; None on success, else error string."""
-    return _run_status(["issue", "comment", number, "--body", body], repo=repo, env=env, timeout=timeout)
+    return _run_status(
+        ["issue", "comment", number, "--body", body],
+        project=project,
+        repo=repo,
+        env=env,
+        timeout=timeout,
+    )
 
 
 def issue_edit(
     repo: str,
     number: str,
     *args: str,
+    project: config.Config | None = None,
     env: Mapping[str, str] | None = None,
     timeout: float | None = None,
 ) -> str | None:
     """Edit an issue (e.g. `--add-label` / `--remove-label`); None on success, else error string."""
-    return _run_status(["issue", "edit", number, *args], repo=repo, env=env, timeout=timeout)
+    return _run_status(["issue", "edit", number, *args], project=project, repo=repo, env=env, timeout=timeout)
 
 
 def label_create(
@@ -169,12 +177,14 @@ def label_create(
     *,
     color: str,
     description: str,
+    project: config.Config | None = None,
     env: Mapping[str, str] | None = None,
     timeout: float | None = None,
 ) -> str | None:
     """Create a repository label; None on success, else error string."""
     return _run_status(
         ["label", "create", name, "--color", color, "--description", description],
+        project=project,
         repo=repo,
         env=env,
         timeout=timeout,

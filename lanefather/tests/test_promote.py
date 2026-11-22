@@ -613,11 +613,11 @@ class SyncTests(LaneCase):
         self.assertIn("no remote origin", self.lane("sync", cwd=self.repo, ok=False))
 
     def test_perf_suite_treats_exit_zero_with_blocked_checks_as_red(self):
-        from lanefather import checks, config, promote
+        from lanefather import config, promote, state, verify
         from lanefather.errors import LaneError
         tip = self.rev("dev")
-        config.use(config.load(config.find(self.repo)))
-        self.addCleanup(config.use, None)
+        cfg = config.load(config.find(self.repo))
+        store = state.Store(cfg, directory=self.state)
         real_run: Any = subprocess.run
 
         def fake_run(cmd: Any, *args: Any, **kwargs: Any) -> Any:
@@ -626,22 +626,22 @@ class SyncTests(LaneCase):
             return real_run(cmd, *args, **kwargs)
 
         with (unittest.mock.patch.dict(os.environ, self.env, clear=False),
-              unittest.mock.patch.object(promote.plan, "perf_suite_of", return_value="perf"),
-              unittest.mock.patch.object(promote.worktrees, "gate_worktree", return_value=str(self.repo)),
-              unittest.mock.patch.object(promote.subprocess, "run", side_effect=fake_run),
-              unittest.mock.patch.object(checks, "report_of", return_value=(
+              unittest.mock.patch.object(promote.gate.plan, "perf_suite_of", return_value="perf"),
+              unittest.mock.patch.object(promote.gate.worktrees, "gate_worktree", return_value=str(self.repo)),
+              unittest.mock.patch.object(verify.subprocess, "run", side_effect=fake_run),
+              unittest.mock.patch.object(verify, "report_of", return_value=(
                   [], {"checks": [{"id": "perf:bench", "status": "blocked", "blocked_by": ["build"]}]}))):
             buf = io.StringIO()
             with contextlib.redirect_stdout(buf), self.assertRaises(LaneError):
-                promote.perf_suite(str(self.repo), str(self.repo / ".git"), tip, ship=False)
+                promote.perf_suite(store, str(self.repo), str(self.repo / ".git"), tip, ship=False)
             self.assertIn("blocked checks: perf:bench", buf.getvalue())
 
     def test_batch_gate_exit_zero_stamped_with_blocked_checks_reports_blocked_without_keyerror(self):
-        from lanefather import checks, config, promote
+        from lanefather import config, promote, state, verify
         from lanefather.errors import LaneError
         tip = self.rev("dev")
-        config.use(config.load(config.find(self.repo)))
-        self.addCleanup(config.use, None)
+        cfg = config.load(config.find(self.repo))
+        store = state.Store(cfg, directory=self.state)
         real_run: Any = subprocess.run
 
         def fake_run(cmd: Any, *args: Any, **kwargs: Any) -> Any:
@@ -650,14 +650,14 @@ class SyncTests(LaneCase):
             return real_run(cmd, *args, **kwargs)
 
         with (unittest.mock.patch.dict(os.environ, self.env, clear=False),
-              unittest.mock.patch.object(promote.worktrees, "gate_worktree", return_value=str(self.repo)),
-              unittest.mock.patch.object(promote.subprocess, "run", side_effect=fake_run),
-              unittest.mock.patch.object(checks, "stamp_result", return_value={"stamped": True, "tree": "abc123"}),
-              unittest.mock.patch.object(checks, "report_of", return_value=(
+              unittest.mock.patch.object(promote.gate.worktrees, "gate_worktree", return_value=str(self.repo)),
+              unittest.mock.patch.object(verify.subprocess, "run", side_effect=fake_run),
+              unittest.mock.patch.object(verify, "stamp_result", return_value={"stamped": True, "tree": "abc123"}),
+              unittest.mock.patch.object(verify, "report_of", return_value=(
                   [], {"checks": [{"id": "browser:e2e", "status": "blocked", "blocked_by": ["build"]}]}))):
             buf = io.StringIO()
             with contextlib.redirect_stdout(buf), self.assertRaises(LaneError):
-                promote.run_batch_gate(str(self.repo), str(self.repo / ".git"), tip, 1)
+                promote.run_batch_gate(store, str(self.repo), str(self.repo / ".git"), tip, 1)
             self.assertIn("blocked checks: browser:e2e", buf.getvalue())
 
 

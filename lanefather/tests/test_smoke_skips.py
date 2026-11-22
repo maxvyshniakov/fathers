@@ -77,16 +77,24 @@ class SmokeReuseTableTests(unittest.TestCase):
 
     def run_table(self, passed: dict[str, set[str]], merged: dict[str, Any] | None, gate_only: tuple[str, ...] = (),
                   ) -> tuple[str, list[str], dict[str, str]]:
-        from lanefather import checks, config, land
+        from lanefather import config, plan, state
         rows: list[dict[str, Any]] = [{"id": c, "suite": "s", "paths": []} for c in ("lint", "unit", "tools/test-lane.py")]
 
-        def same_tree(wanted: dict[str, str], tree: str, _toolchain: Any) -> dict[str, dict[str, Any]]:
+        def reuse_from_tree(
+            _store: state.Store,
+            wanted: dict[str, str],
+            tree: str,
+            _toolchain: Any,
+            *,
+            platform: str | None = None,
+        ) -> dict[str, dict[str, Any]]:
+            del platform
             return {c: {"suite": s, "status": "passed", "reused_from": tree, "reused_source": "check"}
                     for c, s in wanted.items() if c in passed.get(tree, set())}
-        config.use(config.Config(gate_only=gate_only))
-        self.addCleanup(config.use, None)
-        with unittest.mock.patch.object(checks, "same_tree", same_tree):
-            kind, kept, _, skips = land.smoke_reuse("smoke", rows, "M" * 40, None, merged, "P" * 40)
+
+        store = state.Store(config.Config(gate_only=gate_only))
+        with unittest.mock.patch.object(plan, "reuse_from_tree", reuse_from_tree):
+            kind, kept, _, skips = plan.smoke_reuse(store, "smoke", rows, "M" * 40, None, merged, "P" * 40)
         return kind, [r["id"] for r in kept or []], skips
 
     def test_the_table(self):
@@ -112,6 +120,75 @@ class SmokeReuseTableTests(unittest.TestCase):
         self.assertEqual((kind, kept), ("skip", []))
         self.assertIn("previous tip", skips["lint"])
         self.assertIn("passed on this merge tree", self.run_table({"M" * 40: {"lint"}}, selects_unit)[2]["lint"])
+
+    def test_unified_reuse_from_receipt_and_checkout_single_load_cache(self):
+        import pathlib
+        import shutil
+        import tempfile
+
+        from lanefather import config, plan, results
+
+        tmp = pathlib.Path(tempfile.mkdtemp(prefix="lane-plan-cache-"))
+        self.addCleanup(shutil.rmtree, tmp, True)
+        (tmp / "tools").mkdir()
+        load_log = tmp / "loads.txt"
+        (tmp / "tools" / "verification_plan.py").write_text(
+            f"import pathlib\n"
+            f"with pathlib.Path({str(load_log)!r}).open('a') as _f:\n"
+            f"    _f.write('loaded\\n')\n"
+            "SUITES = ('structure', 'lib')\n"
+            "class _C:\n"
+            "    def __init__(self, cid, suite): self.id, self.suite = cid, suite\n"
+            "def checks(root, scratch, selected, keep_going, native_only, jobs=4, **_):\n"
+            "    return [c for c in [_C('structure-check', 'structure'), _C('lib-check', 'lib')] if c.suite in selected]\n"
+            "def smoke(root): return ['structure-check', 'lib-check']\n"
+        )
+        cfg = config.Config(plan_module="tools/verification_plan.py")
+        checkout = plan.Checkout(cfg, tmp)
+        # Multiple queries on the same Checkout load the plan module and checks list only once.
+        self.assertEqual(checkout.smoke_checks(), ["structure-check", "lib-check"])
+        self.assertEqual(checkout.known_checks(), {"structure-check", "lib-check"})
+        self.assertEqual(checkout.suite_owners(["structure", "lib"]),
+                         {"structure": {"structure-check"}, "lib": {"lib-check"}})
+        self.assertEqual(checkout.smoke_rows(), [
+            {"id": "structure-check", "suite": "structure", "paths": []},
+            {"id": "lib-check", "suite": "lib", "paths": []},
+        ])
+        self.assertEqual(len(load_log.read_text().splitlines()), 1)
+
+        # Unified reuse_from_receipt handles both previous-receipt and parent-receipt reuse, including legacy
+        # receipts without an explicit `platform` field when `worktree` exists on this host.
+        host_plat = results.host_platform(cfg)
+        legacy_parent: dict[str, Any] = {
+            "lane": "parent-a",
+            "head": "1" * 40,
+            "tree": "2" * 40,
+            "toolchain": None,
+            "check_results": {
+                "structure-check": {"suite": "structure", "status": "passed"},
+                "lib-check": {"suite": "lib", "status": "passed"},
+            },
+        }
+        delta = {"full": False, "selection": [{"id": "structure-check", "suite": "structure", "paths": ["README.md"]}]}
+        with (
+            unittest.mock.patch.object(checkout, "plan_for", return_value=delta),
+            unittest.mock.patch.object(plan.gitops, "git_ok", return_value=True),
+        ):
+            reused = plan.reuse_from_receipt(
+                checkout,
+                legacy_parent,
+                {"structure-check", "lib-check"},
+                toolchain=None,
+                worktree=tmp,
+                reused_by="parent",
+                lane="parent-a",
+                receipt_path=str(tmp / "parent-a.receipt.json"),
+                platform=host_plat,
+            )
+        self.assertEqual(list(reused), ["lib-check"])
+        self.assertEqual(reused["lib-check"]["reused_by"], "parent")
+        self.assertEqual(reused["lib-check"]["reused_lane"], "parent-a")
+        self.assertEqual(reused["lib-check"]["reused_receipt"], str(tmp / "parent-a.receipt.json"))
 
 
 if __name__ == "__main__":

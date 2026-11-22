@@ -180,8 +180,6 @@ class SlotfatherFixtureContractTests(unittest.TestCase):
             with self.subTest(target=label):
                 path_env = self.with_slotfather_on_path(binary, env, f"run-{label}")
                 with mock.patch.dict(os.environ, path_env, clear=True):
-                    config.use(config.Config())
-                    self.addCleanup(config.use, None)
                     argv = slots.wrap(
                         2, "lane-contract", [sys.executable, "-c", probe_script, binary],
                         wait=5, meta={"lane": "a", "phase": "check"}, priority="interactive",

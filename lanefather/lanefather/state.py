@@ -16,7 +16,7 @@ with this tool in both directions. A record of a newer schema is refused rather 
 """
 from __future__ import annotations
 
-from collections.abc import Callable, Generator
+from collections.abc import Callable, Generator, Iterable
 import contextlib
 import fcntl
 import json
@@ -24,6 +24,7 @@ import os
 from pathlib import Path
 import re
 import threading
+import time
 from typing import Any
 
 from fathers_common.atomic import atomic_write as _atomic_write
@@ -49,6 +50,30 @@ class Store:
         environment's LANEFATHER_STATE, else the project's state_dir."""
         self.project = project
         self.directory = directory or Path(os.path.expanduser(project.env("STATE") or project.state_dir))
+
+    @property
+    def prog(self) -> str:
+        return self.project.command
+
+    @property
+    def results_dir(self) -> Path:
+        return self.directory / "results"
+
+    @property
+    def history_dir(self) -> Path:
+        return self.directory / "history"
+
+    @property
+    def reviews_dir(self) -> Path:
+        return self.directory / "reviews"
+
+    def logs_dir(self) -> Path:
+        path = self.directory / "logs"
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def log_path(self, label: str) -> Path:
+        return self.logs_dir() / f"{label}-{time.strftime('%Y%m%dT%H%M%S')}.log"
 
     def record_path(self, lane_id: str) -> Path:
         if not ID.match(lane_id):
@@ -124,22 +149,6 @@ class Store:
                 yield
             finally:
                 held.discard(lock_path)
-
-
-def state_dir() -> Path:
-    path = Store(config.current()).directory
-    path.mkdir(parents=True, exist_ok=True)
-    return path
-
-
-def record_path(lane_id: str) -> Path:
-    state_dir()
-    return Store(config.current()).record_path(lane_id)
-
-
-def receipt_path(lane_id: str, kind: str = "receipt") -> Path:
-    state_dir()
-    return Store(config.current()).receipt_path(lane_id, kind)
 
 
 def unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -272,22 +281,9 @@ def set_fix_parents(record: Record, parents: list[str], *, batch: bool) -> None:
             record["review_fix_of_all"] = parents
 
 
-def load(lane_id: str) -> Record:
-    state_dir()
-    return Store(config.current()).load(lane_id)
-
-
-def save(record: Record) -> None:
-    Store(config.current()).save(record)
-
-
-def lanes() -> list[Record]:
-    return Store(config.current()).lanes()
-
-
-def occupying(records: list[Record] | None = None) -> list[Record]:
+def occupying(records: Iterable[Record]) -> list[Record]:
     """The lanes that count toward the cap and hold their claims."""
-    return [r for r in (lanes() if records is None else records) if r["status"] in OCCUPYING]
+    return [r for r in records if r["status"] in OCCUPYING]
 
 
 def of_project(records: list[Record], common: str | None) -> list[Record]:
@@ -302,10 +298,3 @@ def project_name(common: str | None) -> str:
     if not common:
         return "an unnamed repository"
     return os.path.basename(os.path.dirname(common) if os.path.basename(common) == ".git" else common)
-
-
-@contextlib.contextmanager
-def locked(name: str, waiting: str | None = None) -> Generator[None]:
-    """Hold the current project's state lock; explicit project callers use Store directly."""
-    with Store(config.current()).locked(name, waiting):
-        yield

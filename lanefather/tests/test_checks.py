@@ -214,7 +214,8 @@ class LoadThrottleTests(LaneCase):
                                                         "LANEFATHER_LOAD_POLL": "0.01", **env}, clear=True)
         patcher.start()
         self.addCleanup(patcher.stop)
-        self.enterContext(project(self.integration))
+        cfg = self.enterContext(project(self.integration))
+        lane.store = lane.state.Store(cfg, directory=self.state)
         return lane
 
     def test_the_batch_gate_sizes_its_jobs_after_the_load_wait(self):
@@ -223,12 +224,12 @@ class LoadThrottleTests(LaneCase):
         common = self.git(self.repo, "rev-parse", "--path-format=absolute", "--git-common-dir")
         lane = self.in_process(SLOTFATHER_LOADAVG="12")
 
-        def wait(label):
+        def wait(_store: Any, _label: str) -> dict[str, Any]:
             os.environ["SLOTFATHER_LOADAVG"] = "0.1"  # the load dropped while the gate waited
             return {"enabled": True, "limit": 9.0, "load15_before": 12.0, "load15": 0.1, "seconds": 1.0}
         with unittest.mock.patch.object(lane.host, "wait_for_load", side_effect=wait), \
                 contextlib.redirect_stdout(io.StringIO()):
-            lane.promote.run_batch_gate(str(self.repo), common, tip, None)
+            lane.promote.run_batch_gate(lane.store, str(self.repo), common, tip, None)
         decision = self.receipt(f"promote-{tip[:10]}.gate")["jobs_decision"]
         self.assertEqual((decision["load"], decision["jobs"]), (0.1, 2))
 
@@ -251,15 +252,18 @@ class LoadThrottleUnitTests(ScratchCase):
                                                         "LANEFATHER_LOAD_POLL": "0.01", **env}, clear=True)
         patcher.start()
         self.addCleanup(patcher.stop)
-        self.enterContext(project(self.tmp))
+        cfg = self.enterContext(project(self.tmp))
+        lane.store = lane.state.Store(cfg, directory=self.state)
         return lane
 
     def test_a_run_starts_once_load15_drops_under_the_limit(self) -> None:
         lane = self.in_process_scratch(LANEFATHER_LOAD_POLL="0.06")
         loads = iter([20.0, 12.0, 8.9])
-        with unittest.mock.patch.object(lane.host, "load15", side_effect=lambda: next(loads)), \
+        def next_load(*_args: Any) -> float:
+            return next(loads)
+        with unittest.mock.patch.object(lane.host, "load15", side_effect=next_load), \
                 contextlib.redirect_stdout(io.StringIO()) as printed:
-            wait = lane.host.wait_for_load("lane-a")
+            wait = lane.host.wait_for_load(lane.store, "lane-a")
         self.assertIn("lane-a starts after 0 s at load15 8.9", printed.getvalue())
         self.assertEqual((wait["load15_before"], wait["load15"], wait["limit"]), (20.0, 8.9, 9.0))
         self.assertNotIn("gave_up", wait)
@@ -268,7 +272,7 @@ class LoadThrottleUnitTests(ScratchCase):
     def test_a_run_under_a_lease_it_already_holds_does_not_wait(self) -> None:
         # #568's rerun alone holds every slot: a wait there would hold them idle while the load can only drop.
         lane = self.in_process_scratch(SLOTFATHER_LEASE=str(self.tmp / "lease"), LANEFATHER_LOAD15="30")
-        wait = lane.host.wait_for_load("lane-a-alone")
+        wait = lane.host.wait_for_load(lane.store, "lane-a-alone")
         self.assertEqual(wait["seconds"], 0.0)
         self.assertIn("slot lease", wait["skipped"])
 
@@ -1096,7 +1100,7 @@ class MinSlotsUnitTests(unittest.TestCase):
         self.assertEqual(decision["min_slots"], 1)
 
     def test_classify_reruns_honour_declared_min_slots(self):
-        from lanefather import checks
+        from lanefather import config, plan, state, verify
         lane_plan: dict[str, Any] = {
             "selection": [{"id": "browser:e2e", "suite": "browser", "paths": ["a.ts"], "min_slots": 4}],
         }
@@ -1104,25 +1108,32 @@ class MinSlotsUnitTests(unittest.TestCase):
         report = {"checks": [{"id": "browser:e2e", "status": "failed"}]}
         seen_jobs: list[int] = []
 
-        class FakeRerun:
-            def __init__(self, root: Any, ids: list[str], label: str, jobs: int, **kwargs: Any) -> None:
-                seen_jobs.append(jobs)
-                self.run_id = f"run-{label}"
+        def fake_run_rerun(
+            _store: state.Store,
+            _root: Any,
+            _ids: list[str],
+            label: str,
+            jobs: int,
+            **_kwargs: Any,
+        ) -> tuple[str, dict[str, Any], pathlib.Path, None, None]:
+            seen_jobs.append(jobs)
+            return f"run-{label}", report, pathlib.Path("/tmp/l"), None, None
 
         @contextlib.contextmanager
         def fake_base(*_args: Any, **_kwargs: Any) -> Any:
             yield "/tmp"
 
-        with (unittest.mock.patch.object(checks, "Rerun", FakeRerun),
-              unittest.mock.patch.object(checks, "run_rerun", return_value=(report, pathlib.Path("/tmp/l"), None, None)),
-              unittest.mock.patch.object(checks.worktrees, "base_checkout", side_effect=fake_base),
-              unittest.mock.patch.object(checks.plan, "known_checks", return_value={"browser:e2e"})):
-            checks.classify({"id": "a", "ticket": "1"}, "/tmp", "deadbeef", fresh, report, jobs=4,
-                            lane_plan=lane_plan)
+        store = state.Store(config.DEFAULT)
+        with (unittest.mock.patch.object(verify, "run_rerun", side_effect=fake_run_rerun),
+              unittest.mock.patch.object(verify.worktrees, "base_checkout", side_effect=fake_base),
+              unittest.mock.patch.object(plan, "known_checks", return_value={"browser:e2e"})):
+            verify.classify_failures(
+                store, {"id": "a", "ticket": "1"}, "/tmp", "deadbeef", fresh, report, jobs=4, lane_plan=lane_plan
+            )
         self.assertEqual(seen_jobs, [4, 4])
 
     def test_fix_plan_preserves_min_slots_on_added_parent_checks(self):
-        from lanefather import checks
+        from lanefather import plan
         lane_plan: dict[str, Any] = {
             "paths": ["src/new.ts"],
             "selection": [{"id": "unit", "suite": "verify", "paths": ["src/new.ts"]}],
@@ -1135,7 +1146,7 @@ class MinSlotsUnitTests(unittest.TestCase):
             "paths": ["src/old.ts"],
             "selection": [{"id": "browser:e2e", "suite": "browser", "paths": ["src/old.ts"], "min_slots": 4}],
         }
-        about = checks.fix_plan(lane_plan, parent, known={"unit", "browser:e2e"})
+        about = plan.fix_plan(lane_plan, parent, known={"unit", "browser:e2e"})
         self.assertTrue(about["union"])
         selection: list[dict[str, Any]] = lane_plan["selection"]
         added = next(r for r in selection if r["id"] == "browser:e2e")

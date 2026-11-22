@@ -32,25 +32,21 @@ FIXES = re.compile(r"^[ \t]*fixes[ \t]+#(\d+)[ \t]*$", re.IGNORECASE | re.MULTIL
 GH_TIMEOUT = 60
 
 
-def rules() -> config.Tickets:
-    return config.current().tickets
-
-
 def has_ticket(record: Record) -> bool:
     return record["ticket"] != "none"
 
 
-def no_ticket_warning(record: Record) -> str | None:
+def no_ticket_warning(record: Record, project: config.Config = config.DEFAULT) -> str | None:
     """The warning start gives a lane without a ticket when the project turns the rules on."""
-    if has_ticket(record) or not rules().enabled():
+    if has_ticket(record) or not project.tickets.enabled():
         return None
     return (f"lane: warning: lane {record['id']} has no ticket, but [tickets] in {config.CONFIG_NAME} is on: its "
             "land labels, comments on and closes no issue. Register every lane with --ticket N")
 
 
-def merge_message(message: str, ticket: str) -> str:
+def merge_message(message: str, ticket: str, rule: config.Tickets = config.DEFAULT.tickets) -> str:
     """The landing merge's message, ending with `Fixes #N` when the project asks for it and it has none."""
-    if not rules().fixes_trailer or ticket == "none" or ticket in FIXES.findall(message):
+    if not rule.fixes_trailer or ticket == "none" or ticket in FIXES.findall(message):
         return message
     return message.rstrip("\n") + f"\n\nFixes #{ticket}"
 
@@ -66,31 +62,33 @@ def repository(common: str, rule: config.Tickets | None = None) -> str | None:
     return github.repository(common, rule)
 
 
-def gh(repo: str, *args: str) -> str | None:
+def gh(repo: str, *args: str, project: config.Config | None = None) -> str | None:
     """Run gh without a prompt against repo; None when it succeeded, else what went wrong."""
     env = dict(os.environ, GH_PROMPT_DISABLED="1", GH_NO_UPDATE_NOTIFIER="1", NO_COLOR="1")
-    return github._run_status(args, repo=repo, env=env, timeout=GH_TIMEOUT)  # pyright: ignore[reportPrivateUsage]
+    return github._run_status(args, project=project, repo=repo, env=env, timeout=GH_TIMEOUT)  # pyright: ignore[reportPrivateUsage]
 
 
 def _gh_env() -> dict[str, str]:
     return dict(os.environ, GH_PROMPT_DISABLED="1", GH_NO_UPDATE_NOTIFIER="1", NO_COLOR="1")
 
 
-def add_label(repo: str, number: str) -> str | None:
+def add_label(repo: str, number: str, *, project: config.Config | None = None) -> str | None:
     """Label the issue `integrated`, creating the label once when the repository lacks it."""
     env = _gh_env()
-    if github.issue_edit(repo, number, "--add-label", LABEL, env=env, timeout=GH_TIMEOUT) is None:
+    if github.issue_edit(repo, number, "--add-label", LABEL, project=project, env=env, timeout=GH_TIMEOUT) is None:
         return None
     created = github.label_create(repo, LABEL, color=LABEL_COLOR, description=LABEL_DESCRIPTION,
-                                  env=env, timeout=GH_TIMEOUT)
+                                  project=project, env=env, timeout=GH_TIMEOUT)
     if created and "already exists" not in created:
         return created
-    return github.issue_edit(repo, number, "--add-label", LABEL, env=env, timeout=GH_TIMEOUT)
+    return github.issue_edit(repo, number, "--add-label", LABEL, project=project, env=env, timeout=GH_TIMEOUT)
 
 
-def remove_label(repo: str, number: str) -> str | None:
+def remove_label(repo: str, number: str, *, project: config.Config | None = None) -> str | None:
     """Take the `integrated` label off the issue; a repository without the label has nothing to remove."""
-    problem = github.issue_edit(repo, number, "--remove-label", LABEL, env=_gh_env(), timeout=GH_TIMEOUT)
+    problem = github.issue_edit(
+        repo, number, "--remove-label", LABEL, project=project, env=_gh_env(), timeout=GH_TIMEOUT
+    )
     return None if problem and f"'{LABEL}' not found" in problem else problem
 
 
@@ -120,8 +118,8 @@ def receipt_line(receipt: dict[str, Any] | None, record: Record) -> str:
 
 
 def land_comment(record: Record, merge: str, branch: str, repo: str, pushed: list[str],
-                 receipt: dict[str, Any] | None, smoke: str, *, rule: config.Tickets | None = None) -> str:
-    rule = rule or rules()
+                 receipt: dict[str, Any] | None, smoke: str, *,
+                 rule: config.Tickets = config.DEFAULT.tickets) -> str:
     short = merge[:10]
     where = (f"[`{short}`](https://github.com/{repo}/commit/{merge}) (pushed: origin/{', origin/'.join(pushed)})"
              if pushed else f"`{short}` (local only: origin does not have this merge yet)")
@@ -161,14 +159,14 @@ def after_land(store: state.Store, record: Record, merge: str, integration: str,
     problems: list[str] = []
     done: list[str] = []
     if rule.integrated_label:
-        problem = add_label(repo, number)
+        problem = add_label(repo, number, project=store.project)
         if problem:
             problems.append(f"label {LABEL}: {problem}")
         else:
             done.append(f"labelled {LABEL}")
     if rule.land_comment:
         body = land_comment(record, merge, branch, repo, on_origin(integration, merge), receipt, smoke, rule=rule)
-        problem = gh(repo, "issue", "comment", number, "--body", body)
+        problem = gh(repo, "issue", "comment", number, "--body", body, project=store.project)
         if problem:
             problems.append(f"comment: {problem}")
         else:
@@ -182,34 +180,36 @@ def after_land(store: state.Store, record: Record, merge: str, integration: str,
         warn(what, problems, store=store)
 
 
-def release_comments(cwd: str, common: str, base: str, head: str, version: str | None) -> int:
+def release_comments(store: state.Store, cwd: str, common: str, base: str, head: str, version: str | None) -> int:
     """Comment the version (or the main SHA) on each issue a `Fixes #N` line in base..head names; the number
     commented. A failure warns."""
-    if not rules().release_comment:
+    rule = store.project.tickets
+    if not rule.release_comment:
         return 0
     if not git_ok(cwd, "merge-base", "--is-ancestor", base, head):
-        warn(f"release {head[:10]}", [f"{base[:10]} is not an ancestor of {head[:10]}: no release comments"])
+        warn(f"release {head[:10]}", [f"{base[:10]} is not an ancestor of {head[:10]}: no release comments"],
+             store=store)
         return 0
     numbers = fixed_issues(cwd, base, head)
     if not numbers:
         return 0
     what = f"release {version or head[:10]}"
-    repo = repository(common)
+    repo = repository(common, rule)
     if not repo:
-        warn(what, ["no GitHub repository: origin is not on GitHub and [tickets] names no repo"])
+        warn(what, ["no GitHub repository: origin is not on GitHub and [tickets] names no repo"], store=store)
         return 0
     link = f"[`{head[:10]}`](https://github.com/{repo}/commit/{head})"
     body = (f"Released in `{version}` ({link})." if version else f"Shipped to the default branch as {link}.")
     problems: list[str] = []
     commented = unlabelled = 0
     for number in numbers:
-        problem = gh(repo, "issue", "comment", number, "--body", body)
+        problem = gh(repo, "issue", "comment", number, "--body", body, project=store.project)
         if problem:
             problems.append(f"#{number}: {problem}")
         else:
             commented += 1
         # Released, the issue is no longer "not yet on main": its integrated label goes.
-        problem = remove_label(repo, number)
+        problem = remove_label(repo, number, project=store.project)
         if problem:
             problems.append(f"#{number}: remove label {LABEL}: {problem}")
         else:
@@ -218,21 +218,22 @@ def release_comments(cwd: str, common: str, base: str, head: str, version: str |
                    f"({', '.join('#' + n for n in numbers)}) in {repo}, label {LABEL} removed from {unlabelled}",
                    kind="ticket.release_commented", subject={"type": "commit", "id": head},
                    details={"version": version, "issues": numbers, "commented": commented,
-                            "unlabelled": unlabelled, "repository": repo})
+                            "unlabelled": unlabelled, "repository": repo},
+                   store=store)
     print(f"lane: {what}: commented on {commented} of {len(numbers)} issues it fixes "
           f"({', '.join('#' + n for n in numbers)})")
     if problems:
-        warn(what, problems)
+        warn(what, problems, store=store)
     return commented
 
 
-def shipped(args: Any) -> int:
+def shipped(args: Any, store: state.Store) -> int:
     """After a project's release publish: comment the version on each issue its range fixes."""
     cwd = os.getcwd()
-    if not rules().release_comment:
+    if not store.project.tickets.release_comment:
         print(f"lane: [tickets] release_comment is off in {config.CONFIG_NAME}; nothing to comment")
         return 0
     head = git(cwd, "rev-parse", "--verify", args.head + "^{commit}")
     base = git(cwd, "rev-parse", "--verify", args.since + "^{commit}")
-    release_comments(cwd, common_dir(cwd), base, head, args.version)
+    release_comments(store, cwd, common_dir(cwd), base, head, args.version)
     return 0

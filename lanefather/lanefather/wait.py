@@ -13,7 +13,7 @@ import sys
 import time
 from typing import Any
 
-from . import config, lifecycle, state
+from . import lifecycle, state
 from .state import Record
 
 TARGETS = ("registered", "landed", "done")
@@ -43,11 +43,12 @@ def reached(record: Record | None, target: str, first: Record | None) -> bool | 
     return lifecycle.finished(record)
 
 
-def wait_for(lane_id: str, target: str, timeout: float, *, sleep: Callable[[float], None] = time.sleep,
+def wait_for(store: state.Store, lane_id: str, target: str, timeout: float, *,
+             sleep: Callable[[float], None] = time.sleep,
              clock: Callable[[], float] = time.monotonic) -> tuple[bool | None, Record | None]:
     """Read the lane until it reaches `target` or `timeout` seconds pass; the outcome (as `reached`) and the last
     record read."""
-    path = state.record_path(lane_id)
+    path = store.record_path(lane_id)
     first = state.read_json(path)
     record, began, pause = first, clock(), FIRST
     while True:
@@ -80,11 +81,11 @@ def reached_line(lane_id: str, target: str, record: Record) -> str:
     return f"Lane {lane_id} is {status}"
 
 
-def command(args: Any) -> int:
-    prog = config.prog()
+def command(args: Any, store: state.Store) -> int:
+    prog = store.prog
     started = time.monotonic()
     try:
-        outcome, record = wait_for(args.id, args.target, args.timeout)
+        outcome, record = wait_for(store, args.id, args.target, args.timeout)
     except KeyboardInterrupt:
         return INTERRUPTED
     if args.json:

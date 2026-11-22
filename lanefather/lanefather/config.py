@@ -188,9 +188,12 @@ def _strings(data: dict[str, Any], key: str, default: tuple[str, ...]) -> tuple[
     value = data.get(key, default)
     if isinstance(value, str):
         return (value,)
-    if not isinstance(value, (list, tuple)) or not all(isinstance(v, str) for v in value):  # pyright: ignore[reportUnknownVariableType]
+    if not isinstance(value, (list, tuple)):
         raise LaneError(f"{CONFIG_NAME}: {key} must be a string or a list of strings")
-    return tuple(value)  # pyright: ignore[reportUnknownArgumentType]
+    items = cast(list[Any] | tuple[Any, ...], value)
+    if not all(isinstance(v, str) for v in items):
+        raise LaneError(f"{CONFIG_NAME}: {key} must be a string or a list of strings")
+    return tuple(str(v) for v in items)
 
 
 def _string(data: dict[str, Any], key: str, default: str) -> str:
@@ -487,28 +490,4 @@ def load(path: Path | None) -> Config:
     return parse(data, path.resolve())
 
 
-_current: Config | None = None
-
-
-def current() -> Config:
-    """The config of this run: the one `use` set, else the one found from the working directory."""
-    global _current
-    if _current is None:
-        _current = load(find(os.getcwd()))
-    return _current
-
-
-def use(config: Config | None) -> None:
-    """Set the config of this run (the command line's --config); None finds it again on the next use."""
-    global _current
-    _current = config
-
-
-def prog() -> str:
-    """How messages name the command. An unreadable configuration names it `lanefather`, so the machine-wide
-    commands (capabilities, status, settings) still run in such a repository; any command that needs the
-    configuration reports its error when it reads it."""
-    try:
-        return current().command
-    except LaneError:
-        return Config().command
+DEFAULT = Config()

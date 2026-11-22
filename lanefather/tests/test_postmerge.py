@@ -468,11 +468,9 @@ class CrashedRecheckAndCrossProjectTests(LaneCase):
         store_b.save(rec_b)
         review_record.ReviewRecord.exempt(store_b, "b", "docs only")
 
-        with (
-            mock.patch.object(config, "current", side_effect=AssertionError("must not call config.current()")),
-            mock.patch.object(state, "state_dir", side_effect=AssertionError("must not call state.state_dir()")),
-        ):
-            pm_b = PostMergeRecord.load(store_b, store_b.load("b"))
+        self.assertFalse(hasattr(config, "current"))
+        self.assertFalse(hasattr(state, "state_dir"))
+        pm_b = PostMergeRecord.load(store_b, store_b.load("b"))
         self.assertEqual(pm_b.phase, PostMergePhase.CLEARED)
         assert pm_b.cleared_by is not None
         self.assertEqual(pm_b.cleared_by["kind"], "gate")
@@ -504,8 +502,6 @@ class SettleLaneRaceTests(LaneCase):
         env_patch.start()
         self.addCleanup(env_patch.stop)
         cfg = config.load(self.repo / ".lanefather.toml")
-        config.use(cfg)
-        self.addCleanup(config.use, None)
         return state.Store(cfg, directory=self.state)
 
     def _ready_landed_lane(self, lane_id: str) -> pathlib.Path:

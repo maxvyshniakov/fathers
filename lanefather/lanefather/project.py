@@ -57,7 +57,7 @@ class Project:
     def __init__(self, project: config.Config):
         self.config = project
         self._store = state.Store(project)
-        self._queue_path = queue.queue_path(project)
+        self._queue_path = queue.queue_path(self._store)
         self.paths = ProjectPaths(self._store.directory, self._queue_path)
 
     def readiness(self) -> Readiness:
@@ -71,7 +71,7 @@ class Project:
         settings, entries = queue.parse_queue(text, self._queue_path)
         records = self._store.lanes(strict=True)
         common = admission.running_common(self.config)
-        states = queue.queue_states(entries, records, common)
+        states = queue.queue_states(entries, records, common, project=self.config)
         decision = admission.evaluate(self.config, records, common)
         cap, source, machine = decision.cap, decision.source, decision.machine
         blocked = decision.refusals[0] if decision.refusals else None

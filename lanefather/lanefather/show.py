@@ -38,8 +38,11 @@ def summary(lane_id: str, directory: Path) -> dict[str, Any]:
     return receipts.lane_view(store, record).for_show()
 
 
-def show(args: Any) -> int:
-    cfg = config.current()
+def show(
+    args: Any,
+    project: config.Config | None = None,
+    config_error: LaneError | None = None,
+) -> int:
     common = ''
     if args.project_dir:
         common = git_read(args.project_dir, 'rev-parse', '--path-format=absolute', '--git-common-dir')
@@ -52,6 +55,10 @@ def show(args: Any) -> int:
         if not path.is_file():
             raise LaneError('project has no lanefather configuration')
         cfg = config.load(path)
+    else:
+        if not args.state_dir and config_error is not None:
+            raise config_error
+        cfg = project or config.DEFAULT
     directory = Path(os.path.expanduser(args.state_dir or cfg.env('STATE') or cfg.state_dir))
     result = summary(args.id, directory)
     if common:

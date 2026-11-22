@@ -122,6 +122,8 @@ class WaitTests(LaneCase):
 
 class WaitUnitTests(ScratchCase):
     def test_wait_sleeps_with_a_growing_pause_until_the_state_arrives(self) -> None:
+        from lanefather import state
+
         self.write(self.tmp, ".lanefather.toml", FIXTURE_CONFIG)
         self.state.mkdir(parents=True)
         record_path = self.state / "b.json"
@@ -135,16 +137,27 @@ class WaitUnitTests(ScratchCase):
                 saved: dict[str, Any] = {"id": "b", "status": "planned", "created": "later", "claims": ["native/**"]}
                 record_path.write_text(json.dumps(saved))
 
-        with patch.dict("os.environ", self.env, clear=True), project(self.tmp):
-            outcome, record = wait.wait_for("b", "registered", 600, sleep=nap, clock=lambda: now[0])
+        with patch.dict("os.environ", self.env, clear=True), project(self.tmp) as cfg:
+            store = state.Store(cfg, directory=self.state)
+            outcome, record = wait.wait_for(store, "b", "registered", 600, sleep=nap, clock=lambda: now[0])
         self.assertEqual((outcome, record and record["status"]), (True, "planned"))
         self.assertEqual(len(naps), 4)
         self.assertEqual(naps, sorted(naps), "the pause grows")
         self.assertLessEqual(max(naps), wait.LONGEST)
-        with patch.dict("os.environ", self.env, clear=True), project(self.tmp):
-            outcome, _ = wait.wait_for("c", "registered", 3, sleep=nap, clock=lambda: now[0])
+        with patch.dict("os.environ", self.env, clear=True), project(self.tmp) as cfg:
+            store = state.Store(cfg, directory=self.state)
+            outcome, _ = wait.wait_for(store, "c", "registered", 3, sleep=nap, clock=lambda: now[0])
         self.assertFalse(outcome)
         self.assertLessEqual(now[0] - sum(naps[:4]), 3, "never sleeps past the timeout")
+
+    def test_wait_does_not_create_missing_state_directory(self) -> None:
+        from lanefather import config, state
+
+        missing_state = self.tmp / "uncreated-state"
+        store = state.Store(config.DEFAULT, directory=missing_state)
+        outcome, record = wait.wait_for(store, "ghost", "registered", 0)
+        self.assertEqual((outcome, record), (False, None))
+        self.assertFalse(missing_state.exists(), "read-only wait must never create <state> on disk")
 
     def test_registered_waits_for_a_new_lane_after_a_done_one_of_the_same_id(self) -> None:
         done_before = {"id": "r", "status": "done", "created": "2026-11-01T00:00:00Z"}

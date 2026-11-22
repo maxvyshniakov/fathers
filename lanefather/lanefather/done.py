@@ -57,7 +57,7 @@ def ticket_commented(record: Record, project: config.Config) -> str | None:
             f"gh issue comment {record['ticket']}")
 
 
-def done(args: Any) -> int:
+def done(args: Any, store: state.Store) -> int:
     if args.finished:
         if args.id or args.force_reason:
             raise LaneError("done --finished takes no lane id and no --force-reason: it runs done, with every "
@@ -68,7 +68,7 @@ def done(args: Any) -> int:
         raise LaneError("--dry-run goes with --finished: done --finished --dry-run lists the lanes it would finish")
     if not args.id:
         raise LaneError("done needs a lane id, or --finished for every finished lane")
-    finish(args.id, args.force_reason)
+    finish(args.id, args.force_reason, store)
     return 0
 
 
@@ -84,12 +84,11 @@ def kept(record: Record) -> bool:
     return lifecycle.kept(record)
 
 
-def keep(args: Any) -> int:
+def keep(args: Any, store: state.Store) -> int:
     """`keep ID [--off]`: auto-done, done --finished and start's disk repair skip the lane until --off; done ID
     still finishes it. A landed lane's `landed.keep` is set too, which older installs read; before the land there
     is no `landed` to set (an older promote reads every `landed` as a merge), and land carries the flag."""
-    store = state.Store(config.current())
-    prog = store.project.command
+    prog = store.prog
     lifecycle.set_keep(store, args.id, not args.off)
     if args.off:
         print(f"Lane {args.id} no longer kept: once it is finished, done runs by itself "
@@ -574,11 +573,10 @@ def cleanup(plan: FinishPlan, force_reason: str | None, store: state.Store) -> t
                   overridden=bool(force_reason))
 
 
-def finish(lane_id: str, force_reason: str | None, store: state.Store | None = None, *,
+def finish(lane_id: str, force_reason: str | None, store: state.Store, *,
            unattended: bool = False) -> int:
-    """done ID in the project `store` holds (by default the current one): refusals under the lock, cleanup outside
-    it, then the `done` transition under the lock; returns the bytes freed."""
-    store = store or state.Store(config.current())
+    """done ID in the project `store` holds: refusals under the lock, cleanup outside it, then the `done`
+    transition under the lock; returns the bytes freed."""
     plan = finish_refusals(lane_id, force_reason, store, unattended=unattended)
     if plan is None:
         return 0
@@ -619,12 +617,11 @@ def nothing_added(cwd: str, commit: str, bases: list[tuple[str, str]]) -> tuple[
     return False, f"changes {len(paths)} path{'s' if len(paths) != 1 else ''} beyond {name}: {shown}"
 
 
-def drop(args: Any) -> int:
+def drop(args: Any, store: state.Store) -> int:
     """`drop ID` (fathers#167): remove a planned or active lane that adds nothing to its base, with done's cleanup
     and refusals for what still works there. Nothing it removes can be lost, so it takes no --force-reason: a
     lane with commits beyond its base, a worktree HEAD that has some, or uncommitted or untracked changes refuse."""
-    store = state.Store(config.current())
-    project, prog, lane_id = store.project, store.project.command, args.id
+    project, prog, lane_id = store.project, store.prog, args.id
     with store.locked("state"):
         record = store.load(lane_id)
         if lifecycle.awaiting_done(record):

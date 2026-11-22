@@ -278,8 +278,8 @@ def _last_activity(path: str) -> float:
     return max(times, default=time.time())
 
 
-def collect(args: Any) -> int:
-    result = Project(os.getcwd(), config.current()).run(args.dry_run)
+def collect(args: Any, store: state.Store) -> int:
+    result = Project(os.getcwd(), store.project).run(args.dry_run)
     if args.json:
         print(json.dumps(result.as_dict()))
     else:

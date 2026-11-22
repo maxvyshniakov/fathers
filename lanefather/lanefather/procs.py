@@ -59,7 +59,7 @@ def source_name(source: Any) -> str:
 
 
 def project_root(project: config.Config | None = None) -> Path | None:
-    path = (project or config.current()).path
+    path = (project or config.DEFAULT).path
     return path.parent if path else None
 
 
@@ -241,9 +241,9 @@ class HookSource:
 
 def source(project: config.Config | None = None) -> Any:
     """The process source of this project."""
-    project = project or config.current()
-    hook = project.process_scan
-    root = project_root(project)
+    cfg = project or config.DEFAULT
+    hook = cfg.process_scan
+    root = project_root(cfg)
     if hook and root is not None and (root / hook).is_file():
         return HookSource(_load(str(root / hook)))
     command = slots.command()

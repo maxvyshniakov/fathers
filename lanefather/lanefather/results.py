@@ -33,10 +33,13 @@ import os
 from pathlib import Path
 import platform as host
 import re
+import subprocess
 import time
 from typing import Any
 
-from . import state
+from . import config, history, plan, state
+from .errors import LaneError
+from .gitops import git
 from .journal import now
 
 VERSION = 1
@@ -58,11 +61,10 @@ def canonical(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
 
 
-def host_platform(project: Any = None) -> str:
+def host_platform(project: config.Config | None = None) -> str:
     """This host's platform, `<os>-<arch>` (darwin-arm64, linux-x64); LANEFATHER_PLATFORM stands in for it. The
     machine's architecture counts: Python under Rosetta reports x86_64 on an Apple silicon Mac."""
-    from . import config
-    cfg = project if project is not None else config.current()
+    cfg = project if project is not None else config.DEFAULT
     given = cfg.env("PLATFORM")
     if given:
         return checked_platform(given, "LANEFATHER_PLATFORM")
@@ -73,7 +75,6 @@ def host_platform(project: Any = None) -> str:
 
 
 def apple_silicon() -> bool:
-    import subprocess
     try:
         found = subprocess.run(["sysctl", "-n", "hw.optional.arm64"], capture_output=True, text=True, timeout=5)
     except (OSError, subprocess.SubprocessError):
@@ -82,28 +83,30 @@ def apple_silicon() -> bool:
 
 
 def checked_platform(given: str, where: str = "--platform") -> str:
-    from .errors import LaneError
     if not PLATFORM.match(given):
         raise LaneError(f"{where}: not a platform: {given!r} (give <os>-<arch> in Node's names, such as linux-x64 or "
                         f"darwin-arm64)")
     return given
 
 
-def env_hash(toolchain: Any, platform: str | None = None) -> str:
+def env_hash(toolchain: Any, platform: str | None = None, *, project: config.Config = config.DEFAULT) -> str:
     """The hash of what a result depends on outside the tree: the platform (this host's by default) and the
     toolchain resolution (None for a tree that pins none)."""
-    return hashlib.sha256(canonical({"v": VERSION, "platform": platform or host_platform(), "toolchain": toolchain}
+    resolved_platform = platform or host_platform(project)
+    return hashlib.sha256(canonical({"v": VERSION, "platform": resolved_platform, "toolchain": toolchain}
                                     ).encode()).hexdigest()
 
 
-def plan_hash(checks: Any, toolchain: Any = None, platform: str | None = None) -> str:
+def plan_hash(checks: Any, toolchain: Any = None, platform: str | None = None, *,
+              project: config.Config = config.DEFAULT) -> str:
     """The plan's key: its sorted check ids (or FULL), with the environment's hash, which names the platform."""
     selection = FULL if checks == FULL else sorted(set(checks))
-    return hashlib.sha256(canonical({"v": VERSION, "checks": selection, "env": env_hash(toolchain, platform)}
-                                    ).encode()).hexdigest()
+    env = env_hash(toolchain, platform, project=project)
+    return hashlib.sha256(canonical({"v": VERSION, "checks": selection, "env": env}).encode()).hexdigest()
 
 
-def receipt_platform(receipt: dict[str, Any] | None, worktree: Any = None) -> str | None:
+def receipt_platform(receipt: dict[str, Any] | None, worktree: Any = None, *,
+                     project: config.Config = config.DEFAULT) -> str | None:
     """The platform a lane or post-merge receipt was made on: its `platform`; for a receipt an earlier release wrote,
     this host's when the worktree the check ran in is a directory here (a lane check runs in the lane's worktree, so
     the host that has it made the receipt), otherwise None, which matches no platform."""
@@ -111,7 +114,7 @@ def receipt_platform(receipt: dict[str, Any] | None, worktree: Any = None) -> st
         return None
     if receipt.get("platform"):
         return str(receipt["platform"])
-    return host_platform() if worktree and Path(str(worktree)).is_dir() else None
+    return host_platform(project) if worktree and Path(str(worktree)).is_dir() else None
 
 
 def under(entry: dict[str, Any], env: str, platform: str) -> bool:
@@ -120,65 +123,64 @@ def under(entry: dict[str, Any], env: str, platform: str) -> bool:
     return entry.get("env") == env and entry.get("platform") == platform
 
 
-def directory() -> Path:
-    path = state.state_dir() / "results"
-    path.mkdir(exist_ok=True)
+def directory(store: state.Store) -> Path:
+    path = store.results_dir
+    path.mkdir(parents=True, exist_ok=True)
     return path
 
 
-def path_for(tree: str) -> Path:
+def path_for(store: state.Store, tree: str) -> Path:
     if not TREE.match(tree):
         raise ValueError(f"not a tree id: {tree!r}")
-    return directory() / f"{tree}.json"
+    return directory(store) / f"{tree}.json"
 
 
-def entries(tree: str) -> list[dict[str, Any]]:
+def entries(store: state.Store, tree: str) -> list[dict[str, Any]]:
     """The tree's recorded entries, oldest first; [] for a tree never recorded or an unreadable file."""
-    data = state.read_json(path_for(tree)) or {}
+    data = state.read_json(path_for(store, tree)) or {}
     if data.get("v") != VERSION or data.get("tree") != tree or not isinstance(data.get("entries"), list):
         return []
     found: list[Any] = data["entries"]
     return [e for e in found if isinstance(e, dict) and isinstance(e.get("checks"), dict)]  # pyright: ignore[reportUnknownMemberType]
 
 
-def record(tree: str, checks: dict[str, str], *, source: str, toolchain: Any = None, full: bool = False,
-           status: str | None = None, lane: str | None = None, sha: str | None = None, receipt: str | None = None,
-           reused: list[str] | None = None, origins: dict[str, dict[str, Any]] | None = None,
-           extra: dict[str, Any] | None = None, phase: str | None = None,
-           platform: str | None = None) -> dict[str, Any]:
+def record(store: state.Store, tree: str, checks: dict[str, str], *, source: str, toolchain: Any = None,
+           full: bool = False, status: str | None = None, lane: str | None = None, sha: str | None = None,
+           receipt: str | None = None, reused: list[str] | None = None,
+           origins: dict[str, dict[str, Any]] | None = None, extra: dict[str, Any] | None = None,
+           phase: str | None = None, platform: str | None = None) -> dict[str, Any]:
     """Record one run's check statuses on the tree; returns the entry. `status` defaults to green when every check
     passed. A record never fails its caller's command: an unwritable store only loses the reuse. A check that passes
     here after its newest result on the tree, under this environment, failed is a flake in the history (fathers#92).
     `platform` is where the run ran, this host by default."""
-    from .errors import LaneError
     try:
-        platform = platform or host_platform()
+        platform = platform or host_platform(store.project)
     except LaneError:
         return {"checks": dict(checks), "full": full, "source": source, "recorded": False}
     green = all(s == PASSED for s in checks.values()) and (bool(checks) or full)
     entry: dict[str, Any] = {
-        "checks": dict(checks), "full": full, "platform": platform, "env": env_hash(toolchain, platform),
-        "plan": plan_hash(FULL if full else list(checks), toolchain, platform),
+        "checks": dict(checks), "full": full, "platform": platform,
+        "env": env_hash(toolchain, platform, project=store.project),
+        "plan": plan_hash(FULL if full else list(checks), toolchain, platform, project=store.project),
         "status": status or ("green" if green else "red"), "source": source, "at": now(),
         **({"lane": lane} if lane else {}), **({"sha": sha} if sha else {}),
         **({"receipt": receipt} if receipt else {}), **({"reused": sorted(reused)} if reused else {}),
         **({"origin": {c: o for c, o in origins.items() if c in (reused or ())}} if origins and reused else {}),
         **(extra or {})}
     try:
-        with state.locked("results"):
-            found = entries(tree)
+        with store.locked("results"):
+            found = entries(store, tree)
             before = newest(found, entry["env"], platform)
             found.append(entry)
-            state.write_json(path_for(tree), {"v": VERSION, "tree": tree, "entries": found[-KEEP_ENTRIES:]})
-            prune()
+            state.write_json(path_for(store, tree), {"v": VERSION, "tree": tree, "entries": found[-KEEP_ENTRIES:]})
+            prune(store)
     except (OSError, ValueError):
         return entry
-    from . import history
     for check, given in checks.items():
         prior = before.get(check)
         if (given == PASSED and prior and prior["status"] == "failed" and check not in (reused or ())
-                and not history.has_flake(check, tree)):
-            history.flake(check, lane=lane, tree=tree, failed_at=prior.get("at"), how="later-run", phase=phase)
+                and not history.has_flake(store, check, tree)):
+            history.flake(store, check, lane=lane, tree=tree, failed_at=prior.get("at"), how="later-run", phase=phase)
     return entry
 
 
@@ -192,9 +194,9 @@ def newest(found: list[dict[str, Any]], env: str, platform: str) -> dict[str, di
     return latest_of
 
 
-def prune(days: int = RETENTION_DAYS) -> None:
+def prune(store: state.Store, days: int = RETENTION_DAYS) -> None:
     cutoff = time.time() - days * 86400
-    for path in directory().glob("*.json"):
+    for path in directory(store).glob("*.json"):
         try:
             if path.stat().st_mtime < cutoff:
                 path.unlink()
@@ -202,15 +204,15 @@ def prune(days: int = RETENTION_DAYS) -> None:
             continue
 
 
-def latest(tree: str, toolchain: Any = None, inferred: bool = True,
+def latest(store: state.Store, tree: str, toolchain: Any = None, inferred: bool = True,
            platform: str | None = None) -> dict[str, dict[str, Any]]:
     """Each check's newest result on the tree under this environment: {id: {status, source, receipt, at, ...}}. A
     result the check produced here wins over an inferred one; `inferred=False` leaves the inferred ones out."""
-    platform = platform or host_platform()
-    env = env_hash(toolchain, platform)
+    platform = platform or host_platform(store.project)
+    env = env_hash(toolchain, platform, project=store.project)
     fresh: dict[str, dict[str, Any]] = {}
     taken: dict[str, dict[str, Any]] = {}
-    for entry in entries(tree):
+    for entry in entries(store, tree):
         if not under(entry, env, platform):
             continue
         reused = set(entry.get("reused") or ())
@@ -227,30 +229,33 @@ def latest(tree: str, toolchain: Any = None, inferred: bool = True,
     return {**(taken if inferred else {}), **fresh}
 
 
-def passed(tree: str, toolchain: Any = None, inferred: bool = True,
+def passed(store: state.Store, tree: str, toolchain: Any = None, inferred: bool = True,
            platform: str | None = None) -> dict[str, dict[str, Any]]:
     """The checks whose newest result on the tree under this environment passed."""
-    return {c: r for c, r in latest(tree, toolchain, inferred, platform).items() if r["status"] == PASSED}
+    return {c: r for c, r in latest(store, tree, toolchain, inferred, platform).items() if r["status"] == PASSED}
 
 
-def full_green(tree: str, toolchain: Any = None, platform: str | None = None) -> dict[str, Any] | None:
+def full_green(store: state.Store, tree: str, toolchain: Any = None,
+               platform: str | None = None) -> dict[str, Any] | None:
     """The newest green full-gate entry of the tree under this environment, unless a newer full run was red."""
-    platform = platform or host_platform()
-    env = env_hash(toolchain, platform)
-    fulls = [e for e in entries(tree) if e.get("full") and under(e, env, platform)]
+    platform = platform or host_platform(store.project)
+    env = env_hash(toolchain, platform, project=store.project)
+    fulls = [e for e in entries(store, tree) if e.get("full") and under(e, env, platform)]
     return fulls[-1] if fulls and fulls[-1].get("status") == "green" else None
 
 
-def lookup(tree: str, checks: Any, toolchain: Any = None, platform: str | None = None) -> dict[str, Any]:
+def lookup(store: state.Store, tree: str, checks: Any, toolchain: Any = None,
+           platform: str | None = None) -> dict[str, Any]:
     """Whether the plan (`checks`, a list of ids or FULL) is verified on the tree for the platform (this host's by
     default): {v, tree, plan, env, platform, verified, reason, results}. `results` names, per check, the result that
     stands for it, or the full-gate entry."""
-    platform = platform or host_platform()
-    key = plan_hash(checks, toolchain, platform)
-    answer: dict[str, Any] = {"v": VERSION, "tree": tree, "plan": key, "env": env_hash(toolchain, platform),
+    platform = platform or host_platform(store.project)
+    key = plan_hash(checks, toolchain, platform, project=store.project)
+    answer: dict[str, Any] = {"v": VERSION, "tree": tree, "plan": key,
+                              "env": env_hash(toolchain, platform, project=store.project),
                               "platform": platform}
     if checks == FULL:
-        entry = full_green(tree, toolchain, platform)
+        entry = full_green(store, tree, toolchain, platform)
         if entry:
             return dict(answer, verified=True, reason=f"the full gate passed on this tree on {platform} "
                                                       f"({entry.get('source')}, {entry.get('at')})",
@@ -261,23 +266,21 @@ def lookup(tree: str, checks: Any, toolchain: Any = None, platform: str | None =
     wanted = sorted(set(checks))
     if not wanted:
         return dict(answer, verified=False, reason="an empty plan verifies nothing", results={})
-    newest = latest(tree, toolchain, inferred=False, platform=platform)
-    missing = [c for c in wanted if newest.get(c, {}).get("status") != PASSED]
+    newest_results = latest(store, tree, toolchain, inferred=False, platform=platform)
+    missing = [c for c in wanted if newest_results.get(c, {}).get("status") != PASSED]
     if missing:
-        never = [c for c in missing if c not in newest]
-        red = [c for c in missing if c in newest]
+        never = [c for c in missing if c not in newest_results]
+        red = [c for c in missing if c in newest_results]
         parts = ([f"never ran here: {', '.join(never)}"] if never else []) + (
             [f"newest result not passed: {', '.join(red)}"] if red else [])
-        return dict(answer, verified=False, reason="; ".join(parts), results={c: newest[c] for c in red})
+        return dict(answer, verified=False, reason="; ".join(parts), results={c: newest_results[c] for c in red})
     return dict(answer, verified=True, reason=f"each of the {len(wanted)} checks passed on this tree on {platform}",
-                results={c: newest[c] for c in wanted})
+                results={c: newest_results[c] for c in wanted})
 
 
 # The command: lanefather results key|lookup|record
 
 def resolve_tree(cwd: str, rev: str) -> str:
-    from .errors import LaneError
-    from .gitops import git
     tree = git(cwd, "rev-parse", "--verify", "--quiet", rev + "^{tree}", check=False)
     if not tree:
         raise LaneError(f"results: {rev} names no tree here")
@@ -285,37 +288,25 @@ def resolve_tree(cwd: str, rev: str) -> str:
 
 
 def selection(args: Any) -> Any:
-    from .errors import LaneError
     if args.full == bool(args.checks):
         raise LaneError("results: give exactly one of --full or --checks A,B")
     return FULL if args.full else [c for c in args.checks.split(",") if c]
 
 
-def environment(cwd: str, rev: str) -> Any:
+def environment(project: config.Config, cwd: str, rev: str) -> Any:
     """The toolchain a result on REV's tree depends on, resolved in this checkout, which must pin what REV pins: a
     checkout of another pin would resolve another toolchain (review of fathers#91)."""
-    from . import config, plan
-    from .errors import LaneError
-    from .gitops import git
-    top = git(cwd, "rev-parse", "--show-toplevel", check=False) or cwd
-    pin = config.current().toolchain_pin
-    if pin and config.current().toolchain:
-        here = Path(top) / pin
-        theirs = git(top, "show", f"{rev}:{pin}", check=False)
-        if (here.read_text().strip() if here.is_file() else "") != theirs.strip():
-            raise LaneError(f"results: {rev} pins another toolchain ({pin}) than this checkout; run in a checkout of "
-                            f"{rev}")
-    return plan.toolchain_state(top)
+    return plan.toolchain_for_rev(project, cwd, rev)
 
 
-def command(args: Any) -> int:
+def command(args: Any, store: state.Store) -> int:
     """`results key` prints the key; `results lookup` answers whether the plan is verified (exit 0) or not (exit 1);
     `results record` stores a result a caller outside Lanefather produced."""
-    from .errors import LaneError
     cwd = os.getcwd()
     tree = resolve_tree(cwd, args.rev)
     try:
-        platform = checked_platform(args.platform) if getattr(args, "platform", None) else host_platform()
+        platform = (checked_platform(args.platform)
+                    if getattr(args, "platform", None) else host_platform(store.project))
     except LaneError as error:
         raise LaneError(f"results: {error}") from None
     if args.action == "record":
@@ -337,20 +328,21 @@ def command(args: Any) -> int:
             if not statuses:
                 raise LaneError("results record: give --full or --checks A=passed,B=failed")
             checks = statuses
-        entry = record(tree, checks, source=f"external:{args.source}", toolchain=environment(cwd, args.rev),
+        entry = record(store, tree, checks, source=f"external:{args.source}",
+                       toolchain=environment(store.project, cwd, args.rev),
                        full=full, status=status, sha=resolve_commit(cwd, args.rev), receipt=args.receipt,
                        platform=platform)
         print(json.dumps({"v": VERSION, "tree": tree, **entry}) if args.json
               else f"Recorded {entry['status']} for plan {entry['plan'][:12]} on tree {tree[:12]}")
         return 0
     wanted = selection(args)
-    toolchain = environment(cwd, args.rev)
+    toolchain = environment(store.project, cwd, args.rev)
     if args.action == "key":
-        key = {"v": VERSION, "tree": tree, "plan": plan_hash(wanted, toolchain, platform),
-               "env": env_hash(toolchain, platform), "platform": platform}
+        key = {"v": VERSION, "tree": tree, "plan": plan_hash(wanted, toolchain, platform, project=store.project),
+               "env": env_hash(toolchain, platform, project=store.project), "platform": platform}
         print(json.dumps(key) if args.json else f"tree {tree} plan {key['plan']}")
         return 0
-    answer = lookup(tree, wanted, toolchain, platform)
+    answer = lookup(store, tree, wanted, toolchain, platform)
     if args.json:
         print(json.dumps(answer))
     else:
@@ -361,5 +353,4 @@ def command(args: Any) -> int:
 
 
 def resolve_commit(cwd: str, rev: str) -> str | None:
-    from .gitops import git
     return git(cwd, "rev-parse", "--verify", "--quiet", rev + "^{commit}", check=False) or None

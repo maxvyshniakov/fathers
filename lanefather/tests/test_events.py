@@ -83,19 +83,20 @@ class EventLogTests(LaneCase):
 
 class WriterTests(unittest.TestCase):
     def setUp(self):
+        from lanefather import state
         self.tmp = pathlib.Path(tempfile.mkdtemp(prefix="lanefather-events-"))
         self.log = self.tmp / "events.jsonl"
         patched = mock.patch.dict(os.environ, {"LANEFATHER_EVENTS": str(self.log)})
         patched.start()
         self.addCleanup(patched.stop)
-        self.addCleanup(config.use, None)
-        config.use(config.Config(project="Writer", state_dir=str(self.tmp / "lanes")))
+        self.store = state.Store(config.Config(project="Writer", state_dir=str(self.tmp / "lanes")))
         (self.tmp / "lanes").mkdir()
 
     def test_control_characters_and_long_values_are_cleaned_and_the_line_stays_under_16_kib(self):
         journal.ledger("probe \x1b[31mred\x1b[0m", kind="lane.checked", lane="p",
                        details={"output": "x" * 40_000, "deep": {"a": {"b": {"c": {"d": 1}}}}, "nan": float("nan"),
-                                "lines": ["y" * 900] * 30})
+                                "lines": ["y" * 900] * 30},
+                       store=self.store)
         self.assertEqual(validate_file(self.log), [])
         line = self.log.read_bytes()
         self.assertLessEqual(len(line), events.MAX_LINE)
@@ -105,21 +106,23 @@ class WriterTests(unittest.TestCase):
         self.assertIsInstance(event["details"]["deep"]["a"]["b"], str)
 
     def test_line_separators_never_split_an_event(self):
-        journal.ledger("one\u2028two\u2029three", kind="queue.updated", subject={"type": "queue", "id": "q"})
+        journal.ledger("one\u2028two\u2029three", kind="queue.updated", subject={"type": "queue", "id": "q"},
+                       store=self.store)
         self.assertEqual(len(self.log.read_text().splitlines()), 1)
         self.assertEqual(json.loads(self.log.read_text())["details"]["message"], "one two three")
 
     def test_a_held_lock_drops_the_event_and_the_ledger_line_stays(self):
         with open(self.tmp / "events.lock", "a") as lock, mock.patch.object(events, "LOCK_WAIT", 0.1):
             fcntl.flock(lock, fcntl.LOCK_EX)
-            journal.ledger("start held", kind="lane.started", lane="h")
+            journal.ledger("start held", kind="lane.started", lane="h", store=self.store)
         self.assertFalse(self.log.exists())
         self.assertIn("start held", (self.tmp / "lanes" / "ledger.log").read_text())
 
     def test_past_4_mib_the_log_becomes_events_jsonl_1(self):
         with mock.patch.object(events, "ROTATE_AT", 600):
             for number in range(5):
-                journal.ledger(f"queued {number}", kind="queue.updated", subject={"type": "queue", "id": "q"})
+                journal.ledger(f"queued {number}", kind="queue.updated", subject={"type": "queue", "id": "q"},
+                               store=self.store)
         rotated = self.tmp / "events.jsonl.1"
         self.assertTrue(rotated.exists())
         self.assertEqual(validate_file(rotated) + validate_file(self.log), [])
@@ -129,7 +132,7 @@ class WriterTests(unittest.TestCase):
     def test_a_project_in_a_temporary_directory_writes_no_machine_event_unless_the_log_is_named(self):
         with mock.patch.dict(os.environ, {"HOME": str(self.tmp / "home")}):
             del os.environ["LANEFATHER_EVENTS"]
-            journal.ledger("start t", kind="lane.started", lane="t")
+            journal.ledger("start t", kind="lane.started", lane="t", store=self.store)
         self.assertFalse((self.tmp / "home" / ".local" / "state" / "lanefather" / "events.jsonl").exists())
         self.assertTrue((self.tmp / "lanes" / "ledger.log").exists())
 

@@ -356,10 +356,8 @@ class ReceiptReadersTableTests(LaneCase):
 
         with mock.patch.dict(os.environ, self.env, clear=False):
             cfg = config.load(self.integration / ".lanefather.toml")
-            config.use(cfg)
-            self.addCleanup(config.use, None)
-            host_plat = results.host_platform()
-            current_tc = plan.toolchain_state(worktree)
+            host_plat = results.host_platform(cfg)
+            current_tc = plan.toolchain_state(worktree, cfg)
             old_tc = {"rustc": "rustc 1.0.0"}
 
         fixtures: list[tuple[str, dict[str, Any] | None, dict[str, Any]]] = [
@@ -542,14 +540,13 @@ class ReceiptReadersTableTests(LaneCase):
 
                 # 4 & 5. `land.merge_problem` and `checks.select`
                 with mock.patch.dict(os.environ, self.env, clear=False):
-                    config.use(cfg)
-                    problem = land.merge_problem("fx", tip, tip_tree, fixture, record=rec)
+                    problem = land.merge_problem("fx", tip, tip_tree, fixture, record=rec, prog=store.prog)
                     self.assertEqual(problem, expected["land_problem"])
 
-                    prepared = checks.prepare("fx")
+                    prepared = checks.prepare(store, "fx")
                     buf = io.StringIO()
                     with mock.patch("sys.stdout", buf):
-                        selected = checks.select(prepared, rerun=False, slots_override=1)
+                        selected = checks.select(store, prepared, rerun=False, slots_override=1)
                     if expected["check_short_circuit"]:
                         self.assertIsNone(selected)
                     else:

@@ -21,7 +21,7 @@ import time
 
 from fathers_common.atomic import atomic_write
 
-from . import journal
+from . import config, journal, state
 from .errors import LaneError
 
 LANDING_TTL = 2 * 3600
@@ -62,7 +62,8 @@ def landing_holder(fields: dict[str, str]) -> str:
 
 
 @contextlib.contextmanager
-def landing(common: str, holder: str, wait: float) -> Generator[dict[str, str]]:
+def landing(common: str, holder: str, wait: float, *, store: state.Store | None = None,
+            directory: Path | None = None, project: config.Config | None = None) -> Generator[dict[str, str]]:
     """Hold the landing lock and yield an environment whose LANDING_TOKEN passes the hook."""
     path = Path(common) / "landing.lock"
     token = secrets.token_hex(16)
@@ -79,7 +80,8 @@ def landing(common: str, holder: str, wait: float) -> Generator[dict[str, str]]:
                     journal.ledger(f"landing lock taken over from {current.get('holder', '?')} ({stale}) by {holder}",
                                    kind="landing.lock_taken", level="warn",
                                    subject={"type": "landing_lock", "id": str(path)},
-                                   details={"from": current.get("holder", "?"), "stale": stale, "by": holder})
+                                   details={"from": current.get("holder", "?"), "stale": stale, "by": holder},
+                                   store=store, directory=directory, project=project)
                 break
         if time.monotonic() >= deadline:
             raise LaneError(f"the landing lock ({path}) is held by {landing_holder(current)}; it expires "

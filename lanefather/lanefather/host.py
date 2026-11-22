@@ -17,7 +17,7 @@ import sys
 import time
 from typing import Any
 
-from . import config, journal, lifecycle, settings, slots
+from . import config, journal, lifecycle, settings, slots, state
 
 # A lane per CORES_PER_LANE cores and per LANE_MEMORY_GB of the memory left after MEMORY_RESERVE_GB for the system
 # and the owner's apps. 12 cores and 32 GB give 6.
@@ -43,14 +43,14 @@ DEFAULT_LOAD_POLL = 30.0
 
 def machine_cores(project: config.Config | None = None) -> int:
     """The core count; LANEFATHER_CORES stands in for it in tests."""
-    stub = (project or config.current()).env("CORES")
+    stub = (project or config.DEFAULT).env("CORES")
     return int(stub) if stub and stub.isdigit() and int(stub) > 0 else os.cpu_count() or 1
 
 
 def machine_memory_gb(project: config.Config | None = None) -> float:
     """Physical memory in GB; LANEFATHER_MEMORY_GB stands in for it in tests. macOS keeps its free page count near
     zero (the page cache holds the rest), so the cap counts the physical memory less a reserve."""
-    stub = (project or config.current()).env("MEMORY_GB")
+    stub = (project or config.DEFAULT).env("MEMORY_GB")
     if stub:
         with contextlib.suppress(ValueError):
             return float(stub)
@@ -84,15 +84,15 @@ def lane_cap(project: config.Config | None = None) -> tuple[int, str]:
     for a stretch and every start logs (exported, it overrides every project's cap); the project's `[admission]
     cap`; the machine's derived cap. It counts the planned and active lanes of one repository (fathers#149). An
     invalid value warns and falls back to the next, so a typo does not stop every run (#454)."""
-    project = project or config.current()
-    cores, memory = machine_cores(project), machine_memory_gb(project)
+    cfg = project or config.DEFAULT
+    cores, memory = machine_cores(cfg), machine_memory_gb(cfg)
     derived = derived_cap(cores, memory)
-    found = project.lookup("CAP")
+    found = cfg.lookup("CAP")
     explicit = positive(found[1]) if found else None
     if found and explicit:
         return explicit, f"{found[0]} override; derived: {derived}"
-    cap, source = ((project.lane_cap, f"{config.CONFIG_NAME} [admission] cap; derived: {derived}")
-                   if project.lane_cap else (derived, f"derived from {cores} cores and {memory:.0f} GB of memory"))
+    cap, source = ((cfg.lane_cap, f"{config.CONFIG_NAME} [admission] cap; derived: {derived}")
+                   if cfg.lane_cap else (derived, f"derived from {cores} cores and {memory:.0f} GB of memory"))
     if found and found[1]:
         bad_setting(found, f"the cap is {cap}")
     return cap, source
@@ -113,7 +113,7 @@ def cap_override(project: config.Config) -> tuple[str, str] | None:
 def global_cap(project: config.Config | None = None) -> tuple[int, str] | None:
     """The global ceiling over every project's planned and active lanes in the state directory, and its variable:
     only LANEFATHER_GLOBAL_CAP sets one (fathers#149). An invalid value warns and sets none."""
-    found = (project or config.current()).lookup("GLOBAL_CAP")
+    found = (project or config.DEFAULT).lookup("GLOBAL_CAP")
     if not found or not found[1]:
         return None
     ceiling = positive(found[1])
@@ -125,12 +125,12 @@ def global_cap(project: config.Config | None = None) -> tuple[int, str] | None:
 
 def load15(project: config.Config | None = None) -> float:
     """The 15-minute load average; LANEFATHER_LOAD15 stands in for it in tests."""
-    stub = (project or config.current()).env("LOAD15")
+    stub = (project or config.DEFAULT).env("LOAD15")
     return float(stub) if stub else os.getloadavg()[2]
 
 
 def disk_free_gb(project: config.Config | None = None) -> float:
-    disk = (project or config.current()).env("DISK_FREE_GB")
+    disk = (project or config.DEFAULT).env("DISK_FREE_GB")
     return float(disk) if disk else shutil.disk_usage(Path.home()).free / 1e9
 
 
@@ -263,48 +263,50 @@ def given_jobs(jobs: int, option: str) -> dict[str, Any]:
     return {"jobs": jobs, "override": option}
 
 
-def seconds_setting(name: str, default: float) -> float:
+def seconds_setting(name: str, default: float, project: config.Config = config.DEFAULT) -> float:
     try:
-        value = float(config.current().env(name) or default)
+        value = float(project.env(name) or default)
     except ValueError:
         return default
     return value if value > 0 else default
 
 
-def load_averages() -> list[float]:
+def load_averages(project: config.Config = config.DEFAULT) -> list[float]:
     """The 1, 5 and 15-minute load averages; the last is load15(), which tests stub."""
     one, five, _ = os.getloadavg()
-    return [round(one, 2), round(five, 2), round(load15(), 2)]
+    return [round(one, 2), round(five, 2), round(load15(project), 2)]
 
 
-def load_wait_enabled() -> bool:
+def load_wait_enabled(project: config.Config = config.DEFAULT) -> bool:
     """Owner decision on the #572 review (2026-10-27): no load throttle by default; timing tests move to a perf
     suite that only the batch gate runs. LANEFATHER_LOAD_THROTTLE=1 turns the wait on."""
-    return config.current().env("LOAD_THROTTLE") == "1"
+    return project.env("LOAD_THROTTLE") == "1"
 
 
-def wait_for_load(label: str) -> dict[str, Any]:
+def wait_for_load(store: state.Store, label: str) -> dict[str, Any]:
     """With the throttle on, wait until load15 is at or below the local limit before a verify run starts
     (#572); the wait for the receipt, which says whether it was on. It runs before verify asks for its slot lease,
     so it never holds a slot. A process that already runs under a lease does not wait: it would hold those slots
     idle. After LANEFATHER_LOAD_WAIT seconds (default 3600) the run starts anyway, marked gave_up."""
-    limit = load_limit(machine_cores())
-    before = load15()
-    wait: dict[str, Any] = {"enabled": load_wait_enabled(), "limit": limit, "load15_before": before,
+    project = store.project
+    cores = machine_cores(project)
+    limit = load_limit(cores)
+    before = load15(project)
+    wait: dict[str, Any] = {"enabled": load_wait_enabled(project), "limit": limit, "load15_before": before,
                             "load15": before, "seconds": 0.0}
     if before <= limit or not wait["enabled"]:
         return wait
     if os.environ.get("SLOTFATHER_LEASE"):
         return dict(wait, skipped="runs under a slot lease it holds; a wait would hold those slots idle")
-    patience = seconds_setting("LOAD_WAIT", DEFAULT_LOAD_WAIT)
-    poll = seconds_setting("LOAD_POLL", DEFAULT_LOAD_POLL)
-    print(f"lane: load15 {before:.1f} is above the limit {limit:.1f} ({LOAD_FACTOR} x {machine_cores()} cores); "
+    patience = seconds_setting("LOAD_WAIT", DEFAULT_LOAD_WAIT, project)
+    poll = seconds_setting("LOAD_POLL", DEFAULT_LOAD_POLL, project)
+    print(f"lane: load15 {before:.1f} is above the limit {limit:.1f} ({LOAD_FACTOR} x {cores} cores); "
           f"{label} waits for it to drop, at most {patience:.0f} s", flush=True)
     clock = time.monotonic()
     current = before
     while current > limit and time.monotonic() - clock < patience:
         time.sleep(max(0.0, min(poll, patience - (time.monotonic() - clock))))
-        current = load15()
+        current = load15(project)
     wait.update(load15=current, seconds=round(time.monotonic() - clock, 1))
     if current > limit:
         wait["gave_up"] = True
@@ -314,5 +316,6 @@ def wait_for_load(label: str) -> dict[str, Any]:
                    + (" gave up" if current > limit else ""),
                    kind="load.waited", subject={"type": "run", "id": label},
                    details={"seconds": wait["seconds"], "load15_before": before, "load15": current,
-                            "limit": limit, "gave_up": current > limit})
+                            "limit": limit, "gave_up": current > limit},
+                   store=store)
     return wait

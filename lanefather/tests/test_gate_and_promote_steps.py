@@ -31,9 +31,9 @@ class PromoteStepsTests(unittest.TestCase):
         self.assertNotIn("lanefather.promote", imported)
 
     def test_promote_steps_order_without_and_with_install_deploy(self) -> None:
-        config.use(config.Config())
-        self.addCleanup(config.use, None)
+        from lanefather import state
         run = promote.PromoteRun(
+            store=state.Store(config.DEFAULT),
             cwd="/repo",
             common="/repo/.git",
             sha="deadbeef" * 5,
@@ -58,8 +58,9 @@ class PromoteStepsTests(unittest.TestCase):
             ],
         )
 
-        config.use(config.parse(tomllib.loads(FIXTURE_CONFIG)))
+        fixture_store = state.Store(config.parse(tomllib.loads(FIXTURE_CONFIG)))
         run_install = promote.PromoteRun(
+            store=fixture_store,
             cwd="/repo",
             common="/repo/.git",
             sha="deadbeef" * 5,
@@ -76,7 +77,9 @@ class PromoteStepsTests(unittest.TestCase):
         )
 
     def test_promote_sha_stops_on_nonzero_step_return(self) -> None:
+        from lanefather import state
         run = promote.PromoteRun(
+            store=state.Store(config.DEFAULT),
             cwd="/repo",
             common="/repo/.git",
             sha="deadbeef" * 5,
@@ -105,12 +108,18 @@ class PromoteStepsTests(unittest.TestCase):
         self.assertEqual(called, ["ok", "fail"])
 
     def test_gate_format_bisect_lines_separates_merges_and_direct(self) -> None:
-        lines = gate._format_bisect_lines(  # pyright: ignore[reportPrivateUsage]
-            [("1111111111abcdef", "Merge lane a")],
-            [("2222222222abcdef", "Direct commit")],
-            "Header:",
-            "Other:",
-        )
+        import tempfile
+
+        from lanefather import state
+        with tempfile.TemporaryDirectory() as tmp:
+            store = state.Store(config.DEFAULT, directory=Path(tmp))
+            lines = gate._format_bisect_lines(  # pyright: ignore[reportPrivateUsage]
+                store,
+                [("1111111111abcdef", "Merge lane a")],
+                [("2222222222abcdef", "Direct commit")],
+                "Header:",
+                "Other:",
+            )
         self.assertEqual(lines[0], "Header:")
         self.assertIn("1111111111 Merge lane a", lines[1])
         self.assertEqual(lines[2], "Other:")

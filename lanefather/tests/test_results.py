@@ -22,19 +22,18 @@ class ResultKeyTableTests(unittest.TestCase):
     """The owner's rule as a table: same tree and plan reuse; a changed plan or another tree runs."""
 
     def setUp(self):
-        from lanefather import config
+        from lanefather import config, state
         self.tmp = pathlib.Path(tempfile.mkdtemp(prefix="lane-results-"))
         self.addCleanup(shutil.rmtree, self.tmp, True)
         patcher = unittest.mock.patch.dict(os.environ, {"LANEFATHER_STATE": str(self.tmp / "state")})
         patcher.start()
         self.addCleanup(patcher.stop)
-        config.use(config.Config())
-        self.addCleanup(config.use, None)
+        self.store = state.Store(config.DEFAULT, directory=self.tmp / "state")
 
     def test_the_table(self):
         from lanefather import results
-        results.record(TREE_A, {"lint": "passed", "unit": "passed"}, source="check")
-        results.record(TREE_A, {}, full=True, status="green", source="gate", sha="c" * 40)
+        results.record(self.store, TREE_A, {"lint": "passed", "unit": "passed"}, source="check")
+        results.record(self.store, TREE_A, {}, full=True, status="green", source="gate", sha="c" * 40)
         rows = [
             # (tree, plan, toolchain, verified)
             (TREE_A, ["lint", "unit"], None, True),                 # same tree, same plan
@@ -49,7 +48,7 @@ class ResultKeyTableTests(unittest.TestCase):
         ]
         for tree, plan, toolchain, verified in rows:
             with self.subTest(tree=tree[:1], plan=plan, toolchain=toolchain):
-                self.assertEqual(results.lookup(tree, plan, toolchain)["verified"], verified)
+                self.assertEqual(results.lookup(self.store, tree, plan, toolchain)["verified"], verified)
 
     def test_the_plan_key_names_the_checks_and_the_environment(self):
         from lanefather import results
@@ -65,54 +64,54 @@ class ResultKeyTableTests(unittest.TestCase):
 
     def test_a_newer_red_result_hides_an_older_pass_and_a_newer_pass_stands_again(self):
         from lanefather import results
-        results.record(TREE_A, {"unit": "passed"}, source="check")
-        results.record(TREE_A, {"unit": "failed"}, source="check")
-        answer = results.lookup(TREE_A, ["unit"])
+        results.record(self.store, TREE_A, {"unit": "passed"}, source="check")
+        results.record(self.store, TREE_A, {"unit": "failed"}, source="check")
+        answer = results.lookup(self.store, TREE_A, ["unit"])
         self.assertFalse(answer["verified"])
         self.assertIn("newest result not passed: unit", answer["reason"])
-        results.record(TREE_A, {"unit": "passed"}, source="check")
-        self.assertTrue(results.lookup(TREE_A, ["unit"])["verified"])
+        results.record(self.store, TREE_A, {"unit": "passed"}, source="check")
+        self.assertTrue(results.lookup(self.store, TREE_A, ["unit"])["verified"])
 
     def test_a_red_full_gate_after_a_green_one_is_not_verified(self):
         from lanefather import results
-        results.record(TREE_A, {}, full=True, status="green", source="gate")
-        results.record(TREE_A, {}, full=True, status="red", source="external:repo-kit")
-        self.assertFalse(results.lookup(TREE_A, results.FULL)["verified"])
+        results.record(self.store, TREE_A, {}, full=True, status="green", source="gate")
+        results.record(self.store, TREE_A, {}, full=True, status="red", source="external:repo-kit")
+        self.assertFalse(results.lookup(self.store, TREE_A, results.FULL)["verified"])
 
     def test_an_inferred_pass_never_beats_a_result_of_the_tree_and_lookup_does_not_count_it(self):
         # Review of fathers#91, finding 1: a run that took lib from an earlier tree records it after a fresh failure.
         from lanefather import results
-        results.record(TREE_A, {"lib": "failed"}, source="check", lane="b")
-        results.record(TREE_A, {"lib": "passed"}, source="check", lane="a", reused=["lib"],
+        results.record(self.store, TREE_A, {"lib": "failed"}, source="check", lane="b")
+        results.record(self.store, TREE_A, {"lib": "passed"}, source="check", lane="a", reused=["lib"],
                        origins={"lib": {"tree": TREE_B, "receipt": "/state/a.receipt.json"}})
-        self.assertEqual(results.latest(TREE_A)["lib"]["status"], "failed")
-        results.record(TREE_B, {"lib": "passed"}, source="post-merge", reused=["lib"],
+        self.assertEqual(results.latest(self.store, TREE_A)["lib"]["status"], "failed")
+        results.record(self.store, TREE_B, {"lib": "passed"}, source="post-merge", reused=["lib"],
                        origins={"lib": {"tree": TREE_A, "receipt": "/state/a.receipt.json"}})
-        self.assertEqual(results.passed(TREE_B)["lib"]["origin"]["receipt"], "/state/a.receipt.json")
-        answer = results.lookup(TREE_B, ["lib"])
+        self.assertEqual(results.passed(self.store, TREE_B)["lib"]["origin"]["receipt"], "/state/a.receipt.json")
+        answer = results.lookup(self.store, TREE_B, ["lib"])
         self.assertFalse(answer["verified"])
         self.assertIn("never ran here: lib", answer["reason"])
 
     def test_a_tree_keeps_its_newest_entries_and_old_files_go(self):
         from lanefather import results
         for index in range(results.KEEP_ENTRIES + 3):
-            results.record(TREE_A, {f"c{index}": "passed"}, source="check")
-        kept = results.entries(TREE_A)
+            results.record(self.store, TREE_A, {f"c{index}": "passed"}, source="check")
+        kept = results.entries(self.store, TREE_A)
         self.assertEqual(len(kept), results.KEEP_ENTRIES)
         self.assertEqual(list(kept[0]["checks"]), ["c3"])
-        results.record(TREE_B, {"lib": "passed"}, source="check")
+        results.record(self.store, TREE_B, {"lib": "passed"}, source="check")
         old = time.time() - (results.RETENTION_DAYS + 1) * 86400
-        os.utime(results.path_for(TREE_B), (old, old))
-        results.record(TREE_A, {"lib": "passed"}, source="check")
-        self.assertFalse(results.path_for(TREE_B).exists())
-        self.assertTrue(results.path_for(TREE_A).exists())
+        os.utime(results.path_for(self.store, TREE_B), (old, old))
+        results.record(self.store, TREE_A, {"lib": "passed"}, source="check")
+        self.assertFalse(results.path_for(self.store, TREE_B).exists())
+        self.assertTrue(results.path_for(self.store, TREE_A).exists())
 
     def test_an_unreadable_store_reuses_nothing(self):
         from lanefather import results
-        results.path_for(TREE_A).write_text("{not json")
-        self.assertFalse(results.lookup(TREE_A, ["unit"])["verified"])
-        results.record(TREE_A, {"unit": "passed"}, source="check")
-        self.assertTrue(results.lookup(TREE_A, ["unit"])["verified"])
+        results.path_for(self.store, TREE_A).write_text("{not json")
+        self.assertFalse(results.lookup(self.store, TREE_A, ["unit"])["verified"])
+        results.record(self.store, TREE_A, {"unit": "passed"}, source="check")
+        self.assertTrue(results.lookup(self.store, TREE_A, ["unit"])["verified"])
 
 
 class PlatformTests(unittest.TestCase):
@@ -120,20 +119,19 @@ class PlatformTests(unittest.TestCase):
     never stands for Linux, and a second run on the same platform is still skipped."""
 
     def setUp(self):
-        from lanefather import config
+        from lanefather import config, state
         self.tmp = pathlib.Path(tempfile.mkdtemp(prefix="lane-results-"))
         self.addCleanup(shutil.rmtree, self.tmp, True)
         patcher = unittest.mock.patch.dict(os.environ, {"LANEFATHER_STATE": str(self.tmp / "state")})
         patcher.start()
         self.addCleanup(patcher.stop)
-        config.use(config.Config())
-        self.addCleanup(config.use, None)
+        self.store = state.Store(config.DEFAULT, directory=self.tmp / "state")
 
     def test_the_table(self):
         from lanefather import results
-        results.record(TREE_A, {"lint": "passed", "unit": "passed"}, source="check", platform="darwin-arm64")
-        results.record(TREE_A, {}, full=True, status="green", source="gate", platform="darwin-arm64")
-        results.record(TREE_B, {}, full=True, status="green", source="gate", platform="linux-x64")
+        results.record(self.store, TREE_A, {"lint": "passed", "unit": "passed"}, source="check", platform="darwin-arm64")
+        results.record(self.store, TREE_A, {}, full=True, status="green", source="gate", platform="darwin-arm64")
+        results.record(self.store, TREE_B, {}, full=True, status="green", source="gate", platform="linux-x64")
         rows = [
             # (tree, plan, platform asking, verified)
             (TREE_A, ["lint", "unit"], "darwin-arm64", True),    # same platform: the rerun is skipped
@@ -146,18 +144,18 @@ class PlatformTests(unittest.TestCase):
         ]
         for tree, plan, platform, verified in rows:
             with self.subTest(tree=tree[:1], plan=plan, platform=platform):
-                answer = results.lookup(tree, plan, platform=platform)
+                answer = results.lookup(self.store, tree, plan, platform=platform)
                 self.assertEqual(answer["verified"], verified, answer["reason"])
                 self.assertEqual(answer["platform"], platform)
                 if plan != results.FULL:
-                    self.assertEqual(set(results.passed(tree, platform=platform)), set(plan) if verified else set())
+                    self.assertEqual(set(results.passed(self.store, tree, platform=platform)), set(plan) if verified else set())
 
     def test_the_plan_key_names_the_platform(self):
         from lanefather import results
         self.assertNotEqual(results.plan_hash(["a"], platform="darwin-arm64"),
                             results.plan_hash(["a"], platform="linux-x64"))
         self.assertNotEqual(results.env_hash(None, "linux-x64"), results.env_hash(None, "linux-arm64"))
-        entry = results.record(TREE_A, {"a": "passed"}, source="check", platform="linux-x64")
+        entry = results.record(self.store, TREE_A, {"a": "passed"}, source="check", platform="linux-x64")
         self.assertEqual((entry["platform"], entry["plan"]), ("linux-x64", results.plan_hash(["a"],
                                                                                               platform="linux-x64")))
 
@@ -173,10 +171,10 @@ class PlatformTests(unittest.TestCase):
                 self.assertEqual(results.host_platform(), expected)
         with unittest.mock.patch.dict(os.environ, {"LANEFATHER_PLATFORM": "linux-x64"}):
             self.assertEqual(results.host_platform(), "linux-x64")
-            results.record(TREE_A, {"a": "passed"}, source="check")
-            self.assertTrue(results.lookup(TREE_A, ["a"])["verified"])
+            results.record(self.store, TREE_A, {"a": "passed"}, source="check")
+            self.assertTrue(results.lookup(self.store, TREE_A, ["a"])["verified"])
         with unittest.mock.patch.dict(os.environ, {"LANEFATHER_PLATFORM": "darwin-arm64"}):
-            self.assertFalse(results.lookup(TREE_A, ["a"])["verified"])
+            self.assertFalse(results.lookup(self.store, TREE_A, ["a"])["verified"])
         from lanefather.errors import LaneError
         with unittest.mock.patch.dict(os.environ, {"LANEFATHER_PLATFORM": "Linux x64"}), \
                 self.assertRaises(LaneError):
@@ -197,16 +195,16 @@ class PlatformTests(unittest.TestCase):
         legacy = {"checks": {"unit": "passed"}, "full": False, "env": legacy_env, "plan": "p" * 64, "status": "green",
                   "source": "check", "at": "2026-11-12T10:00:00Z"}
         legacy_full = dict(legacy, checks={}, full=True)
-        state.write_json(results.path_for(TREE_A), {"v": 1, "tree": TREE_A, "entries": [legacy, legacy_full]})
+        state.write_json(results.path_for(self.store, TREE_A), {"v": 1, "tree": TREE_A, "entries": [legacy, legacy_full]})
         for platform in ("darwin-arm64", "linux-x64"):
             with self.subTest(platform=platform):
-                self.assertFalse(results.lookup(TREE_A, ["unit"], platform=platform)["verified"])
-                self.assertFalse(results.lookup(TREE_A, results.FULL, platform=platform)["verified"])
-                self.assertEqual(results.passed(TREE_A, platform=platform), {})
+                self.assertFalse(results.lookup(self.store, TREE_A, ["unit"], platform=platform)["verified"])
+                self.assertFalse(results.lookup(self.store, TREE_A, results.FULL, platform=platform)["verified"])
+                self.assertEqual(results.passed(self.store, TREE_A, platform=platform), {})
         # A new entry beside it is read, and the file keeps the older entry for the older release.
-        results.record(TREE_A, {"unit": "passed"}, source="check", platform="linux-x64")
-        self.assertTrue(results.lookup(TREE_A, ["unit"], platform="linux-x64")["verified"])
-        self.assertEqual(len(results.entries(TREE_A)), 3)
+        results.record(self.store, TREE_A, {"unit": "passed"}, source="check", platform="linux-x64")
+        self.assertTrue(results.lookup(self.store, TREE_A, ["unit"], platform="linux-x64")["verified"])
+        self.assertEqual(len(results.entries(self.store, TREE_A)), 3)
 
     def test_a_receipt_names_its_platform_or_the_host_whose_worktree_ran_it(self):
         """A lane check runs in the lane's worktree, so a receipt an earlier release wrote was made on the host that
@@ -232,9 +230,9 @@ class PlatformTests(unittest.TestCase):
         from lanefather import results, state
         forged = {"checks": {"unit": "passed"}, "full": False, "env": results.env_hash(None, "darwin-arm64"),
                   "platform": "linux-x64", "plan": "p" * 64, "status": "green", "source": "check", "at": "x"}
-        state.write_json(results.path_for(TREE_A), {"v": 1, "tree": TREE_A, "entries": [forged]})
-        self.assertFalse(results.lookup(TREE_A, ["unit"], platform="linux-x64")["verified"])
-        self.assertFalse(results.lookup(TREE_A, ["unit"], platform="darwin-arm64")["verified"])
+        state.write_json(results.path_for(self.store, TREE_A), {"v": 1, "tree": TREE_A, "entries": [forged]})
+        self.assertFalse(results.lookup(self.store, TREE_A, ["unit"], platform="linux-x64")["verified"])
+        self.assertFalse(results.lookup(self.store, TREE_A, ["unit"], platform="darwin-arm64")["verified"])
 
 
 class TreeReuseTests(LaneCase):

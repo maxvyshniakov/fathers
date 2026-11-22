@@ -16,15 +16,15 @@ from .errors import LaneError
 from .state import Record
 
 
-def queue_path(project: config.Config | None = None) -> Path:
-    configured = (project or config.current()).env("QUEUE")
-    directory = state.Store(project).directory if project else state.state_dir()
-    return Path(os.path.expanduser(configured)) if configured else directory.parent / "queue" / "queue.toml"
+def queue_path(target: state.Store | config.Config | None = None) -> Path:
+    store = target if isinstance(target, state.Store) else state.Store(target or config.DEFAULT)
+    configured = store.project.env("QUEUE")
+    return Path(os.path.expanduser(configured)) if configured else store.directory.parent / "queue" / "queue.toml"
 
 
-def read_queue() -> tuple[dict[str, Any], list[dict[str, Any]]]:
+def read_queue(target: state.Store | config.Config | None = None) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """The queue's top-level settings and its [[lane]] entries in rank order, each checked."""
-    path = queue_path()
+    path = queue_path(target)
     try:
         text = path.read_text()
     except FileNotFoundError:
@@ -34,10 +34,10 @@ def read_queue() -> tuple[dict[str, Any], list[dict[str, Any]]]:
     return parse_queue(text, path)
 
 
-def read_settings() -> dict[str, Any]:
+def read_settings(target: state.Store | config.Config | None = None) -> dict[str, Any]:
     """The queue's top-level settings (`base`) without checking its entries: {} without a queue. An entry next
     refuses does not change them; a file that is no TOML raises LaneError."""
-    path = queue_path()
+    path = queue_path(target)
     try:
         data = tomllib.loads(path.read_text())
     except FileNotFoundError:
@@ -78,7 +78,8 @@ def parse_queue(text: str, path: Path) -> tuple[dict[str, Any], list[dict[str, A
 
 
 def queue_states(entries: list[dict[str, Any]], records: list[Record],
-                 common: str | None = None) -> list[tuple[dict[str, Any], str | None]]:
+                 common: str | None = None, *, root: str | None = None,
+                 project: config.Config = config.DEFAULT) -> list[tuple[dict[str, Any], str | None]]:
     """Each entry with why it is not ready, or None when it is. Only the lanes of the repository whose Git common
     directory is `common` hold claims against it (fathers#149)."""
     by_id = {r["id"]: r for r in records}
@@ -97,7 +98,7 @@ def queue_states(entries: list[dict[str, Any]], records: list[Record],
             if waiting:
                 reason = "waits for " + ", ".join(waiting)
             for other in [] if waiting else active:
-                pairs = claims.overlapping(entry["claims"], other)
+                pairs = claims.overlapping(entry["claims"], other, root=root, project=project)
                 if pairs:
                     reason = f"claims overlap lane {other['id']}: " + ", ".join(f"{m} with {t}" for m, t in pairs)
                     break
@@ -105,9 +106,9 @@ def queue_states(entries: list[dict[str, Any]], records: list[Record],
     return states
 
 
-def next_ready(common: str | None = None) -> tuple[dict[str, Any], dict[str, Any] | None,
-                                                   list[tuple[dict[str, Any], str | None]]]:
+def next_ready(store: state.Store, common: str | None = None) -> tuple[dict[str, Any], dict[str, Any] | None,
+                                                                       list[tuple[dict[str, Any], str | None]]]:
     """The queue's settings, its first ready entry (None when nothing is ready) and every entry's state."""
-    data, entries = read_queue()
-    states = queue_states(entries, state.lanes(), common)
+    data, entries = read_queue(store)
+    states = queue_states(entries, store.lanes(), common, project=store.project)
     return data, next((entry for entry, reason in states if reason is None), None), states

@@ -361,22 +361,20 @@ class PlanModuleUnitTests(ScratchCase):
 
     def test_failed_checks_map_to_the_plan_modules_suites(self) -> None:
         lane = load_lane()
-        with project(self.tmp):
-            self.assertEqual(lane.plan.suites_for_checks(self.tmp, ["lib-check"], ["structure", "lib"]),
+        with project(self.tmp) as cfg:
+            self.assertEqual(lane.plan.suites_for_checks(self.tmp, ["lib-check"], ["structure", "lib"], cfg),
                              ["lib"])
             self.assertEqual(lane.plan.suites_for_checks(self.tmp, ["native-check", "structure-check"],
-                                                         ["structure", "native", "lib"]), ["structure", "native"])
+                                                         ["structure", "native", "lib"], cfg), ["structure", "native"])
 
     def test_the_smoke_comes_from_the_plan_module(self) -> None:
         lane = load_lane()
-        with project(self.tmp):
-            self.assertEqual(lane.plan.smoke_checks(self.tmp), ["structure-check", "lib-check"])
-            self.assertEqual(lane.plan.known_checks(self.tmp),
+        with project(self.tmp) as cfg:
+            self.assertEqual(lane.plan.smoke_checks(self.tmp, cfg), ["structure-check", "lib-check"])
+            self.assertEqual(lane.plan.known_checks(self.tmp, cfg),
                              {"structure-check", "lib-check", "schema-check", "native-check", "host-journeys-check"})
         # A project without a plan module answers None, and lanefather falls back to whole suites.
-        lane.config.use(lane.config.Config())
-        self.addCleanup(lane.config.use, None)
-        self.assertIsNone(lane.plan.smoke_checks(self.tmp))
+        self.assertIsNone(lane.plan.smoke_checks(self.tmp, lane.config.DEFAULT))
 
 
 class OverlappingLandTests(LaneCase):
@@ -664,7 +662,7 @@ class SmokeNarrowingTests(LaneCase):
         self.assertEqual(self.post("b")["status"], "green")
 
     def test_land_and_recheck_print_blocked_checks_for_blocked_suites(self):
-        from lanefather import config, land
+        from lanefather import config, land, state
         worktree = self.created("a", "lib/**")
         self.commit(worktree, {"lib/api.txt": "foo\nbaz\n"})
         self.lane("check", "a")
@@ -674,22 +672,22 @@ class SmokeNarrowingTests(LaneCase):
             {"suite": "browser", "status": "blocked", "failed_checks": [],
              "blocked_checks": ["browser:e2e"], "log": "/tmp/b.log"},
         ]
-        config.use(config.load(config.find(self.repo)))
-        self.addCleanup(config.use, None)
+        cfg = config.load(config.find(self.repo))
+        store = state.Store(cfg, directory=self.state)
         with unittest.mock.patch.dict(os.environ, self.env, clear=False), unittest.mock.patch.object(
                 land, "run_smoke", return_value=({"jobs": 1}, blocked_results, {}, None, {"stamped": False}, "red")):
             args = unittest.mock.MagicMock(id="a", into=None, force_reason=None, wait=0, message=None,
                                            keep=False, slots=None)
             buf = io.StringIO()
             with contextlib.redirect_stdout(buf):
-                rc = land.land(args)
+                rc = land.land(args, store)
             self.assertEqual(rc, 1)
             self.assertIn("browser: blocked checks: browser:e2e", buf.getvalue())
             # Also verify recheck prints blocked checks.
             recheck_args = unittest.mock.MagicMock(id="a", into=None, slots=None, suites=None)
             buf2 = io.StringIO()
             with contextlib.redirect_stdout(buf2):
-                rc2 = land.recheck(recheck_args)
+                rc2 = land.recheck(recheck_args, store)
             self.assertEqual(rc2, 1)
             self.assertIn("browser: blocked checks: browser:e2e", buf2.getvalue())
 

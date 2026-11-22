@@ -147,14 +147,12 @@ class GitHubAdapterTests(ScratchCase):
         subprocess.run(["git", "init", "-q", str(repo)], check=True, capture_output=True)
         subprocess.run(["git", "-C", str(repo), "remote", "add", "origin", "git@github.com:example/widgets.git"],
                        check=True, capture_output=True)
-        cfg = self.write(repo, ".lanefather.toml", FIXTURE_CONFIG)
-        config.use(config.load(cfg))
-        self.addCleanup(config.use, None)
+        cfg = config.load(self.write(repo, ".lanefather.toml", FIXTURE_CONFIG))
         common = str(repo / ".git")
         self.assertEqual(github.origin_repo(common), "example/widgets")
         self.assertEqual(github.repo_args(common), ["-R", "example/widgets"])
-        self.assertEqual(github.repository(common), "example/widgets")
-        self.assertTrue(github.gh_command().endswith("gh") or "gh" in github.gh_command())
+        self.assertEqual(github.repository(common, cfg.tickets), "example/widgets")
+        self.assertTrue(github.gh_command(cfg).endswith("gh") or "gh" in github.gh_command(cfg))
 
 
 class DoneLockFreeGhTests(LaneCase):

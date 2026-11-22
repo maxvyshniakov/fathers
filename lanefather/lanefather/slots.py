@@ -66,7 +66,8 @@ def priority_setting(phase: str) -> str:
     return "PRIORITY_" + phase.upper().replace("-", "_")
 
 
-def phase_priority(phase: str, fallback: str | None = None) -> tuple[str, str]:
+def phase_priority(phase: str, fallback: str | None = None, *,
+                   project: config.Config = config.DEFAULT) -> tuple[str, str]:
     """The Slotfather priority of a run of `phase` and where it comes from: LANEFATHER_PRIORITY_<PHASE>,
     LANEFATHER_PRIORITY, the machine setting slots.priority.<phase>, `[slots.priority]` <phase>, `[slots.priority]`
     default, then `fallback` or the built-in.
@@ -78,9 +79,8 @@ def phase_priority(phase: str, fallback: str | None = None) -> tuple[str, str]:
     stray = sorted(key for key in os.environ if key.startswith("LANEFATHER_PRIORITY_") and key not in known)
     if stray:
         raise LaneError(f"{', '.join(stray)} names no phase; the phases are {', '.join(sorted(known))}")
-    cfg = config.current()
     for setting in (priority_setting(phase), "PRIORITY"):
-        found = cfg.lookup(setting)
+        found = project.lookup(setting)
         if found and found[1]:
             if found[1] not in PRIORITIES:
                 raise LaneError(f"{found[0]}={found[1]!r} is not a Slotfather priority; use {', '.join(PRIORITIES)}")
@@ -88,7 +88,7 @@ def phase_priority(phase: str, fallback: str | None = None) -> tuple[str, str]:
     machine = settings.value(f"slots.priority.{phase}")
     if machine in PRIORITIES:
         return machine, f"lanefather settings slots.priority.{phase}"
-    table = dict(cfg.slot_priority)
+    table = dict(project.slot_priority)
     for key in (phase, "default"):
         if key in table:
             return table[key], f"{config.CONFIG_NAME} [slots.priority] {key}"
@@ -100,9 +100,10 @@ def priority_meta(priority: str, source: str) -> dict[str, str]:
     return {PRIORITY_META: f"{priority} ({source})"}
 
 
-def priorities() -> dict[str, dict[str, str]]:
+def priorities(project: config.Config = config.DEFAULT) -> dict[str, dict[str, str]]:
     """Every phase's effective priority and its source, for `list`."""
-    return {phase: dict(zip(("priority", "source"), phase_priority(phase), strict=True)) for phase in PHASES}
+    return {phase: dict(zip(("priority", "source"), phase_priority(phase, project=project), strict=True))
+            for phase in PHASES}
 
 
 def clean_meta(meta: dict[str, Any]) -> dict[str, str]:
@@ -162,11 +163,12 @@ def wrap(count: int | str, label: str, argv: list[str], wait: float | None = Non
 
 
 def queue_environment(label: str, priority: str = "normal", yieldable: bool = False, *,
-                      ticket: str | None = None, min_jobs: int | None = None, **meta: Any) -> dict[str, str]:
+                      project: config.Config = config.DEFAULT, ticket: str | None = None,
+                      min_jobs: int | None = None, **meta: Any) -> dict[str, str]:
     """The label, priority, optional ticket and tags for a verify run that queues itself."""
     if priority not in PRIORITIES:
         raise ValueError(f"request priority {priority!r} is not one of {', '.join(PRIORITIES)}")
-    prefix = config.current().slot_env
+    prefix = project.slot_env
     env = {f"{prefix}_LABEL": label, f"{prefix}_PRIORITY": priority,
            f"{prefix}_TICKET": ticket_value(ticket) or "",
            f"{prefix}_META": json.dumps(clean_meta(meta), sort_keys=True),

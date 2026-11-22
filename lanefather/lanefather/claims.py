@@ -56,28 +56,32 @@ def segments_overlap(a: tuple[str, ...], b: tuple[str, ...]) -> bool:
 _head_kinds: dict[tuple[str, str], str] = {}
 
 
-def project_root() -> str:
-    """Where claim kinds are asked: the directory of the project's configuration, else the working directory."""
-    path = config.current().path
-    return str(path.parent) if path else os.getcwd()
+def project_root(project: config.Config = config.DEFAULT, fallback: str | Path | None = None) -> str:
+    """Where claim kinds are asked: the directory of the project's configuration, else fallback or the working
+    directory."""
+    if project.path is not None:
+        return str(project.path.parent)
+    return str(fallback) if fallback is not None else os.getcwd()
 
 
-def head_kind(path: str) -> str:
+def head_kind(path: str, *, root: str | None = None, project: config.Config = config.DEFAULT) -> str:
     """The object type HEAD of the project has at the repository path (`tree`, `blob`, `commit` for a submodule),
     or "" when HEAD has none or the project is no repository; asked once per path and project in a run."""
-    prefetch_kinds([path])
-    return _head_kinds.get((project_root(), path.strip("/")), "")
+    where = root or project_root(project)
+    prefetch_kinds([path], root=where)
+    return _head_kinds.get((where, path.strip("/")), "")
 
 
-def prefetch_kinds(literals: Iterable[str]) -> None:
+def prefetch_kinds(literals: Iterable[str], *, root: str | None = None,
+                   project: config.Config = config.DEFAULT) -> None:
     """Ask the project's HEAD for the type at each claim without wildcards in one git call (a lane check widens
     claims by whole file lists), so head_kind answers them from the cache."""
-    root = project_root()
+    where = root or project_root(project)
     paths = list(dict.fromkeys(c.strip("/") for c in literals if c.strip("/") and "\n" not in c
-                               and not any(w in c for w in "*?[") and (root, c.strip("/")) not in _head_kinds))
+                               and not any(w in c for w in "*?[") and (where, c.strip("/")) not in _head_kinds))
     if not paths:
         return
-    result = subprocess.run(["git", "cat-file", "--batch-check=%(objecttype)"], cwd=root, capture_output=True,
+    result = subprocess.run(["git", "cat-file", "--batch-check=%(objecttype)"], cwd=where, capture_output=True,
                             text=True, input="".join(f"HEAD:{path}\n" for path in paths))
     answers = result.stdout.splitlines() if result.returncode == 0 else []
     if len(answers) != len(paths):
@@ -85,10 +89,10 @@ def prefetch_kinds(literals: Iterable[str]) -> None:
     for path, answer in zip(paths, answers, strict=True):
         # A submodule answers `<sha> submodule`; a path HEAD lacks, `HEAD:<path> missing`.
         kind = "commit" if answer.endswith(" submodule") else answer
-        _head_kinds[(root, path)] = kind if kind in ("tree", "blob", "commit") else ""
+        _head_kinds[(where, path)] = kind if kind in ("tree", "blob", "commit") else ""
 
 
-def names_directory(literal: str) -> bool:
+def names_directory(literal: str, *, root: str | None = None, project: config.Config = config.DEFAULT) -> bool:
     """A claim without wildcards names a directory when it ends in '/' or HEAD has a tree there; one HEAD has as a
     file is that file; a path HEAD does not have names a directory when its last segment has no extension
     (lanefather#2: `desktop_methods.json/**` let `src/**/ledger*.rs` overlap a file through a path no repository
@@ -96,17 +100,18 @@ def names_directory(literal: str) -> bool:
     path = literal.strip("/")
     if literal.endswith("/") or not path:
         return True
-    kind = head_kind(path)
+    kind = head_kind(path, root=root, project=project)
     if kind:
         return kind in ("tree", "commit")  # a commit at HEAD is a submodule, a directory
     return "." not in path.rsplit("/", 1)[-1].lstrip(".")
 
 
-def glob_segments(claim: str) -> tuple[str, ...]:
+def glob_segments(claim: str, *, root: str | None = None,
+                  project: config.Config = config.DEFAULT) -> tuple[str, ...]:
     parts = tuple(part for part in claim.strip("/").split("/") if part)
     if any(c in claim for c in "*?["):
         return parts
-    return parts + ("**",) if names_directory(claim) else parts
+    return parts + ("**",) if names_directory(claim, root=root, project=project) else parts
 
 
 @functools.cache
@@ -121,45 +126,52 @@ def paths_overlap(a: tuple[str, ...], b: tuple[str, ...]) -> bool:
             and paths_overlap(a[1:], b[1:]))
 
 
-def claims_overlap(a: str, b: str) -> bool:
-    return paths_overlap(glob_segments(a), glob_segments(b))
+def claims_overlap(a: str, b: str, *, root: str | None = None,
+                   project: config.Config = config.DEFAULT) -> bool:
+    return paths_overlap(glob_segments(a, root=root, project=project),
+                         glob_segments(b, root=root, project=project))
 
 
-def matches(claim: str, path: str) -> bool:
+def matches(claim: str, path: str, *, root: str | None = None,
+            project: config.Config = config.DEFAULT) -> bool:
     """A changed path, whose segments carry no wildcards in practice, against a claim."""
-    return paths_overlap(glob_segments(claim), tuple(path.split("/")))
+    return paths_overlap(glob_segments(claim, root=root, project=project), tuple(path.split("/")))
 
 
-def overlapping(claims: Iterable[str], other: Record) -> list[tuple[str, str]]:
-    claims = list(claims)
-    prefetch_kinds([*claims, *other["claims"]])
-    return [(mine, theirs) for mine in claims for theirs in other["claims"] if claims_overlap(mine, theirs)]
+def overlapping(claims: Iterable[str], other: Record, *, root: str | None = None,
+                project: config.Config = config.DEFAULT) -> list[tuple[str, str]]:
+    where = root or project_root(project)
+    claims_list = list(claims)
+    prefetch_kinds([*claims_list, *other["claims"]], root=where)
+    return [(mine, theirs) for mine in claims_list for theirs in other["claims"]
+            if claims_overlap(mine, theirs, root=where)]
 
 
-def unclaimed(path: str) -> bool:
+def unclaimed(path: str, project: config.Config = config.DEFAULT) -> bool:
     """A path every lane may change (release notes merge by union), never claimed."""
-    return path.startswith(config.current().unclaimed)
+    return path.startswith(project.unclaimed)
 
 
-def widen_claims(lane_id: str, paths: list[str], *,
-                 store: state.Store | None = None) -> tuple[list[str], list[dict[str, Any]]]:
+def widen_claims(store: state.Store, lane_id: str,
+                 paths: list[str]) -> tuple[list[str], list[dict[str, Any]]]:
     """Add the changed paths outside the lane's claims to them (#574): the paths added, and each overlap of one with
     the claims of another planned or active lane. Lanes declared in sequence (--after either way) may overlap."""
-    store = store or state.Store(config.current())
+    where = project_root(store.project)
     added: list[str] = []
     overlaps: list[dict[str, Any]] = []
 
     def _widen(record: Record) -> bool:
         nonlocal added, overlaps
-        added = [p for p in dict.fromkeys(paths) if not any(matches(c, p) for c in record["claims"])]
+        added = [p for p in dict.fromkeys(paths) if not any(matches(c, p, root=where) for c in record["claims"])]
         if not added:
             return False
         others = [r for r in state.occupying(state.of_project(store.lanes(), record.get("common_dir")))
                   if r["id"] != lane_id and r["id"] not in record["after"]
                   and lane_id not in r.get("after", [])]
-        prefetch_kinds([*record["claims"], *(claim for other in others for claim in other["claims"])])
+        prefetch_kinds([*record["claims"], *(claim for other in others for claim in other["claims"])], root=where)
         overlaps = [{"path": path, "lane": other["id"], "ticket": other["ticket"], "claim": claim}
-                    for path in added for other in others for claim in other["claims"] if matches(claim, path)]
+                    for path in added for other in others for claim in other["claims"]
+                    if matches(claim, path, root=where)]
         record["claims"] = [*record["claims"], *added]
         return True
 
@@ -171,15 +183,15 @@ def widen_claims(lane_id: str, paths: list[str], *,
                            kind="claims.added", lane=record,
                            details={"added": added, "overlaps": [{"lane": o["lane"], "claim": o["claim"]}
                                                                  for o in overlaps]},
-                           directory=store.directory, project=store.project)
+                           store=store)
     return added, overlaps
 
 
 # Rule snippets (the project's rules_dir, *.md with front matter `paths:`): the brief lists those a claim touches.
 
-def read_rules(root: Any) -> list[dict[str, Any]]:
+def read_rules(root: Any, project: config.Config = config.DEFAULT) -> list[dict[str, Any]]:
     """Each snippet's name, title, path globs and body; a file without front matter paths is skipped."""
-    rules_dir = config.current().rules_dir
+    rules_dir = project.rules_dir
     if not rules_dir:
         return []
     rules: list[dict[str, Any]] = []
@@ -203,19 +215,21 @@ def read_rules(root: Any) -> list[dict[str, Any]]:
     return rules
 
 
-def rules_for(claims: Iterable[str], root: Any) -> list[dict[str, Any]]:
+def rules_for(claims: Iterable[str], root: Any,
+              project: config.Config = config.DEFAULT) -> list[dict[str, Any]]:
     """The snippets with a glob some claim overlaps, each with the globs that matched."""
-    claims = list(claims)
+    claims_list = list(claims)
+    where = project_root(project, fallback=root)
     selected: list[dict[str, Any]] = []
-    for rule in read_rules(root):
-        hit = [glob for glob in rule["paths"] if any(claims_overlap(claim, glob) for claim in claims)]
+    for rule in read_rules(root, project):
+        hit = [glob for glob in rule["paths"] if any(claims_overlap(claim, glob, root=where) for claim in claims_list)]
         if hit:
             selected.append(dict(rule, matched=hit))
     return selected
 
 
-def rules_block(rules: list[dict[str, Any]]) -> list[str]:
-    rules_dir = config.current().rules_dir or "no rules_dir in .lanefather.toml"
+def rules_block(rules: list[dict[str, Any]], project: config.Config = config.DEFAULT) -> list[str]:
+    rules_dir = project.rules_dir or "no rules_dir in .lanefather.toml"
     if not rules:
         return [f"Rules for these claims: none ({rules_dir}/)"]
     lines = [f"Rules for these claims ({rules_dir}/):"]

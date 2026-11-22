@@ -100,9 +100,9 @@ class ReviewerProjectTests(LaneCase):
         tip = self.tip()
         with unittest.mock.patch.dict(os.environ, self.env, clear=True):
             configured = config.Config(project="Selected project", coding_standards="SELECTED.md")
+            other = config.Config(project="Other project", coding_standards="OTHER.md")
             runner = reviewer.Reviewer(configured)
-            config.use(config.Config(project="Other project", coding_standards="OTHER.md"))
-            self.addCleanup(config.use, None)
+            _other_runner = reviewer.Reviewer(other)
             answer = runner.run("direct", str(self.integration),
                                 reviewer.Request("selected standards", "selected ticket", tip, tip),
                                 self.tmp / "answer.md", self.tmp / "reviewer.log")

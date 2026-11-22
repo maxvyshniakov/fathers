@@ -238,6 +238,11 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
 
 ### Fixed
 
+- Multi-project readiness and verification receipt reuse (fathers#234): multi-project readiness queries now resolve
+  directory claims against each project's own repository root rather than the caller's working directory, review-fix
+  lane check reuse infers the host platform for legacy parent receipts from the lane worktree, and multiple projects
+  and state directories opened in one process remain isolated without cross-project configuration leakage.
+
 - `lanefather land` now honours `[review] blocks` in `.lanefather.toml` when checking other finished reviews for
   unmarked findings, matching `lanefather promote` and `lanefather findings` (fathers#230): severities excluded from
   `[review] blocks` are reported as non-blocking warnings instead of refusing the merge, and `[review] blocks` that

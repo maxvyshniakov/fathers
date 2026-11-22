@@ -27,7 +27,7 @@ SMOKE_WORKTREE = "smoke"
 
 
 def worktrees_root_from_main(main: str, project: config.Config | None = None) -> Path:
-    root = Path((project or config.current()).worktrees_root)
+    root = Path((project or config.DEFAULT).worktrees_root)
     return root if root.is_absolute() else Path(main) / root
 
 
@@ -59,13 +59,13 @@ def base_checkout(record: state.Record, worktree: Any, sha: str) -> Generator[st
 
 
 @contextlib.contextmanager
-def smoke_checkout(common: str, merge: str) -> Generator[str]:
+def smoke_checkout(common: str, merge: str, project: config.Config = config.DEFAULT) -> Generator[str]:
     """A worktree detached at the merge for its post-merge smoke (#573): the first free one of
     <main checkout>/.claude/worktrees/smoke-<n>, which its lock file beside it holds while a smoke runs. Smokes
     overlap, each on its own merge, while the integration worktree moves on; the checkouts stay and keep their builds
     warm for the next smokes, as the batch gate's does."""
     main = main_checkout(common)
-    root = worktrees_root(common)
+    root = worktrees_root(common, project)
     root.mkdir(parents=True, exist_ok=True)
     git(main, "worktree", "prune", check=False)
     listed = {w["path"] for w in worktree_list(main)}
@@ -100,11 +100,11 @@ def smoke_checkout(common: str, merge: str) -> Generator[str]:
         handle.close()
 
 
-def gate_worktree(common: str, sha: str) -> str:
+def gate_worktree(common: str, sha: str, project: config.Config = config.DEFAULT) -> str:
     """The batch gate's own worktree, detached at the SHA, so lanes keep landing on the integration worktree
     while the gate runs and its builds stay warm from batch to batch."""
     main = main_checkout(common)
-    path = os.path.realpath(worktrees_root(common) / GATE_WORKTREE)
+    path = os.path.realpath(worktrees_root(common, project) / GATE_WORKTREE)
     if path in {w["path"] for w in worktree_list(main)}:
         # The gate worktree belongs to promote: reset whatever a previous run left in tracked files.
         git(path, "checkout", "-q", "--force", "--detach", sha)
@@ -116,10 +116,10 @@ def gate_worktree(common: str, sha: str) -> str:
 
 
 @contextlib.contextmanager
-def review_checkout(main: str, label: str, tip: str) -> Generator[str]:
+def review_checkout(store: state.Store, main: str, label: str, tip: str) -> Generator[str]:
     """A worktree detached at the reviewed tip, removed on every exit path, so landing and done go on meanwhile."""
-    root = state.state_dir() / "reviews"
-    root.mkdir(exist_ok=True)
+    root = store.reviews_dir
+    root.mkdir(parents=True, exist_ok=True)
     for stale in root.glob(f"{label}-checkout-*"):
         remove_checkout(main, stale)
     path = root / f"{label}-checkout-{os.getpid()}"
@@ -133,7 +133,7 @@ def review_checkout(main: str, label: str, tip: str) -> Generator[str]:
 # The lane's build directories under the project's cache
 
 def cache_root(project: config.Config | None = None) -> Path:
-    current = project or config.current()
+    current = project or config.DEFAULT
     configured = current.env("BUILD_CACHE")
     if configured:
         return Path(configured)
@@ -144,7 +144,7 @@ def cache_root(project: config.Config | None = None) -> Path:
 
 def lane_targets(lane_id: str, project: config.Config | None = None) -> list[str]:
     """The lane's own build directories (`[lane] targets`, `{id}` replaced) under the cache root."""
-    cfg = project or config.current()
+    cfg = project or config.DEFAULT
     return [str(cache_root(cfg) / pattern.replace("{id}", lane_id)) for pattern in cfg.lane_targets]
 
 
@@ -168,7 +168,7 @@ def shared_partitions(*checkouts: str, project: config.Config | None = None) -> 
     """Shared cache partitions (`[lane] cache_partitions` under the cache root, 64-hex directories of a build cache
     such as Straylight's cargo-v2) whose dependency files (`[lane] cache_depfiles`) name a path under the
     checkouts."""
-    cfg = project or config.current()
+    cfg = project or config.DEFAULT
     name = cfg.cache_partitions
     if not name or not cfg.cache_depfiles:
         return []

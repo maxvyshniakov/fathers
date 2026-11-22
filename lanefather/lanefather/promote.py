@@ -87,6 +87,7 @@ class PromoteRun:
     subject: str = ""
     ship_base: str | None = None
     failed_moves: list[str] = field(default_factory=list[str])
+    store: state.Store = field(default_factory=lambda: state.Store(config.DEFAULT))
 
 
 def substitute(text: str, values: dict[str, str]) -> str:
@@ -95,40 +96,42 @@ def substitute(text: str, values: dict[str, str]) -> str:
     return text
 
 
-def step_priority(step: config.Step) -> tuple[str, str]:
+def step_priority(step: config.Step, project: config.Config = config.DEFAULT) -> tuple[str, str]:
     """A leased install or deploy step's priority and its source: the step's own, else the gate's as
     slots.phase_priority resolves it, normal when nothing sets it (lanefather#24)."""
     assert step.lease is not None
     if step.lease.priority:
         return step.lease.priority, f"step {step.name} lease"
-    return slots.phase_priority("gate", fallback="normal")
+    return slots.phase_priority("gate", fallback="normal", project=project)
 
 
-def _run_config_step(common: str, sha: str, step: config.Step, skipped: list[str], deploy: str | None) -> None:
-    cfg = config.current()
-    values = {"sha": sha, "short": sha[:10], "host": deploy or "", "package": str(state.state_dir() / "link-package")}
+def _run_config_step(store: state.Store, common: str, sha: str, step: config.Step, skipped: list[str],
+                     deploy: str | None) -> None:
+    cfg = store.project
+    values = {"sha": sha, "short": sha[:10], "host": deploy or "", "package": str(store.directory / "link-package")}
     environment = {k: v for k, v in os.environ.items() if k not in cfg.install_env_drop}
-    with state.locked("promote", promote_lock_message()):
-        path = worktrees.gate_worktree(common, sha)
+    with store.locked("promote", promote_lock_message(store)):
+        path = worktrees.gate_worktree(common, sha, cfg)
         argv = [substitute(part, values) for part in step.argv]
         extra = {key: substitute(value, values) for key, value in step.env}
         print(f"lane: {step.name}: {' '.join(argv)} in {path}", flush=True)
         if step.lease:
-            priority, source = step_priority(step)
+            priority, source = step_priority(step, cfg)
             try:
                 argv = slots.wrap(step.lease.slots, f"promote-{sha[:10]}-{step.name}", argv,
                                   priority=priority, ticket=step.lease.ticket, required=True,
                                   meta={"phase": step.name, "kind": "promote", "sha": sha[:10],
-                                        **verify.plan_meta([f"step:{step.name}"], None, 0),
+                                        **verify.plan_meta([f"step:{step.name}"], None, 0, project=cfg),
                                         **slots.priority_meta(priority, source),
-                                        "lanefather.state": str(state.state_dir())})
+                                        "lanefather.state": str(store.directory)})
             except slots.Unavailable as error:
                 raise LaneError(f"promote of {sha[:10]} went through, but {step.name} cannot run: "
                                 f"{error}") from None
         status = subprocess.run(argv, cwd=path, env={**environment, **extra}).returncode
         journal.ledger(f"promote-{step.name} {sha} exit={status}", kind="promote.step",
                        level="error" if status else "info", subject={"type": "commit", "id": sha},
-                       details={"step": step.name, "exit": status, "command": events.command(argv)})
+                       details={"step": step.name, "exit": status, "command": events.command(argv)},
+                       store=store)
         if status:
             skipped_text = ", ".join(skipped) or "none"
             raise LaneError(f"promote of {sha[:10]} went through, but {step.name} failed (exit {status}); "
@@ -138,8 +141,8 @@ def _run_config_step(common: str, sha: str, step: config.Step, skipped: list[str
 # Local dev and main follow origin (#666): promote --no-push once left them ahead of it, and only the owner could
 # drop the commits. sync catches them up under the landing lock; every refusal names the command that does it right.
 
-def publish_hint(sha: str, ship: bool = False) -> str:
-    return (f"unpushed work lives on its own branch (agent/<name>); to publish it: {config.prog()} promote {sha}"
+def publish_hint(sha: str, ship: bool = False, *, prog: str = "lanefather") -> str:
+    return (f"unpushed work lives on its own branch (agent/<name>); to publish it: {prog} promote {sha}"
             + (" --ship" if ship else ""))
 
 
@@ -153,20 +156,21 @@ def fetch(cwd: str, remote: str, verb: str) -> None:
         raise LaneError(f"{verb} refused: git fetch {remote} failed: {fetched.stderr.strip()}")
 
 
-def no_push_refusal(cwd: str, sha: str, branches: list[str], remote: str, *, ship: bool | None = None) -> None:
+def no_push_refusal(cwd: str, sha: str, branches: list[str], remote: str, *, ship: bool | None = None,
+                    project: config.Config = config.DEFAULT) -> None:
     """--no-push moves a local branch only to what <remote> already has, so it never runs ahead of it. A repository
     without the remote has nothing to run ahead of."""
     if not has_remote(cwd, remote):
         return
     fetch(cwd, remote, "promote --no-push")
-    promoted = config.current().promoted
+    promoted = project.promoted
     need_ship = (len(promoted) > 1 and promoted[-1] in branches) if ship is None else ship
     for branch in branches:
         _, upstream = tracking(cwd, remote, branch)
         if not upstream or not git_ok(cwd, "merge-base", "--is-ancestor", sha, upstream):
             raise LaneError(f"promote --no-push refused: {sha[:10]} is not on {remote}/{branch}, and --no-push moves "
                             f"local {branch} only to what {remote} has; "
-                            + publish_hint(sha[:10], ship=need_ship))
+                            + publish_hint(sha[:10], ship=need_ship, prog=project.command))
 
 
 def backup_name(cwd: str, branch: str) -> str:
@@ -182,17 +186,17 @@ def backup_name(cwd: str, branch: str) -> str:
 Move = tuple[str, str, str, list[str] | None]
 
 
-def sync_plan(cwd: str, args: Any, verb: str) -> tuple[list[Move], list[str], dict[str, str]]:
+def sync_plan(cwd: str, args: Any, verb: str, *,
+              project: config.Config = config.DEFAULT) -> tuple[list[Move], list[str], dict[str, str]]:
     """The moves, notes and checked-out worktrees of a sync, read after the fetch; raises the refusal that moves
-    nothing. sync calls it under the landing lock, so no land or promote moves dev or main between this read and the
-    moves (review of #666: a land during the lock wait was lost by a reset to an older read)."""
-    prog = config.prog()
+    nothing."""
+    prog = project.command
     fetch(cwd, args.remote, verb)
     checked_out = {w["branch"]: w["path"] for w in worktree_list(cwd) if w.get("branch")}
     moves: list[Move] = []
     notes: list[str] = []
     diverged: list[Move] = []
-    for branch in config.current().promoted:
+    for branch in project.promoted:
         local, upstream = tracking(cwd, args.remote, branch)
         if not local or not upstream:
             missing = f"local {branch}" if not local else f"{args.remote}/{branch}"
@@ -225,10 +229,10 @@ def sync_plan(cwd: str, args: Any, verb: str) -> tuple[list[Move], list[str], di
     return moves + diverged, notes, checked_out
 
 
-def sync(args: Any) -> int:
+def sync(args: Any, store: state.Store) -> int:
     """Under the landing lock: fetch, then fast-forward local dev and main to <remote>; with --drop-local reset them
     to it, keeping the commits <remote> lacks on a backup branch first. A refusal moves neither branch."""
-    prog = config.prog()
+    prog = store.prog
     cwd = os.getcwd()
     common = common_dir(cwd)
     verb = "sync --drop-local" if args.drop_local else "sync"
@@ -238,8 +242,8 @@ def sync(args: Any) -> int:
     finished: list[str] = []
     failed: list[str] = []
     kept: list[str] = []
-    with landing(common, holder, args.wait) as env:
-        moves, notes, checked_out = sync_plan(cwd, args, verb)
+    with landing(common, holder, args.wait, store=store) as env:
+        moves, notes, checked_out = sync_plan(cwd, args, verb, project=store.project)
         for branch, old, new, dropped in moves:
             backup = None
             if dropped is not None:
@@ -253,7 +257,6 @@ def sync(args: Any) -> int:
             if error:
                 failed.append(error)
                 if backup:
-                    # Nothing was dropped, so nothing needs keeping: a rerun takes the same name.
                     git(cwd, "branch", "-D", backup, check=False)
             elif backup and dropped is not None:
                 finished.append(f"{branch} {old[:10]}->{new[:10]}, {commits(len(dropped))} dropped, kept on {backup}")
@@ -262,14 +265,15 @@ def sync(args: Any) -> int:
             else:
                 finished.append(f"{branch} {old[:10]}->{new[:10]} fast-forwarded")
     if not moves:
-        promoted = config.current().promoted
+        promoted = store.project.promoted
         verb_word = "is" if len(promoted) == 1 else "are"
         print(f"lane: local {' and '.join(promoted)} {verb_word} up to date with {args.remote} ({'; '.join(notes)})")
         return 0
     journal.ledger(f"sync {args.remote}: {'; '.join(finished) or '-'}" + (f" failed: {'; '.join(failed)}" if failed
                                                                             else ""),
                    kind="sync.finished", level="warn" if failed else "info",
-                   subject={"type": "remote", "id": args.remote}, details={"moved": finished, "failed": failed})
+                   subject={"type": "remote", "id": args.remote}, details={"moved": finished, "failed": failed},
+                   store=store)
     for line in kept:
         print(line if line.startswith("  ") else f"lane: {line}")
     for line in finished + notes:
@@ -280,11 +284,11 @@ def sync(args: Any) -> int:
     return 0
 
 
-def after_promote(cwd: str, sha: str) -> None:
+def after_promote(cwd: str, sha: str, project: config.Config = config.DEFAULT) -> None:
     """After dev moved: the project's after-promote command (Straylight's Sid-Kit and Data Grid adoption check,
     #588), with `{sha}` and `{short}` (its first 10) replaced. It never fails the promote: a failure only warns."""
     argv = [sys.executable if part == "python3" else substitute(part, {"sha": sha, "short": sha[:10]})
-            for part in config.current().after_promote]
+            for part in project.after_promote]
     if not argv:
         return
     script = next((part for part in argv[1:] if part.endswith(".py")), None)
@@ -301,27 +305,24 @@ def after_promote(cwd: str, sha: str) -> None:
 
 def step_no_push_refusal(run: PromoteRun) -> None:
     if run.no_push:
-        no_push_refusal(run.cwd, run.sha, run.branches, run.remote, ship=run.ship)
+        no_push_refusal(run.cwd, run.sha, run.branches, run.remote, ship=run.ship, project=run.store.project)
 
 
 def step_ahead_warnings(run: PromoteRun) -> None:
-    for line in ahead_lines(run.cwd, run.remote):
+    for line in ahead_lines(run.cwd, run.remote, project=run.store.project):
         print(f"lane: {line}", flush=True)
 
 
 def step_ship_refusal(run: PromoteRun) -> None:
-    cfg = config.current()
-    # main takes only released notes: fragments wait on dev until a release commit folds them (#447).
+    cfg = run.store.project
     if run.ship and cfg.ship_refuses and git(run.cwd, "ls-tree", "--name-only", f"{run.sha}:{cfg.ship_refuses}",
                                              check=False):
         raise LaneError(f"promote --ship refused: {run.sha[:10]} still has {cfg.ship_refuses}/; {cfg.ship_refusal}")
 
 
 def step_review_gate(run: PromoteRun) -> None:
-    # fathers#109: an unmarked blocking finding of a finished review holds the batch gate too; a review still
-    # running does not (#570: the gate runs while reviews finish).
-    prog = config.prog()
-    report = review_gate.gate_report(run.cwd, run.common, run.sha)
+    prog = run.store.prog
+    report = review_gate.gate_report(run.store, run.cwd, run.common, run.sha)
     for entry in report["reported"]:
         print(f"lane: reported, does not block: {entry['text']}", flush=True)
     blocking = [e["text"] for e in report["blocking"]]
@@ -333,50 +334,48 @@ def step_review_gate(run: PromoteRun) -> None:
 
 
 def step_batch_gate(run: PromoteRun) -> None:
-    cfg = config.current()
-    # Only fully gated trees are promoted. Repositories without the stamp tooling have their own pre-push gate.
+    cfg = run.store.project
     if (cfg.stamp_tool and git_ok(run.cwd, "cat-file", "-e", f"{run.sha}:{cfg.verify}")
             and git_ok(run.cwd, "cat-file", "-e", f"{run.sha}:{cfg.stamp_tool}")):
-        if gate.verified(run.cwd, run.common, run.sha):
-            print(f"lane: {run.sha[:10]}'s tree is already verified ({gate.verified_why(run.cwd, run.sha)}); "
-                  "no batch gate needed")
+        if gate.verified(run.cwd, run.common, run.sha, cfg):
+            why = gate.verified_why(run.store, run.cwd, run.sha)
+            print(f"lane: {run.sha[:10]}'s tree is already verified ({why}); no batch gate needed")
         else:
-            gate.batch_gate(run.cwd, run.common, run.sha, run.jobs)
+            gate.batch_gate(run.store, run.cwd, run.common, run.sha, run.jobs)
 
 
 def step_review_refusals(run: PromoteRun) -> None:
-    prog = config.prog()
-    # The gate runs while reviews finish; only the move of dev waits for them (#570).
-    refusals = review_gate.review_refusals(run.cwd, run.common, run.sha)
+    prog = run.store.prog
+    refusals = review_gate.review_refusals(run.store, run.cwd, run.common, run.sha)
     if refusals and not run.force_reason:
         raise LaneError("promote refused: dev waits for the review of every lane landed since dev:\n- "
-                        + "\n- ".join(refusals) + "\nMark each finding with " + review_record.mark_help("<id>")
+                        + "\n- ".join(refusals) + "\nMark each finding with "
+                        + review_record.mark_help("<id>", prog=prog)
                         + f", then rerun {prog} promote {run.sha[:10]}; a stamped tree is not gated again. "
                         "--force-reason overrides, logged")
     if refusals:
         journal.ledger(f"override promote {run.sha}: {run.force_reason} ({'; '.join(refusals)})", kind="override",
                        level="warn", subject={"type": "commit", "id": run.sha},
-                       details={"command": "promote", "reason": run.force_reason, "refusals": refusals})
+                       details={"command": "promote", "reason": run.force_reason, "refusals": refusals},
+                       store=run.store)
 
 
 def step_perf_suite(run: PromoteRun) -> None:
-    cfg = config.current()
-    # main takes only a tree whose timing budgets held, measured alone after the gate (#579); dev never waits for it.
+    cfg = run.store.project
     if run.ship and git_ok(run.cwd, "cat-file", "-e", f"{run.sha}:{cfg.verify}"):
-        gate.perf_suite(run.cwd, run.common, run.sha, ship=True, remote=run.remote)
+        gate.perf_suite(run.store, run.cwd, run.common, run.sha, ship=True, remote=run.remote)
 
 
 def step_publish_refs(run: PromoteRun) -> int:
-    prog = config.prog()
+    prog = run.store.prog
     run.subject = git(run.cwd, "log", "-1", "--format=%s", run.sha)
     holder = f"{prog} promote {run.sha[:10]}{' --ship' if run.ship else ''} (pid {os.getpid()}, {run.cwd})"
     run.failed_moves = []
-    with landing(run.common, holder, run.wait) as env:
+    with landing(run.common, holder, run.wait, store=run.store) as env:
         if not run.no_push:
             fetch(run.cwd, run.remote, "promote")
         if run.ship:
-            # The overall review covers what main gains: origin/main (local main without one) to the SHA.
-            run.ship_base = gate.main_base(run.cwd, run.remote)
+            run.ship_base = gate.main_base(run.cwd, run.remote, project=run.store.project)
         moves: list[tuple[str, str]] = []
         for branch in run.branches:
             old = git(run.cwd, "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}^{{commit}}", check=False)
@@ -396,9 +395,6 @@ def step_publish_refs(run: PromoteRun) -> int:
             refspecs = [f"{run.sha}:refs/heads/{branch}" for branch in run.branches]
             print(f"lane: pushing {run.sha[:10]} {run.subject!r} to {run.remote} {' and '.join(run.branches)}",
                   flush=True)
-            # The pre-push hook gates the push: a verified tree, and main only as a dev tip. The push moves
-            # remote-tracking refs only, so the token stays out of the verify runs a pre-push hook may start.
-            # --atomic: the remote takes dev and main together or neither, so a refused main leaves dev in place.
             if subprocess.run(["git", "push", "--atomic", run.remote, *refspecs], cwd=run.cwd).returncode:
                 raise LaneError(f"promote refused: git push {run.remote} {' '.join(refspecs)} failed; "
                                 f"local {' and '.join(run.branches)} unchanged")
@@ -416,7 +412,8 @@ def step_publish_refs(run: PromoteRun) -> int:
                    kind="promote.finished", level="warn" if run.failed_moves else "info",
                    subject={"type": "commit", "id": run.sha},
                    details={"branches": run.branches, "pushed": not run.no_push, "remote": run.remote,
-                            "failed": run.failed_moves})
+                            "failed": run.failed_moves},
+                   store=run.store)
     if run.failed_moves:
         print("lane: " + ("the push went through, but " if not run.no_push else "") + "these local branches did "
               "not move:\n  " + "\n  ".join(run.failed_moves) + f"\nFix that, then rerun {prog} promote {run.sha[:10]}"
@@ -427,17 +424,17 @@ def step_publish_refs(run: PromoteRun) -> int:
 
 
 def step_after_promote(run: PromoteRun) -> None:
-    after_promote(run.cwd, run.sha)
+    after_promote(run.cwd, run.sha, run.store.project)
 
 
 def step_release_comments(run: PromoteRun) -> None:
     if run.ship and run.ship_base:
-        tickets.release_comments(run.cwd, run.common, run.ship_base, run.sha, None)
+        tickets.release_comments(run.store, run.cwd, run.common, run.ship_base, run.sha, None)
 
 
 def step_overall_review(run: PromoteRun) -> None:
     if run.ship and run.ship_base:
-        print(f"lane: {review.start_overall_review(run.cwd, run.sha, run.ship_base)}")
+        print(f"lane: {review.start_overall_review(run.store, run.cwd, run.sha, run.ship_base)}")
 
 
 def _install_summary_step(run: PromoteRun) -> None:
@@ -445,8 +442,8 @@ def _install_summary_step(run: PromoteRun) -> None:
           + (f" to {run.deploy}" if run.deploy else ""))
 
 
-def _require_install_steps(_run: PromoteRun) -> None:
-    if not config.current().install:
+def _require_install_steps(run: PromoteRun) -> None:
+    if not run.store.project.install:
         raise LaneError("promote --install: the project names no install steps ([[promote.install]] in "
                         ".lanefather.toml)")
 
@@ -469,7 +466,7 @@ def promote_steps(run: PromoteRun) -> list[tuple[str, PromoteStep]]:
         ("overall_review", step_overall_review),
     ]
     if run.install:
-        cfg = config.current()
+        cfg = run.store.project
         if not cfg.install:
             steps.append(("install_check", _require_install_steps))
         else:
@@ -478,7 +475,7 @@ def promote_steps(run: PromoteRun) -> list[tuple[str, PromoteStep]]:
                 skipped = [later.name for later in configured[index + 1:]]
 
                 def _run_step(r: PromoteRun, s: config.Step = cfg_step, sk: list[str] = skipped) -> None:
-                    _run_config_step(r.common, r.sha, s, sk, r.deploy)
+                    _run_config_step(r.store, r.common, r.sha, s, sk, r.deploy)
 
                 steps.append((f"step:{cfg_step.name}", _run_step))
             steps.append(("install_summary", _install_summary_step))
@@ -493,7 +490,7 @@ def promote_sha(run: PromoteRun) -> int:
     return 0
 
 
-def promote(args: Any) -> int:
+def promote(args: Any, store: state.Store) -> int:
     """The batch gate on a SHA unless its tree is verified; then fast-forward local dev (and main with --ship) to
     it and push it, under the landing lock; with --install (and --deploy) install and deploy it."""
     if args.deploy and not args.install:
@@ -501,14 +498,13 @@ def promote(args: Any) -> int:
     if (args.install or args.deploy) and args.no_push:
         raise LaneError("promote refused: --install and --deploy need the push: the install and deploy guards take "
                         "only a SHA on origin/dev")
-    cfg = config.current()
+    cfg = store.project
     steps = (*cfg.install, *(cfg.deploy if args.deploy else ())) if args.install else ()
     if any(step.lease for step in steps) and slots.command() is None:
         raise LaneError("promote refused: configured execution leases require slotfather on PATH; nothing published")
-    # An invalid priority refuses before anything moves, not after the promotion (lanefather#24).
     for step in steps:
         if step.lease:
-            step_priority(step)
+            step_priority(step, cfg)
     cwd = os.getcwd()
     sha = git(cwd, "rev-parse", "--verify", "--quiet", args.sha + "^{commit}", check=False)
     if not sha:
@@ -528,5 +524,6 @@ def promote(args: Any) -> int:
         force_reason=args.force_reason,
         install=bool(args.install),
         deploy=args.deploy,
+        store=store,
     )
     return promote_sha(run)

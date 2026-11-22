@@ -166,16 +166,17 @@ class FixParentUnitTests(ScratchCase):
     def test_only_a_landed_parent_holding_the_worktree_exempts_a_lane(self) -> None:
         from unittest.mock import patch
 
-        from lanefather import lanes
+        from lanefather import lanes, state
         self.write(self.tmp, ".lanefather.toml", FIXTURE_CONFIG)
         self.state.mkdir(parents=True)
         worktree = str(self.tmp / "kept")
         for status, expected in (("landed", "p"), ("released", "p"), ("active", None), ("done", None)):
             with self.subTest(status):
                 (self.state / "p.json").write_text(json.dumps({"id": "p", "status": status, "worktree": worktree}))
-                with patch.dict("os.environ", self.env, clear=True), project(self.tmp):
-                    self.assertEqual(lanes.fix_parent({"review_fix_of": "p", "worktree": worktree}), expected)
-                    self.assertIsNone(lanes.fix_parent({"review_fix_of": "p", "worktree": str(self.tmp / "x")}))
+                with patch.dict("os.environ", self.env, clear=True), project(self.tmp) as cfg:
+                    store = state.Store(cfg, directory=self.state)
+                    self.assertEqual(lanes.fix_parent(store, {"review_fix_of": "p", "worktree": worktree}), expected)
+                    self.assertIsNone(lanes.fix_parent(store, {"review_fix_of": "p", "worktree": str(self.tmp / "x")}))
 
 
 if __name__ == "__main__":

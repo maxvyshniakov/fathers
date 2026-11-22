@@ -555,20 +555,31 @@ SPREAD_FINDINGS = textwrap.dedent("""\
 
 def load_lane() -> types.SimpleNamespace:
     """lanefather's modules, for the tests that call or patch one in process."""
-    from lanefather import checks, claims, config, host, plan, promote, review, state
-    return types.SimpleNamespace(checks=checks, claims=claims, config=config, host=host, plan=plan, promote=promote,
-                                 review=review, state=state)
+    from lanefather import (
+        checks,
+        claims,
+        config,
+        history,
+        host,
+        land,
+        plan,
+        promote,
+        receipts,
+        results,
+        review,
+        state,
+        verify,
+    )
+    return types.SimpleNamespace(checks=checks, claims=claims, config=config, history=history, host=host, land=land,
+                                 plan=plan, promote=promote, receipts=receipts, results=results, review=review,
+                                 state=state, verify=verify)
 
 
 @contextlib.contextmanager
 def project(repo: pathlib.Path) -> Iterator[Any]:
-    """The fixture's config as the run's, for a test that calls lanefather in process."""
+    """Load the fixture's `config.Config` for a test that calls lanefather in process."""
     from lanefather import config
-    config.use(config.load(repo / ".lanefather.toml"))
-    try:
-        yield config.current()
-    finally:
-        config.use(None)
+    yield config.load(repo / ".lanefather.toml")
 
 
 _TEMPLATE: list[pathlib.Path] = []
@@ -674,10 +685,9 @@ def run_in_process_streams(argv: list[str], cwd: Any, env: dict[str, str],
     """`python -m lanefather ARGV` in this process, returning `(exit status, stdout, stderr)`."""
     import signal
 
-    from lanefather import claims, cli, config
+    from lanefather import claims, cli
     saved_env, saved_cwd, saved_path = dict(os.environ), os.getcwd(), list(sys.path)
     saved_modules = set(sys.modules)
-    saved_config = config._current  # pyright: ignore[reportPrivateUsage]
 
     def expired(_signum: int, _frame: Any) -> None:
         raise InProcessTimeout(f"lanefather {' '.join(argv)} ran longer than {timeout:g} s")
@@ -696,7 +706,6 @@ def run_in_process_streams(argv: list[str], cwd: Any, env: dict[str, str],
             os.chdir(cwd)
             os.dup2(outputs[0].fileno(), 1)
             os.dup2(outputs[1].fileno(), 2)
-            config.use(None)
             claims._head_kinds.clear()  # pyright: ignore[reportPrivateUsage]
             try:
                 code = cli.main(argv)
@@ -728,7 +737,6 @@ def run_in_process_streams(argv: list[str], cwd: Any, env: dict[str, str],
                 origin = str(getattr(sys.modules[name], "__file__", None) or "")
                 if origin and not origin.startswith((sys.prefix, sys.base_prefix, str(ROOT))):
                     del sys.modules[name]
-            config.use(saved_config)
         texts: list[str] = []
         for handle in outputs:
             handle.seek(0)

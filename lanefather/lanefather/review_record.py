@@ -16,7 +16,7 @@ from pathlib import Path
 import subprocess
 from typing import Any, cast
 
-from . import config, gitops, journal, lifecycle, state
+from . import gitops, journal, lifecycle, state
 from .errors import LaneError
 from .gitops import git_ok, main_checkout
 from .state import Record
@@ -268,8 +268,8 @@ def review_words(label: str, verdict: ReviewVerdict, *, prog: str = "lanefather"
     return True, f"reviewed by {verdict.reviewer}: {len(verdict.findings)} findings, all marked"
 
 
-def mark_help(lane_id: str = "{id}", prog: str | None = None) -> str:
-    return f"{prog or config.prog()} review {lane_id} --mark <n> fixed:<merge>|rejected:<reason>"
+def mark_help(lane_id: str = "{id}", prog: str = "lanefather") -> str:
+    return f"{prog} review {lane_id} --mark <n> fixed:<merge>|rejected:<reason>"
 
 
 def mark_counts(findings: Sequence[dict[str, Any]]) -> dict[str, int]:

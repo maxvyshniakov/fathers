@@ -96,14 +96,14 @@ class SlotMetaTests(LaneCase):
 
 class PlanMetaTests(unittest.TestCase):
     def test_counts_are_check_ids_or_given_and_a_refused_toolchain_is_one_run_type(self):
-        from lanefather import checks, results
-        self.assertEqual(checks.plan_meta(["a", "b", "a"], toolchain=None),
+        from lanefather import results, verify
+        self.assertEqual(verify.plan_meta(["a", "b", "a"], toolchain=None),
                          {"plan": results.plan_hash(["a", "b"]), "checks": "2"})
         # Whole suites without a plan module to count them leave the count out rather than count suites.
-        self.assertNotIn("checks", checks.plan_meta(["suite:lib", "suite:native"], toolchain=None))
-        self.assertEqual(checks.plan_meta(["step:install"], None, 0)["checks"], "0")
-        self.assertEqual(checks.plan_meta(["a"], toolchain={"refused": "rustup: no toolchain at /tmp/x"}),
-                         checks.plan_meta(["a"], toolchain={"refused": "rustup: timed out after 300 s"}))
+        self.assertNotIn("checks", verify.plan_meta(["suite:lib", "suite:native"], toolchain=None))
+        self.assertEqual(verify.plan_meta(["step:install"], None, 0)["checks"], "0")
+        self.assertEqual(verify.plan_meta(["a"], toolchain={"refused": "rustup: no toolchain at /tmp/x"}),
+                         verify.plan_meta(["a"], toolchain={"refused": "rustup: timed out after 300 s"}))
 
 
 if __name__ == "__main__":

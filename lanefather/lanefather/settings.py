@@ -161,11 +161,12 @@ def parse(knob: Knob, text: str, environment: bool = False) -> Any:
     return int(seconds) if seconds == int(seconds) else seconds
 
 
-def environment(knob: Knob) -> tuple[str, str] | None:
+def environment(knob: Knob, project: config.Config | None = None) -> tuple[str, str] | None:
     """The variable that sets the knob in this environment and its value; an empty variable is unset."""
+    cfg = project or config.DEFAULT
     for setting in knob.variables:
         try:
-            found = config.current().lookup(setting)
+            found = cfg.lookup(setting)
         except LaneError:
             # The project here is unreadable (or two names of the setting differ): the machine settings stay
             # readable, with the environment's own LANEFATHER_ name.
@@ -176,7 +177,7 @@ def environment(knob: Knob) -> tuple[str, str] | None:
     return None
 
 
-def row(knob: Knob, values: dict[str, Any], rev: str) -> dict[str, Any]:
+def row(knob: Knob, values: dict[str, Any], rev: str, project: config.Config | None = None) -> dict[str, Any]:
     found: dict[str, Any] = {"key": knob.key, "label": knob.label, "type": knob.type,
                              "value": values.get(knob.key, knob.default), "default": knob.default,
                              "source": "saved" if knob.key in values else "default", "writable": True,
@@ -187,7 +188,7 @@ def row(knob: Knob, values: dict[str, Any], rev: str) -> dict[str, Any]:
         found.update(min=1, max=MAX_WAIT, step=300, unit="s")
     if knob.type == "number":
         found.update(min=0, max=MAX_DISK_GB, step=5, unit="GB", zero="auto")
-    env = environment(knob)
+    env = environment(knob, project)
     if env:
         found.update(source=f"env {env[0]}", writable=False)
         try:
@@ -196,45 +197,45 @@ def row(knob: Knob, values: dict[str, Any], rev: str) -> dict[str, Any]:
             found.update(value=env[1], error=str(error))
     if knob.key == MIN_DISK:
         # What start applies here, and the derived floor auto stands for (fathers#163), for Godfather's row.
-        floor = floor_here()
+        floor = floor_here(project)
         found["description"] = f"{knob.description} auto: {floor.derivation()}."
         if not (floor.cap_unknown and floor.source == "derived"):  # no applied floor is claimed without its cap
             found["effective"] = gb(floor.gb)
     return found
 
 
-def floor_here() -> Any:
+def floor_here(project: config.Config | None = None) -> Any:
     from . import admission  # admission reads the slot and state modules; settings stays below them
-    return admission.floor_here()
+    return admission.floor_here(project)
 
 
 def gb(value: float) -> float | int:
     return int(value) if float(value).is_integer() else round(value, 1)
 
 
-def project_rows() -> list[dict[str, Any]]:
+def project_rows(project: config.Config | None = None) -> list[dict[str, Any]]:
     """The project's own slot priorities, read-only: they live in its tracked .lanefather.toml."""
-    project = config.current()
+    if project is None:
+        return []
     return [{"key": f"project.slots.priority.{key}", "label": f"{key} priority", "type": "choice", "value": priority,
              "default": None, "source": f"{config.CONFIG_NAME} [slots.priority] {key}", "writable": False,
              "description": f"{project.path}"} for key, priority in project.slot_priority]
 
 
-def document() -> dict[str, Any]:
+def document(project: config.Config | None = None) -> dict[str, Any]:
     raw = _raw()
     rev = revision(raw)
     values = saved(raw)
     sections: list[dict[str, Any]] = [
-        {"id": "review", "title": "Review", "settings": [row(BY_KEY["review.start"], values, rev),
-                                                         row(BY_KEY["rerun.wait"], values, rev)]},
+        {"id": "review", "title": "Review", "settings": [row(BY_KEY["review.start"], values, rev, project),
+                                                         row(BY_KEY["rerun.wait"], values, rev, project)]},
         {"id": "slots", "title": "Slot priorities",
-         "settings": [row(BY_KEY[f"slots.priority.{phase}"], values, rev) for phase in config.SLOT_PHASES]},
-        {"id": "host", "title": "Host", "settings": [row(BY_KEY[MIN_DISK], values, rev)]}]
+         "settings": [row(BY_KEY[f"slots.priority.{phase}"], values, rev, project) for phase in config.SLOT_PHASES]},
+        {"id": "host", "title": "Host", "settings": [row(BY_KEY[MIN_DISK], values, rev, project)]}]
     with contextlib.suppress(Exception):
-        rows = project_rows()
-        if rows:
-            name = config.current().project
-            sections.append({"id": "project", "title": f"Project {name}", "settings": rows})
+        rows = project_rows(project)
+        if rows and project is not None:
+            sections.append({"id": "project", "title": f"Project {project.project}", "settings": rows})
     reason = writable()
     return {"v": VERSION, "tool": "lanefather", "writable": reason is None, "reason": reason, "revision": rev,
             "status": [{"label": "settings", "value": str(path())},
@@ -243,7 +244,7 @@ def document() -> dict[str, Any]:
             "sections": sections}
 
 
-def preview(knob: Knob, new: Any) -> str | None:
+def preview(knob: Knob, new: Any, project: config.Config | None = None) -> str | None:
     if knob.key == "review.start":
         return ("land starts each lane's review in the background" if new == "auto"
                 else "land starts no review; run lanefather review ID")
@@ -251,7 +252,7 @@ def preview(knob: Knob, new: Any) -> str | None:
         return f"a rerun waits up to {new} s for its lease"
     if knob.key == MIN_DISK:
         if not new:
-            return f"start refuses a lane under the derived floor, now {floor_here().derivation()}"
+            return f"start refuses a lane under the derived floor, now {floor_here(project).derivation()}"
         return f"start refuses a lane while the free disk is under {new:g} GB (10^9)"
     phase = knob.key.removeprefix("slots.priority.")
     if new == "project":
@@ -259,13 +260,12 @@ def preview(knob: Knob, new: Any) -> str | None:
     return f"{phase} runs ask Slotfather at {new} in every project, unless the environment sets it"
 
 
-def knob_for(key: str | None) -> Knob:
+def knob_for(key: str | None, project: config.Config | None = None) -> Knob:
     knob = BY_KEY.get(key or "")
     if knob is None:
         raise SettingError(f"unknown setting {key!r}; the settings are {', '.join(BY_KEY)}")
-    if environment(knob):
-        env = environment(knob)
-        assert env is not None
+    env = environment(knob, project)
+    if env:
         raise SettingError(f"{knob.key} is set by {env[0]} in the environment; unset it to change the saved value",
                            READ_ONLY)
     return knob
@@ -343,18 +343,18 @@ def reply(found: dict[str, Any], as_json: bool, code: int = 0) -> int:
     return code
 
 
-def settings(args: Any) -> int:
+def settings(args: Any, project: config.Config | None = None) -> int:
     try:
         if args.action is None:
-            return reply(document(), args.json)
+            return reply(document(project), args.json)
         if args.action == "check":
-            knob = knob_for(args.key)
+            knob = knob_for(args.key, project)
             if args.value is None:
                 raise SettingError(f"settings check {knob.key}: give the value")
             new = parse(knob, args.value)
-            return reply({"v": VERSION, "ok": True, "error": None, "preview": preview(knob, new)}, args.json)
+            return reply({"v": VERSION, "ok": True, "error": None, "preview": preview(knob, new, project)}, args.json)
         if args.action == "set":
-            knob = knob_for(args.key)
+            knob = knob_for(args.key, project)
             if args.value is None:
                 raise SettingError(f"settings set {knob.key}: give the value")
             new = parse(knob, args.value)
@@ -362,12 +362,12 @@ def settings(args: Any) -> int:
         else:
             if args.all == bool(args.key):
                 raise SettingError("settings reset: give one KEY or --all")
-            keys = list(BY_KEY) if args.all else [knob_for(args.key).key]
+            keys = list(BY_KEY) if args.all else [knob_for(args.key, project).key]
             write(dict.fromkeys(keys), args.revision)
-        return reply({**document(), "ok": True, "error": None}, args.json)
+        return reply({**document(project), "ok": True, "error": None}, args.json)
     except SettingError as error:
         if error.code == CONFLICT:
-            return reply({**document(), "ok": False, "error": str(error)}, args.json, CONFLICT)
+            return reply({**document(project), "ok": False, "error": str(error)}, args.json, CONFLICT)
         return reply({"v": VERSION, "ok": False, "error": str(error), "preview": None}, args.json, error.code)
     except (OSError, LaneError) as error:
         # A file that cannot be written, or a project here that cannot be read: nothing was saved.

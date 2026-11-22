@@ -18,7 +18,7 @@ import re
 import subprocess
 from typing import Any, Literal, cast
 
-from . import lifecycle, review_record, state
+from . import config, lifecycle, review_record, state
 from . import results as result_store
 from .gitops import main_checkout
 from .state import Record
@@ -29,6 +29,9 @@ ReceiptKind = Literal["check", "receipt", "first", "post-merge", "recheck", "rev
 LANE_KINDS: tuple[str, ...] = ("receipt", "first", "post-merge", "recheck", "review")
 ALL_KINDS: tuple[str, ...] = ("check", "receipt", "first", "post-merge", "recheck", "review", "gate", "perf")
 UNCHECKED: Any = object()
+
+# Test files by name: a tests/ directory, test-*, test_*, *.test.*, *_test.*, *-test.*.
+TEST_PATH = re.compile(r"(?:^|/)(?:tests?|__tests__)/|(?:^|/)test[-_][^/]*$|[._-]tests?\.[^/]+$")
 
 _GITHUB_REMOTE = re.compile(
     r"(?:git@github\.com:|https://github\.com/|ssh://git@github\.com/)([\w.-]+/[\w.-]+?)(?:\.git)?/?"
@@ -141,14 +144,15 @@ def same_environment(
     *,
     worktree: Any = None,
     platform: str | None = None,
+    project: config.Config = config.DEFAULT,
 ) -> bool:
     """Whether `receipt` ran under `toolchain` and `platform` (this host's by default)."""
     if not receipt:
         return False
-    expected = platform or result_store.host_platform()
+    expected = platform or result_store.host_platform(project)
     return (
         receipt.get("toolchain") == toolchain
-        and result_store.receipt_platform(receipt, worktree) == expected
+        and result_store.receipt_platform(receipt, worktree, project=project) == expected
     )
 
 
@@ -288,6 +292,33 @@ def check_receipt_line(receipt: Receipt | None, record: Record) -> str:
     return line + (f"; landed with --force-reason: {forced[-1]}" if forced else "")
 
 
+def changed_red_tests(lane_plan: dict[str, Any], first: dict[str, Any]) -> list[dict[str, Any]]:
+    """Test files the lane changed against its base (the check's plan) whose check was red in its first receipt."""
+    raw_failed: Any = first.get("failed_checks") or []
+    failed: set[str] = {str(c) for c in cast(list[Any], raw_failed)} if isinstance(raw_failed, list) else set()
+    if not failed:
+        return []
+    raw_rows: Any = lane_plan.get("checks")
+    if raw_rows is None:
+        raw_paths: Any = lane_plan.get("paths") or []
+        paths = [str(p) for p in cast(list[Any], raw_paths)] if isinstance(raw_paths, list) else []
+        return [{"path": p, "check": None} for p in paths if TEST_PATH.search(p)]
+    rows = [cast(dict[str, Any], r) for r in cast(list[Any], raw_rows) if isinstance(r, dict)]
+    return [
+        {"path": str(p), "check": str(row["id"])}
+        for row in rows
+        if str(row.get("id")) in failed
+        for p in (cast(list[Any], row["paths"]) if isinstance(row.get("paths"), list) else [])
+        if TEST_PATH.search(str(p))
+    ]
+
+
+def changed_red_tests_line(tests: list[dict[str, Any]]) -> str:
+    named = ", ".join(f"{t['path']} ({t['check']})" if t["check"] else str(t["path"]) for t in tests)
+    return (f"lane: test files the lane changed whose check was red in its first receipt: {named}. The reviewer "
+            "confirms each change fixes the test rather than hides a regression (#568)")
+
+
 # ---------------------------------------------------------------------------
 # Check verdict (fathers#59 seam)
 # ---------------------------------------------------------------------------
@@ -345,6 +376,7 @@ def check_verdict(
     toolchain: Any = UNCHECKED,
     *,
     platform: str | None = None,
+    project: config.Config = config.DEFAULT,
 ) -> CheckVerdict:
     """Evaluate a lane check receipt against `tip_tree` and, when given, `toolchain` and `platform`."""
     if not receipt:
@@ -400,9 +432,9 @@ def check_verdict(
         )
     if toolchain is not UNCHECKED:
         worktree = record.get("worktree") if record else None
-        expected_platform = platform or result_store.host_platform()
+        expected_platform = platform or result_store.host_platform(project)
         toolchain_ok = receipt.get("toolchain") == toolchain
-        platform_ok = result_store.receipt_platform(receipt, worktree) == expected_platform
+        platform_ok = result_store.receipt_platform(receipt, worktree, project=project) == expected_platform
         if not (toolchain_ok and platform_ok):
             return StaleToolchain(
                 tree=tree_str,
@@ -421,12 +453,15 @@ def smoke_basis(
     worktree: Any = None,
     *,
     toolchain_name: str = "toolchain",
+    platform: str | None = None,
+    project: config.Config = config.DEFAULT,
 ) -> str | None:
     """Why `receipt` cannot stand for part of its merge's smoke (#640), or `None` when it can."""
     effective_record: Record | None = (
         {"worktree": worktree} if worktree is not None else record
     )
-    verdict = check_verdict(effective_record, receipt, str(landed["tree"]), toolchain)
+    verdict = check_verdict(effective_record, receipt, str(landed["tree"]), toolchain,
+                            platform=platform, project=project)
     if isinstance(verdict, NoReceipt) or receipt is None:
         return "the lane has no receipt"
     if isinstance(verdict, Red) or (isinstance(verdict, StaleTree) and verdict.status != "green"):

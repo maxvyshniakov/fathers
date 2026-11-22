@@ -374,8 +374,6 @@ class PreLandFixMarkAndStaleWorkerIntegrationTests(LaneCase):
 
         with mock.patch.dict(os.environ, self.env, clear=False):
             cfg = config.load(self.integration / ".lanefather.toml")
-            config.use(cfg)
-            self.addCleanup(config.use, None)
             store = state.Store(cfg, directory=self.state)
 
             other_pid = os.getppid()
@@ -405,7 +403,7 @@ class PreLandFixMarkAndStaleWorkerIntegrationTests(LaneCase):
                 mock.patch("lanefather.reviewer.Reviewer.run", side_effect=_supersede_during_run),
                 self.assertRaises(StaleReviewRunError),
             ):
-                review.perform_review("a", {"kind": "lane", "lane": "a"}, str(self.repo), base, tip, "subj")
+                review.perform_review(store, "a", {"kind": "lane", "lane": "a"}, str(self.repo), base, tip, "subj")
 
             # Newer worker's finished receipt stands untouched (not overwritten with `failed`).
             winner = ReviewRecord.load(store, "a")
@@ -430,7 +428,7 @@ class PreLandFixMarkAndStaleWorkerIntegrationTests(LaneCase):
                 self.assertRaises(StaleReviewRunError),
             ):
                 review.perform_review(
-                    "a", {"kind": "lane", "lane": "a"}, str(self.repo), base, tip, "subj", force=True
+                    store, "a", {"kind": "lane", "lane": "a"}, str(self.repo), base, tip, "subj", force=True
                 )
             still_running = state.read_json(store.receipt_path("a", "review")) or {}
             self.assertEqual((still_running.get("status"), still_running.get("pid")), ("running", other_pid))

@@ -78,20 +78,12 @@ def minimum_gb(project: config.Config | None = None) -> float:
     """The free-disk floor start applies in the project the command runs in (fathers#157), else to a project
     without lanes on this machine."""
     from . import admission  # admission reads the slot and state modules install.py does not import
-    if project is None:
-        return admission.floor_here().gb
-    try:
-        return admission.current_floor(project).gb
-    except LaneError:
-        return admission.current_floor(config.Config()).gb
+    return admission.floor_here(project).gb
 
 
-def policy_summary() -> dict[str, Any]:
+def policy_summary(project: config.Config | None = None) -> dict[str, Any]:
     """Effective project policy values reported by `capabilities --json` (fathers#131)."""
-    try:
-        cfg = config.current()
-    except LaneError:
-        cfg = config.Config()
+    cfg = project or config.DEFAULT
     return {
         'promoted': list(cfg.promoted),
         'worktrees_root': cfg.worktrees_root,
@@ -104,19 +96,19 @@ def policy_summary() -> dict[str, Any]:
     }
 
 
-def capabilities(args: argparse.Namespace) -> int:
+def capabilities(args: argparse.Namespace, project: config.Config | None = None) -> int:
     report = {'v': 1, 'tool': 'lanefather', 'version': __version__, 'state_schema': 1,
               'slotfather_query_versions': [1, 2], 'capabilities': CAPABILITIES, 'dashboard': dashboard(),
               # The free disk under which start refuses a lane here, in decimal GB (fathers#46, #157).
-              'host': {'min_disk_gb': round(minimum_gb(), 1)},
-              'policy': policy_summary(),
+              'host': {'min_disk_gb': round(minimum_gb(project), 1)},
+              'policy': policy_summary(project),
               'source': installed_identity(Path(__file__).resolve().parent.parent)}
     print(json.dumps(report, sort_keys=True) if args.json else json.dumps(report, indent=2, sort_keys=True))
     return 0
 
 
-def project_hook(args: argparse.Namespace) -> int:
-    project = Project(config.current())
+def project_hook(args: argparse.Namespace, cfg: config.Config) -> int:
+    project = Project(cfg)
     script = dict(project.config.project_hooks).get(args.name)
     if not script or project.config.path is None:
         raise LaneError(f"no configured project hook {args.name!r}; name it in [hooks.project]")

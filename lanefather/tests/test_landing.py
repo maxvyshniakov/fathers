@@ -72,7 +72,6 @@ class LandingTakeoverTests(unittest.TestCase):
     """A stale landing lock is taken over and the takeover logged; a live holder's never is (fathers#129)."""
 
     def setUp(self):
-        from lanefather import config
         self.tmp = pathlib.Path(tempfile.mkdtemp(prefix="lane-landing-"))
         self.addCleanup(shutil.rmtree, self.tmp, True)
         self.common = self.tmp / "common"
@@ -83,8 +82,6 @@ class LandingTakeoverTests(unittest.TestCase):
         patcher = unittest.mock.patch.dict(os.environ, {"LANEFATHER_STATE": str(self.state)})
         patcher.start()
         self.addCleanup(patcher.stop)
-        config.use(config.Config())
-        self.addCleanup(config.use, None)
 
     def held(self, pid: int, acquired: float) -> str:
         text = (f"token theirs\nholder other land (pid {pid})\nacquired {int(acquired)}\n"

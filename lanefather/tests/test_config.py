@@ -2,6 +2,7 @@
 process source (lanefather.procs) and the review role of models.toml (lanefather.review)."""
 from __future__ import annotations
 
+import ast
 import json
 import os
 import pathlib
@@ -11,9 +12,9 @@ import textwrap
 import unittest
 import unittest.mock
 
-from support import FIXTURE_CONFIG, ROOT  # noqa: F401  (ROOT puts the package on sys.path)
+from support import FIXTURE_CONFIG, ROOT
 
-from lanefather import checks, config, procs, promote, reviewer, slots
+from lanefather import config, procs, promote, reviewer, slots, state, verify
 from lanefather.errors import LaneError
 
 
@@ -21,7 +22,7 @@ class ConfigCase(unittest.TestCase):
     def setUp(self):
         self.tmp = pathlib.Path(tempfile.mkdtemp(prefix="lanefather-config-"))
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
-        self.addCleanup(config.use, None)
+        self.cfg = config.DEFAULT
         patcher = unittest.mock.patch.dict(os.environ, {k: v for k, v in os.environ.items()
                                                         if not k.startswith(("LANEFATHER_", "STRAYLIGHT_", "SLOTFATHER_"))
                                                         and k != "CLAUDE_CODE_SESSION_ID"},
@@ -32,8 +33,8 @@ class ConfigCase(unittest.TestCase):
     def use(self, text: str) -> config.Config:
         path = self.tmp / ".lanefather.toml"
         path.write_text(textwrap.dedent(text))
-        config.use(config.load(path))
-        return config.current()
+        self.cfg = config.load(path)
+        return self.cfg
 
 
 class ConfigTests(ConfigCase):
@@ -55,15 +56,14 @@ class ConfigTests(ConfigCase):
         self.assertEqual(current.install[0].lease, config.Lease("all", "batch", "682"))
 
     def test_a_project_without_the_file_gets_the_defaults(self):
-        config.use(config.load(None))
-        current = config.current()
+        current = config.load(None)
         self.assertEqual((current.command, current.verify, current.plan_module, current.install),
                          ("lanefather", "verify.sh", "", ()))
         self.assertEqual((current.promoted, current.worktrees_root, current.lane_targets, current.cache_partitions,
                           current.cache_depfiles, current.target_label, current.toolchain_name),
                          (("dev", "main"), ".claude/worktrees", (), "", ("debug/*.d", "release/*.d"),
                           "Cargo target", "Rust toolchain"))
-        self.assertEqual(config.prog(), "lanefather")
+        self.assertEqual(state.Store(current).prog, "lanefather")
 
     def test_project_policy_keys_override_defaults_and_reject_invalid_values(self):
         cfg = self.use("""\
@@ -182,58 +182,60 @@ class SlotPriorityTests(ConfigCase):
     PROJECT = '[slots.priority]\ndefault = "batch"\ngate = "normal"\n'
 
     def test_the_built_in_priorities_apply_when_nothing_sets_one(self):
-        self.use("")
-        self.assertEqual({phase: found["priority"] for phase, found in slots.priorities().items()},
+        cfg = self.use("")
+        self.assertEqual({phase: found["priority"] for phase, found in slots.priorities(cfg).items()},
                          {"check": "normal", "post-merge": "interactive", "gate": "interactive",
                           "rerun": "interactive", "perf": "batch"})
-        self.assertEqual({found["source"] for found in slots.priorities().values()}, {"built-in"})
+        self.assertEqual({found["source"] for found in slots.priorities(cfg).values()}, {"built-in"})
 
     def test_the_projects_default_applies_to_every_phase_it_does_not_name(self):
-        self.use('[slots.priority]\ndefault = "batch"\n')
-        self.assertEqual(slots.phase_priority("post-merge"), ("batch", ".lanefather.toml [slots.priority] default"))
+        cfg = self.use('[slots.priority]\ndefault = "batch"\n')
+        self.assertEqual(slots.phase_priority("post-merge", project=cfg),
+                         ("batch", ".lanefather.toml [slots.priority] default"))
 
     def test_the_projects_phase_key_applies_to_that_phase(self):
-        self.use('[slots.priority]\nrerun = "normal"\n')
-        self.assertEqual(slots.phase_priority("rerun"), ("normal", ".lanefather.toml [slots.priority] rerun"))
-        self.assertEqual(slots.phase_priority("gate"), ("interactive", "built-in"))
+        cfg = self.use('[slots.priority]\nrerun = "normal"\n')
+        self.assertEqual(slots.phase_priority("rerun", project=cfg),
+                         ("normal", ".lanefather.toml [slots.priority] rerun"))
+        self.assertEqual(slots.phase_priority("gate", project=cfg), ("interactive", "built-in"))
 
     def test_lanefather_priority_applies_to_every_phase(self):
-        self.use("")
+        cfg = self.use("")
         os.environ["LANEFATHER_PRIORITY"] = "batch"
-        self.assertEqual({phase: (found["priority"], found["source"]) for phase, found in slots.priorities().items()},
+        self.assertEqual({phase: (found["priority"], found["source"]) for phase, found in slots.priorities(cfg).items()},
                          {phase: ("batch", "LANEFATHER_PRIORITY") for phase in slots.PHASES})
 
     def test_a_phase_variable_applies_to_that_phase_only(self):
-        self.use("")
+        cfg = self.use("")
         os.environ.update(LANEFATHER_PRIORITY_GATE="batch", LANEFATHER_PRIORITY_POST_MERGE="normal")
-        self.assertEqual(slots.phase_priority("gate"), ("batch", "LANEFATHER_PRIORITY_GATE"))
-        self.assertEqual(slots.phase_priority("post-merge"), ("normal", "LANEFATHER_PRIORITY_POST_MERGE"))
-        self.assertEqual(slots.phase_priority("check"), ("normal", "built-in"))
+        self.assertEqual(slots.phase_priority("gate", project=cfg), ("batch", "LANEFATHER_PRIORITY_GATE"))
+        self.assertEqual(slots.phase_priority("post-merge", project=cfg), ("normal", "LANEFATHER_PRIORITY_POST_MERGE"))
+        self.assertEqual(slots.phase_priority("check", project=cfg), ("normal", "built-in"))
 
     def test_the_legacy_prefix_names_the_same_setting(self):
-        self.use('legacy_env_prefix = "STRAYLIGHT_LANE_"\n')
+        cfg = self.use('legacy_env_prefix = "STRAYLIGHT_LANE_"\n')
         os.environ["STRAYLIGHT_LANE_PRIORITY"] = "batch"
-        self.assertEqual(slots.phase_priority("check"), ("batch", "STRAYLIGHT_LANE_PRIORITY"))
+        self.assertEqual(slots.phase_priority("check", project=cfg), ("batch", "STRAYLIGHT_LANE_PRIORITY"))
 
     def test_precedence_is_phase_variable_variable_phase_key_default_built_in(self):
-        self.use(self.PROJECT)
+        cfg = self.use(self.PROJECT)
         os.environ.update(LANEFATHER_PRIORITY_GATE="interactive", LANEFATHER_PRIORITY="batch")
         steps: list[tuple[str, str]] = []
         for unset in ("LANEFATHER_PRIORITY_GATE", "LANEFATHER_PRIORITY", None):
-            steps.append(slots.phase_priority("gate"))
+            steps.append(slots.phase_priority("gate", project=cfg))
             if unset:
                 del os.environ[unset]
-        steps.append(slots.phase_priority("check"))
-        self.use("")
-        steps.append(slots.phase_priority("check"))
+        steps.append(slots.phase_priority("check", project=cfg))
+        cfg = self.use("")
+        steps.append(slots.phase_priority("check", project=cfg))
         self.assertEqual(steps, [("interactive", "LANEFATHER_PRIORITY_GATE"), ("batch", "LANEFATHER_PRIORITY"),
                                  ("normal", ".lanefather.toml [slots.priority] gate"),
                                  ("batch", ".lanefather.toml [slots.priority] default"), ("normal", "built-in")])
 
     def test_an_empty_variable_is_unset(self):
-        self.use(self.PROJECT)
+        cfg = self.use(self.PROJECT)
         os.environ.update(LANEFATHER_PRIORITY="", LANEFATHER_PRIORITY_GATE="")
-        self.assertEqual(slots.phase_priority("gate"), ("normal", ".lanefather.toml [slots.priority] gate"))
+        self.assertEqual(slots.phase_priority("gate", project=cfg), ("normal", ".lanefather.toml [slots.priority] gate"))
 
     def test_an_invalid_value_or_phase_is_a_clear_error(self):
         for text, message in (('[slots.priority]\ngate = "urgent"\n', r"gate = 'urgent' is not a Slotfather priority"),
@@ -243,26 +245,35 @@ class SlotPriorityTests(ConfigCase):
                               ('[slots]\nprio = {}\n', r"\[slots\] has unknown keys prio")):
             with self.subTest(text=text), self.assertRaisesRegex(LaneError, message):
                 self.use(text)
-        self.use("")
+        cfg = self.use("")
         os.environ["LANEFATHER_PRIORITY"] = "low"
         with self.assertRaisesRegex(LaneError, r"LANEFATHER_PRIORITY='low' is not a Slotfather priority; "
                                                "use interactive, normal, batch"):
-            slots.phase_priority("check")
+            slots.phase_priority("check", project=cfg)
         os.environ["LANEFATHER_PRIORITY"] = "batch"
         os.environ["LANEFATHER_PRIORITY_SMOKE"] = "batch"
         with self.assertRaisesRegex(LaneError, "LANEFATHER_PRIORITY_SMOKE names no phase"):
-            slots.phase_priority("check")
+            slots.phase_priority("check", project=cfg)
 
     def test_the_request_carries_the_priority_and_its_source(self):
-        self.use('[checks]\nslot_env = "STRAYLIGHT_SLOT"\n[slots.priority]\ndefault = "batch"\n')
-        environment = checks.verify_env("post-merge-a", "post-merge", lane="a")
+        cfg = self.use('[checks]\nslot_env = "STRAYLIGHT_SLOT"\n[slots.priority]\ndefault = "batch"\n')
+        environment = verify.verify_env("post-merge-a", "post-merge", project=cfg, lane="a")
         self.assertEqual(environment["STRAYLIGHT_SLOT_PRIORITY"], "batch")
         self.assertEqual(json.loads(environment["STRAYLIGHT_SLOT_META"]),
                          {"lane": "a", "phase": "post-merge",
                           "lanefather.priority": "batch (.lanefather.toml [slots.priority] default)"})
         os.environ["LANEFATHER_PRIORITY_RERUN"] = "normal"
+        store = state.Store(cfg, directory=self.tmp / "state")
         with unittest.mock.patch.object(slots, "command", return_value="/bin/slotfather"):
-            rerun = checks.Rerun(self.tmp, ["native-check"], "lane-a-alone", 2)
+            rerun = verify.Run(
+                self.tmp,
+                verify.Selection.checks(["native-check"]),
+                "lane-a-alone",
+                "rerun",
+                2,
+                store=store,
+                lease=verify.Lease(wait=30, kind="rerun"),
+            )
         self.assertEqual(rerun.argv[rerun.argv.index("--priority") + 1], "normal")
         self.assertIn("lanefather.priority=normal (LANEFATHER_PRIORITY_RERUN)", rerun.argv)
 
@@ -272,21 +283,23 @@ class SlotPriorityTests(ConfigCase):
                            'lease={slots=1,priority="interactive"}\n')
         build, pinned = current.install
         self.assertIsNone(build.lease and build.lease.priority)
-        self.assertEqual(promote.step_priority(build), ("normal", "built-in"))
+        self.assertEqual(promote.step_priority(build, current), ("normal", "built-in"))
         os.environ["LANEFATHER_PRIORITY_GATE"] = "batch"
-        self.assertEqual(promote.step_priority(build), ("batch", "LANEFATHER_PRIORITY_GATE"))
-        self.assertEqual(promote.step_priority(pinned), ("interactive", "step pinned lease"))
+        self.assertEqual(promote.step_priority(build, current), ("batch", "LANEFATHER_PRIORITY_GATE"))
+        self.assertEqual(promote.step_priority(pinned, current), ("interactive", "step pinned lease"))
 
 
 class SeamTests(ConfigCase):
     def test_verify_queues_itself_with_the_projects_slot_variables(self):
-        self.use('[checks]\nslot_env = "STRAYLIGHT_SLOT"\n')
-        environment = slots.queue_environment("lane-a", "interactive", ticket="42", lane="a", phase="check", empty="")
+        cfg = self.use('[checks]\nslot_env = "STRAYLIGHT_SLOT"\n')
+        environment = slots.queue_environment(
+            "lane-a", "interactive", ticket="42", project=cfg, lane="a", phase="check", empty=""
+        )
         self.assertEqual(environment, {"STRAYLIGHT_SLOT_LABEL": "lane-a", "STRAYLIGHT_SLOT_PRIORITY": "interactive", "STRAYLIGHT_SLOT_TICKET": "42",
                                        "STRAYLIGHT_SLOT_META": '{"lane": "a", "phase": "check"}',
                                        "STRAYLIGHT_SLOT_YIELDABLE": ""})
         with self.assertRaises(ValueError):
-            slots.queue_environment("lane-a", "urgent")
+            slots.queue_environment("lane-a", "urgent", project=cfg)
 
     def test_a_lease_wraps_the_command_once(self):
         self.use("")
@@ -306,9 +319,9 @@ class SeamTests(ConfigCase):
 
     def test_without_a_process_source_nothing_is_scanned(self):
         # With neither a project hook nor the machine-wide CLI, legacy done keeps its original behavior.
-        self.use("")
+        cfg = self.use("")
         with unittest.mock.patch.object(slots, "command", return_value=None):
-            source = procs.source()
+            source = procs.source(cfg)
         self.assertIsInstance(source, procs.NoSource)
         self.assertEqual(source.sort_for_removal(str(self.tmp)), ([], []))
 
@@ -317,11 +330,11 @@ class SeamTests(ConfigCase):
         (self.tmp / "tools" / "scan.py").write_text(
             "def sort_for_removal(root):\n    return [], ['held by the hook']\n\n"
             "def stop(processes, root):\n    return []\n")
-        self.use('[hooks]\nprocess_scan = "tools/scan.py"\n')
-        self.assertEqual(procs.source().sort_for_removal("/x"), ([], ["held by the hook"]))
+        cfg = self.use('[hooks]\nprocess_scan = "tools/scan.py"\n')
+        self.assertEqual(procs.source(cfg).sort_for_removal("/x"), ([], ["held by the hook"]))
 
     def test_the_review_models_come_from_the_review_role_of_models_toml(self):
-        self.use("")
+        cfg = self.use("")
         models = self.tmp / "models.toml"
         models.write_text(textwrap.dedent("""\
             schema = 1
@@ -339,15 +352,15 @@ class SeamTests(ConfigCase):
             ]
             """))
         os.environ["LANEFATHER_MODELS"] = str(models)
-        runner = reviewer.Reviewer(config.current())
+        runner = reviewer.Reviewer(cfg)
         self.assertEqual([(m.alias, m.id, m.effort, m.min_left, m.not_family) for m in runner.choices],
                          [("sol", "gpt-9-sol", "high", 30, True), ("opus", "claude-opus-9", "low", None, True),
                           ("opus", "claude-opus-9", "medium", None, False)])
         self.assertEqual((runner.effort, runner.models["opus"].effort), ("high", "low"))
         models.write_text("schema = 1\n")
-        self.assertEqual(reviewer.Reviewer(config.current()).choices, list(reviewer.DEFAULTS))
+        self.assertEqual(reviewer.Reviewer(cfg).choices, list(reviewer.DEFAULTS))
         os.environ["LANEFATHER_MODELS"] = str(self.tmp / "missing.toml")
-        self.assertEqual(reviewer.Reviewer(config.current()).choices, list(reviewer.DEFAULTS))
+        self.assertEqual(reviewer.Reviewer(cfg).choices, list(reviewer.DEFAULTS))
 
     def test_checks_min_slots_parses_and_rejects_invalid_entries(self):
         cfg = self.use('[checks.min_slots]\n"browser:*" = 2\nlib = 3\n')
@@ -356,6 +369,47 @@ class SeamTests(ConfigCase):
                     '[checks.min_slots]\n"browser:*" = true\n', '[checks.min_slots]\n"" = 2\n'):
             with self.subTest(bad=bad), self.assertRaises(LaneError):
                 self.use(bad)
+
+
+class AmbientConfigAndStateGuardTests(unittest.TestCase):
+    """Static architecture guard (fathers#234): zero ambient `config.current()` / `config.use()` / `config._current` /
+    `config.prog()`, zero module-level `state.*` (`state_dir`, `record_path`, `receipt_path`, `load`, `save`, `lanes`,
+    `locked`), and zero `journal.logs()` / `journal.log_path()` definitions or references across `lanefather/lanefather/`."""
+
+    def test_no_ambient_config_state_or_journal_helpers_across_package(self) -> None:
+        pkg_dir = ROOT / "lanefather"
+        forbidden_config = {"current", "use", "_current", "prog"}
+        forbidden_state = {"state_dir", "record_path", "receipt_path", "load", "save", "lanes", "locked"}
+        forbidden_journal = {"logs", "log_path"}
+        violations: list[str] = []
+
+        for name in forbidden_config:
+            if hasattr(config, name):
+                violations.append(f"config.{name} still exists on lanefather.config")
+        for name in forbidden_state:
+            if hasattr(state, name):
+                violations.append(f"state.{name} still exists at module level on lanefather.state")
+
+        for py_file in sorted(pkg_dir.glob("*.py")):
+            tree = ast.parse(py_file.read_text(encoding="utf-8"), filename=str(py_file))
+            for node in tree.body:
+                if isinstance(node, ast.FunctionDef):
+                    if py_file.name == "config.py" and node.name in forbidden_config:
+                        violations.append(f"config.py:{node.lineno} defines {node.name}")
+                    if py_file.name == "state.py" and node.name in forbidden_state:
+                        violations.append(f"state.py:{node.lineno} defines module-level {node.name}")
+                    if py_file.name == "journal.py" and node.name in forbidden_journal:
+                        violations.append(f"journal.py:{node.lineno} defines module-level {node.name}")
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
+                    if node.value.id == "config" and node.attr in forbidden_config:
+                        violations.append(f"{py_file.name}:{node.lineno} references config.{node.attr}")
+                    elif node.value.id == "state" and node.attr in forbidden_state:
+                        violations.append(f"{py_file.name}:{node.lineno} references state.{node.attr}")
+                    elif node.value.id == "journal" and node.attr in forbidden_journal:
+                        violations.append(f"{py_file.name}:{node.lineno} references journal.{node.attr}")
+
+        self.assertEqual(violations, [], "\n".join(violations))
 
 
 if __name__ == "__main__":

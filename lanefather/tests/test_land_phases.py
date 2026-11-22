@@ -10,6 +10,7 @@ import json
 import os
 import pathlib
 import threading
+from typing import Any
 import unittest
 from unittest import mock
 
@@ -26,25 +27,22 @@ class _KilledAfterMerge(RuntimeError):
 class LandPhasesTests(LaneCase):
     """Kill-after-merge recovery, legacy `--repair`, and lock-free `done` cleanup."""
 
-    def _in_process_context(self) -> None:
-        from lanefather import config
+    def _in_process_store(self) -> Any:
+        from lanefather import config, state
 
         env_patch = mock.patch.dict(os.environ, self.env)
         env_patch.start()
         self.addCleanup(env_patch.stop)
         cfg = config.load(self.repo / ".lanefather.toml")
-        config.use(cfg)
-        self.addCleanup(config.use, None)
+        return state.Store(cfg, directory=self.state)
 
     def test_kill_after_merge_recovery_finishes_without_second_merge(self) -> None:
-        from lanefather import config, land, lifecycle, state
+        from lanefather import land, lifecycle, state
 
         worktree = self.created("a", "lib/**")
         self.commit(worktree, {"lib/api.txt": "foo\nrecovered\n"})
         self.lane("check", "a")
-        self._in_process_context()
-
-        store = state.Store(config.current())
+        store = self._in_process_store()
         integration = self.record("a")["integration"]
         real_transition = lifecycle.transition
         head_before = self.git(integration, "rev-parse", "HEAD")
@@ -109,9 +107,7 @@ class LandPhasesTests(LaneCase):
         self.commit(worktree, {"lib/api.txt": "foo\nd\n"})
         self.lane("check", "d")
         self.lane("land", "d", "--keep")
-        self._in_process_context()
-
-        store = state.Store(config.current())
+        store = self._in_process_store()
         lock_path = (store.directory / ".state.lock").resolve()
 
         gh_entered = threading.Event()
@@ -183,14 +179,13 @@ class LandPhasesTests(LaneCase):
         self.assertEqual(self.record("d")["status"], "done")
 
     def test_done_crash_during_cleanup_resumes_on_rerun(self) -> None:
-        from lanefather import config, done, state, worktrees
+        from lanefather import done, worktrees
 
         worktree = self.created("d", "lib/**")
         self.commit(worktree, {"lib/api.txt": "foo\ncrash\n"})
         self.lane("check", "d")
         self.lane("land", "d", "--keep")
-        self._in_process_context()
-        store = state.Store(config.current())
+        store = self._in_process_store()
 
         with (mock.patch.object(worktrees, "remove_tree", side_effect=RuntimeError("simulated crash during rmtree")),
               self.assertRaises(RuntimeError)):
