@@ -15,7 +15,6 @@ import stat
 import struct
 import subprocess
 import sys
-import time
 from typing import Callable, NamedTuple
 
 
@@ -122,12 +121,9 @@ def start_seconds(pid: int) -> int | None:
 
 
 def start_text(seconds: int, padded_day: bool = False) -> str:
-    value = time.localtime(seconds)
-    weekdays = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
-    months = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
-    day = f"{value.tm_mday:2d}" if padded_day else str(value.tm_mday)
-    return (f"{weekdays[value.tm_wday]} {months[value.tm_mon - 1]} {day} "
-            f"{value.tm_hour:02}:{value.tm_min:02}:{value.tm_sec:02} {value.tm_year}")
+    """The local lstart ps prints for `seconds` (fathers_common.proc.render), its day space-padded with `padded_day`."""
+    from fathers_common.proc import render
+    return render(seconds, "local", padded=padded_day)
 
 
 def argument_processes(

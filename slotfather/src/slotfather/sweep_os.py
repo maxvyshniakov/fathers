@@ -11,6 +11,8 @@ import subprocess
 import time
 from typing import Any, Callable, Mapping, cast
 
+from fathers_common import proc as _proc
+
 from . import config as _config
 from . import lineage as _lineage
 from . import platform as _platform
@@ -36,16 +38,9 @@ def table() -> dict[int, Proc]:
 
 
 def parse_table(text: str) -> dict[int, Proc]:
-    found: dict[int, Proc] = {}
-    for line in text.splitlines():
-        parts = line.split(None, 10)
-        if len(parts) < 10 or not all(p.isdigit() for p in parts[:4]):
-            continue
-        start = " ".join(parts[5:10])
-        tty = "" if parts[4] in ("??", "?", "-") else parts[4]
-        found[int(parts[0])] = Proc(int(parts[0]), int(parts[1]), int(parts[2]), int(parts[3]), tty, start,
-                                    _platform.started_at(start), parts[10].strip() if len(parts) > 10 else "")
-    return found
+    """`ps -o SWEEP` lines (local lstart) as the sweep's Procs, through the shared reader (fathers_common.proc)."""
+    return {pid: Proc(pid, proc.ppid, proc.uid, proc.rss, proc.tty, proc.start, proc.started, proc.cmd)
+            for pid, proc in _proc.parse(text, _process.SWEEP, "local").items()}
 
 
 def working_dirs(procs: dict[int, Proc], uid: int) -> tuple[dict[int, Cwd], list[str]]:

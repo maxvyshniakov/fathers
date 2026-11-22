@@ -3,8 +3,9 @@ what the sweep's pass over the repositories' worktrees reads.
 
 A worktree is removed only by `git worktree remove` (never `rm -rf`, never `--force`), and only when every guard
 passes, all read again by `plan` right before the removal (the git listing, the repository's identity, the process
-table and the working directories). The guards follow Lanefather's gc (lanefather/gc.py). Lanefather is another
-package and common/ is not installed with a command, so the observations below are a copy (fathers#117):
+table and the working directories). The guards follow Lanefather's gc (lanefather/gc.py), which keeps its own
+remover until fathers#171 makes this the one. The process table and working directories come from the shared reader
+(`fathers_common.proc`, vendored with every command). The guards:
 
 - listed by `git worktree list` as a linked worktree of the repository whose common git dir the entry recorded (a
   repository replaced at the same path owns nothing of the old one);

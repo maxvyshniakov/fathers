@@ -1,8 +1,9 @@
 """Process observation: the one module that runs `ps` (fathers#38).
 
-It holds the process-table readers with their named column sets, the reader
-of SLOTFATHER_LEASE markers in other processes' environments, and lease_membership(), the one rule for which live
-lease a process belongs to (`status --json --pid`, `procs --json` and the sweep's protection).
+It holds the process-table readers with their named column sets (run and parsed by the shared reader,
+`fathers_common.proc`, fathers#171), the reader of SLOTFATHER_LEASE markers in other processes' environments, and
+lease_membership(), the one rule for which live lease a process belongs to (`status --json --pid`, `procs --json`
+and the sweep's protection).
 
 Failure policy (fathers#121): a ps that cannot run, times out or exits non-zero gives no table, and neither does an
 empty one; a table that reaps or protects leases must also list its caller. Such a table raises
@@ -19,6 +20,8 @@ import os
 import re
 import subprocess
 from typing import Any, Callable, Iterable, Mapping, NamedTuple, Sequence, cast
+
+from fathers_common import proc as _proc
 
 from . import config as _config
 from . import lineage as _lineage
@@ -40,7 +43,7 @@ ARGUMENTS = "pid=,command="  # the full arguments, without the environment
 MARKER = "SLOTFATHER_LEASE="
 
 
-class PsError(_config.ProcessTableError):
+class PsError(_config.ProcessTableError, _proc.ProcTableError):
     """ps gave no usable answer; `detail` is the cause without the "ps" prefix some callers word themselves."""
 
     def __init__(self, message: str, detail: str) -> None:
@@ -61,11 +64,10 @@ def run(arguments: Sequence[str], *, env: Mapping[str, str] | None = None, timeo
     """One ps run; raises PsError when ps cannot run or takes longer than `timeout` (default PS_TIMEOUT). Its exit
     status is the caller's to judge: `ps -p` exits 1 when some of the pids are gone."""
     try:
-        return subprocess.run([executable, *arguments], capture_output=True, text=True,
-                              env=None if env is None else dict(env),
-                              timeout=_config.PS_TIMEOUT if timeout is None else timeout)
-    except (OSError, subprocess.TimeoutExpired) as error:
-        raise PsError(f"ps: {error}", str(error)) from None
+        return _proc.run([executable, *arguments], env=env, timeout=_config.PS_TIMEOUT if timeout is None else timeout,
+                         runner=subprocess.run)  # this module's binding: tests replace it
+    except _proc.ProcTableError as error:
+        raise PsError(f"ps: {error.detail}", error.detail) from None
 
 
 def table(arguments: Sequence[str], *, caller: bool = True, env: Mapping[str, str] | None = None,
@@ -74,17 +76,10 @@ def table(arguments: Sequence[str], *, caller: bool = True, env: Mapping[str, st
     times out, a table without a row, and, with `caller`, a table that leaves out this process: a filtered or cut
     table would read the holders it hides as dead (fathers#121)."""
     result = run(arguments, env=env, timeout=timeout)
-    if result.returncode:
-        raise PsError(f"ps exited {result.returncode}: {result.stderr.strip()[:200]}", f"ps exited {result.returncode}")
-    rows = [line for line in result.stdout.splitlines() if (line.split() or [""])[0].isdigit()]
-    if caller:
-        me = str(os.getpid())
-        if not any(line.split(None, 1)[0] == me for line in rows):
-            message = f"ps listed {len(rows)} processes and not this one"
-            raise PsError(f"{message} ({os.getpid()})", message)
-    elif not rows:
-        raise PsError("ps listed no live processes", "ps listed no live processes")
-    return rows
+    try:
+        return _proc.table_rows(result, caller=caller)
+    except _proc.ProcTableError as error:
+        raise PsError(str(error), error.detail) from None
 
 
 # The machine's tables
@@ -146,10 +141,7 @@ class Process(NamedTuple):
     cmd: str
 
 
-class Cwd(NamedTuple):
-    """Observed working directory and whether the kernel/filesystem marks it removed (None: unknown)."""
-    path: str
-    removed: bool | None
+Cwd = _proc.Cwd  # observed working directory and whether the kernel/filesystem marks it removed (None: unknown)
 
 
 def identity_table(required: set[int] | None = None) -> dict[int, tuple[int, str]] | None:
@@ -176,22 +168,10 @@ def member_processes(
         except (OSError, ValueError, AttributeError):
             pass  # Unsupported native ABI or required identity: use the full ps adapter.
     rows = table(["-ax", "-ww", "-o", MEMBERS], caller=False, env=_platform.c_locale(), timeout=timeout)
-    found: dict[int, Process] = {}
-    for line in rows:
-        parts = line.split(None, 10)
-        if len(parts) < 10 or not all(value.isdigit() for value in parts[:3]):
-            continue
-        if parts[4].startswith("Z"):
-            continue
-        number, ppid, uid = map(int, parts[:3])
-        found[number] = Process(
-            number,
-            ppid,
-            uid,
-            "" if parts[3] in ("?", "??", "-") else parts[3],
-            " ".join(parts[5:10]),
-            parts[10] if len(parts) > 10 else "",
-        )
+    found: dict[int, Process] = {
+        number: Process(number, proc.ppid, proc.uid, proc.tty, proc.start, proc.cmd)
+        for number, proc in _proc.parse(rows, MEMBERS, "local").items() if not proc.zombie
+    }
     if not found:
         raise PsError("ps listed no live processes", "ps listed no live processes")
     return found
@@ -207,87 +187,20 @@ def working_dirs(
     strict: bool = False,
     use_proc: bool | None = None,
 ) -> tuple[dict[int, Cwd], set[int], list[str]]:
-    """Read working directories for `uid`'s processes via `/proc/PID/cwd` (Linux) or `lsof` (macOS).
+    """Read working directories for `uid`'s processes via `/proc/PID/cwd` (Linux) or `lsof` (macOS), through the
+    shared reader (fathers_common.proc.working_dirs, under SLOTFATHER_PROC's /proc).
 
     Returns `(cwds, foreign_mount_ns_pids, notes)`. With `strict=True` (used by `procs`), failures raise `PsError`
     and paths are normalized with `os.path.realpath`. With `strict=False` (used by `sweep_os`), failures return
     warning notes and removed-directory state is populated via `/proc` or `check_removed`.
     """
-    found: dict[int, Cwd] = {}
-    foreign: set[int] = set()
-    notes: list[str] = []
-    linux_mode = _platform.linux() if use_proc is None else use_proc
-    if linux_mode:
-        own: str | None = None
-        try:
-            own = os.readlink(_platform.proc_path("self", "ns", "mnt"))
-        except OSError as error:
-            if strict:
-                raise PsError(f"cannot read own mount namespace: {error}", str(error)) from None
-            own = None
-        for pid, proc_uid in uids_by_pid.items():
-            if proc_uid != uid:
-                continue
-            try:
-                if own is not None and os.readlink(_platform.proc_path(str(pid), "ns", "mnt")) != own:
-                    foreign.add(pid)
-                    continue
-                link = os.readlink(_platform.proc_path(str(pid), "cwd"))
-            except PermissionError:
-                if on_denied is not None:
-                    on_denied(pid)
-                if not strict and own is not None:
-                    foreign.add(pid)
-                continue
-            except OSError:
-                if not strict and own is not None:
-                    foreign.add(pid)  # its namespace cannot be read: do not judge it
-                continue
-            if link.endswith(" (deleted)"):
-                path = link[:-len(" (deleted)")]
-                found[pid] = Cwd(os.path.realpath(path) if strict else path, True)
-                continue
-            if strict:
-                found[pid] = Cwd(os.path.realpath(link), None)
-                continue
-            try:
-                removed: bool | None = os.stat(_platform.proc_path(str(pid), "cwd")).st_nlink == 0
-            except OSError:
-                removed = None
-            found[pid] = Cwd(link, removed)
-        if foreign and not strict:
-            notes.append(f"{len(foreign)} process(es) in another mount namespace (a container) left out")
-        return found, foreign, notes
-    flags = "-Fpin" if check_removed is not None else "-Fpn"
     try:
-        result = subprocess.run(
-            ["lsof", "-a", "-d", "cwd", "-u", str(uid), "-w", flags],
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
-    except (OSError, subprocess.TimeoutExpired) as error:
-        if strict:
-            raise PsError(f"cannot read working directories: {error}", str(error)) from None
-        return found, foreign, [f"working directories unknown (lsof: {error})"]
-    if strict and (result.returncode not in (0, 1) or not result.stdout.strip()):
-        raise PsError(f"lsof could not read working directories (exit {result.returncode})",
-                      f"lsof exited {result.returncode}")
-    current: int | None = None
-    inode: int | None = None
-    for line in result.stdout.splitlines():
-        tag, value = line[:1], line[1:]
-        if tag == "p":
-            current, inode = (int(value) if value.isdigit() else None), None
-        elif tag == "i":
-            inode = int(value) if value.isdigit() else None
-        elif tag == "n" and current is not None:
-            if strict:
-                if uids_by_pid.get(current) == uid:
-                    found[current] = Cwd(os.path.realpath(value), None)
-            else:
-                found[current] = Cwd(value, check_removed(value, inode) if check_removed is not None else None)
-    return found, foreign, notes
+        found = _proc.working_dirs(uids_by_pid, uid, timeout=timeout, check_removed=check_removed, on_denied=on_denied,
+                                   strict=strict, use_proc=_platform.linux() if use_proc is None else use_proc,
+                                   proc_root=str(_platform.proc_path()), runner=subprocess.run)
+    except _proc.ProcTableError as error:
+        raise PsError(str(error), error.detail) from None
+    return found.paths, found.foreign, found.notes
 
 
 def adopted_by_manager(ppid: int, parent_cmd: str | None, *, is_linux: bool | None = None) -> bool:
@@ -452,18 +365,12 @@ def helper_snapshot(timeout: float = 5) -> ProcessContext | None:
     starts_map: dict[int, float | None] = {}
     raw_starts: dict[int, str] = {}
     cmds: dict[int, str] = {}
-    for line in rows:
-        parts = line.split(None, 8)
-        if len(parts) < 8 or not (parts[0].isdigit() and parts[1].isdigit() and parts[2].isdigit()):
-            continue
-        pid, ppid, uid = int(parts[0]), int(parts[1]), int(parts[2])
-        start_str = " ".join(parts[3:8])
-        cmd = parts[8].strip() if len(parts) > 8 else ""
-        parents[pid] = ppid
-        uids[pid] = uid
-        raw_starts[pid] = start_str
-        starts_map[pid] = _platform.started_at(start_str)
-        cmds[pid] = cmd
+    for pid, proc in _proc.parse(rows, HELPER_SNAPSHOT, "local").items():
+        parents[pid] = proc.ppid
+        uids[pid] = proc.uid
+        raw_starts[pid] = proc.start
+        starts_map[pid] = proc.started
+        cmds[pid] = proc.cmd
     return ProcessContext(parents, uids, starts_map, raw_starts, cmds)
 
 
@@ -739,12 +646,7 @@ def starts(pids: Iterable[int], timeout: float | None = None, strict: bool = Fal
         return {}
     if strict and (result.returncode not in (0, 1) or result.returncode and result.stderr.strip()):
         raise PsError(f"ps exited {result.returncode}: {result.stderr.strip()[:200]}", f"ps exited {result.returncode}")
-    found: dict[int, tuple[str, bool]] = {}
-    for line in result.stdout.splitlines():
-        parts = line.split(None, 2)
-        if len(parts) == 3 and parts[0].isdigit():
-            found[int(parts[0])] = (" ".join(parts[2].split()), parts[1].startswith("Z"))
-    return found
+    return {pid: (proc.start, proc.zombie) for pid, proc in _proc.parse(result.stdout, STARTS, "local").items()}
 
 
 def running(identities: Mapping[int, str], timeout: float | None = 5) -> set[int]:

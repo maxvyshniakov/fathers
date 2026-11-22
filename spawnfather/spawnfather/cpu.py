@@ -16,12 +16,12 @@ launchd). A rule is a mapping pid -> owner, so another module adds one without c
 """
 from __future__ import annotations
 
-import calendar
 import json
 import os
 import subprocess
-import time
 from typing import Any, Dict, List, Mapping, NamedTuple, Optional, Sequence, Tuple
+
+from fathers_common import proc as _proc
 
 from . import procs as _procs
 from . import safety as _safety
@@ -78,16 +78,12 @@ def session_rule(table: _procs.Table, sessions: Optional[Sequence[Mapping[str, A
 
 
 def same_start(lstart: str, proc: _procs.Proc) -> bool:
-    """Whether Slotfather's start (ps lstart in its own local time) is this process's (read here in UTC)."""
-    try:
-        local = time.mktime(time.strptime(_procs.norm(lstart), _procs.LSTART))
-    except ValueError:
-        return False
+    """Whether Slotfather's start (ps lstart in its own local time; UTC from a client that ran in UTC) is this
+    process's (read here in UTC): within a second, either reading of a repeated local hour (fathers#171)."""
     started = proc.started
     if started is None:
         return False
-    utc = float(calendar.timegm(time.strptime(_procs.norm(lstart), _procs.LSTART)))
-    return abs(local - started) <= 1 or abs(utc - started) <= 1
+    return _proc.names(lstart, started, "local", slack=1) or _proc.names(lstart, started, "utc", slack=1)
 
 
 # Slotfather, through its CLI

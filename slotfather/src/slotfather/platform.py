@@ -95,14 +95,8 @@ def start_epoch(pid: int) -> int | None:
     cannot be read (another user's process on macOS, a /proc without the fields, other systems). macOS: libproc's
     start time; Linux: /proc/PID/stat's starttime after /proc/stat's btime."""
     if linux():
-        try:
-            ticks = int(proc_path(str(pid), "stat").read_text().rpartition(")")[2].split()[19])
-            for line in proc_path("stat").read_text().splitlines():
-                if line.startswith("btime "):
-                    return int(line.split()[1]) + ticks // os.sysconf("SC_CLK_TCK")
-        except (OSError, IndexError, ValueError):
-            return None
-        return None
+        from fathers_common.proc import proc_start_epoch
+        return proc_start_epoch(pid, str(proc_path()))
     if macos():
         from . import macos_process
         return macos_process.start_seconds(pid)
@@ -110,6 +104,7 @@ def start_epoch(pid: int) -> int | None:
 
 
 EPOCH_SLACK = 1  # seconds: Linux derives btime from the uptime and may round it either way between two reads
+# (fathers_common.proc.EPOCH_SLACK; repeated so that importing this module stays free of the shared reader)
 
 
 def same_holder(start: object, started: object, pid: int, observed: str) -> bool:
@@ -589,11 +584,11 @@ def cpu_seconds(text: str) -> float | None:
 
 
 def started_at(lstart: str) -> float | None:
-    """A `ps -o lstart` time (C locale) as epoch seconds, or None."""
-    try:
-        return time.mktime(time.strptime(" ".join(lstart.split()), "%a %b %d %H:%M:%S %Y"))
-    except ValueError:
-        return None
+    """A `ps -o lstart` time (C locale, local time) as epoch seconds, or None; in the hour the clocks repeat, the
+    earlier reading (fathers_common.proc: no `time.mktime`, whose choice there is the C library's)."""
+    from fathers_common.proc import parse_lstart
+    found = parse_lstart(lstart, "local")
+    return None if found is None else float(found)
 
 
 def proc_cpu_seconds(pid: int, text: str | None = None) -> float | None:

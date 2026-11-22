@@ -1,5 +1,6 @@
 """The process table: one `ps` read, identities (pid plus start time), trees and process groups.
 
+The reader is the shared one, `fathers_common.proc` (fathers#171); this module fixes Spawnfather's columns and clock.
 A process is known by its pid and its start time (`ps -o lstart` in the C locale and UTC, so every caller reads the
 same text whatever its TZ). A pid alone can be reused, and so can the pair: lstart has one-second granularity, so a
 pid that ends and is taken again within the same second keeps the same pair. The command is therefore the second
@@ -7,150 +8,44 @@ factor: every decision to signal a process checks the pid, the start time and th
 """
 from __future__ import annotations
 
-import calendar
-import os
-import subprocess
-import time
-from typing import Any, Callable, Dict, List, NamedTuple, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
+
+from fathers_common import proc as _proc
 
 from .defaults import PS_TIMEOUT
+
 C_LOCALE = {"LC_ALL": "C", "LANG": "C", "TZ": "UTC"}
-LSTART = "%a %b %d %H:%M:%S %Y"
+LSTART = _proc.LSTART
+FIELDS = "pid=,ppid=,pgid=,uid=,pcpu=,tty=,lstart=,command="
 
-
-class ProcError(Exception):
-    """A process table that could not be read: never taken for "nothing runs"."""
-
-
-class Proc(NamedTuple):
-    pid: int
-    ppid: int
-    pgid: int
-    uid: int
-    tty: str  # "" without a controlling terminal
-    start: str  # lstart in the C locale, spaces normalized
-    cmd: str
-    cpu: float = 0.0  # ps %cpu (100 = one core busy), as Table.read saw it
-
-    @property
-    def started(self) -> Optional[float]:
-        return started_at(self.start)
-
-    @property
-    def program(self) -> str:
-        return os.path.basename((self.cmd.split() or [""])[0])
-
-
-def norm(start: str) -> str:
-    return " ".join(str(start).split())
-
-
-def command_matches(now: str, seen: str) -> bool:
-    """Whether a command read now is the one seen before: the same command line, or the same program when a
-    process renamed its arguments."""
-    if now == seen:
-        return True
-    def first(text: str) -> str:
-        return os.path.basename((text.split() or [""])[0])
-    return bool(first(now)) and first(now) == first(seen)
+ProcError = _proc.ProcTableError
+Proc = _proc.Proc
+norm = _proc.norm
+command_matches = _proc.command_matches
 
 
 def started_at(lstart: str) -> Optional[float]:
     """Epoch seconds of a UTC lstart; None when it does not parse."""
-    try:
-        return float(calendar.timegm(time.strptime(norm(lstart), LSTART)))
-    except ValueError:
-        return None
+    found = _proc.parse_lstart(lstart, "utc")
+    return None if found is None else float(found)
 
 
 def run(argv: List[str], ok: Tuple[int, ...] = (0,)) -> str:
-    try:
-        result = subprocess.run(argv, capture_output=True, text=True, timeout=PS_TIMEOUT,
-                                env={**os.environ, **C_LOCALE})
-    except subprocess.TimeoutExpired:
-        raise ProcError(f"{argv[0]} did not answer in {PS_TIMEOUT:.0f} s") from None
-    except OSError as error:
-        raise ProcError(f"{argv[0]}: {error}") from None
-    if result.returncode not in ok:
-        raise ProcError(f"{' '.join(argv[:2])} exited {result.returncode}: {result.stderr.strip()[:200]}")
-    return result.stdout
-
-
-FIELDS = "pid=,ppid=,pgid=,uid=,pcpu=,tty=,lstart=,command="
+    """The output of `argv` in the C locale and UTC; ProcError when it cannot run, times out or exits outside `ok`."""
+    return _proc.run(argv, env=_proc.environment("utc"), timeout=PS_TIMEOUT, ok=ok).stdout
 
 
 def parse(text: str) -> Dict[int, Proc]:
     """`ps -o FIELDS` lines as Procs; a line that does not read is skipped."""
-    found: Dict[int, Proc] = {}
-    for line in text.splitlines():
-        parts = line.split(None, 11)
-        if len(parts) < 11 or not all(part.isdigit() for part in parts[:4]):
-            continue
-        try:
-            cpu = float(parts[4].replace(",", "."))
-        except ValueError:
-            continue
-        tty = "" if parts[5] in ("??", "?", "-") else parts[5]
-        found[int(parts[0])] = Proc(int(parts[0]), int(parts[1]), int(parts[2]), int(parts[3]), tty,
-                                    norm(" ".join(parts[6:11])), parts[11].strip() if len(parts) > 11 else "", cpu)
-    return found
+    return _proc.parse(text, FIELDS, "utc")
 
 
-class Table:
+class Table(_proc.Table):
     """Every process at one moment. Tests build one from Procs."""
-
-    def __init__(self, procs: Dict[int, Proc], moment: Optional[float] = None):
-        self.procs = procs
-        self.moment = time.time() if moment is None else moment
-        self.children: Dict[int, List[int]] = {}
-        for proc in procs.values():
-            self.children.setdefault(proc.ppid, []).append(proc.pid)
 
     @classmethod
     def read(cls) -> "Table":
-        found = parse(run(["ps", "-ax", "-ww", "-o", FIELDS]))
-        if not found:
-            raise ProcError("ps listed no process")
-        return cls(found)
-
-    def get(self, pid: Optional[int]) -> Optional[Proc]:
-        return self.procs.get(pid) if isinstance(pid, int) else None
-
-    def alive(self, pid: Optional[int], start: Optional[str]) -> bool:
-        """Whether this pid still runs the process that had this start time."""
-        proc = self.get(pid)
-        return proc is not None and bool(start) and proc.start == norm(start or "")
-
-    def ancestors(self, pid: int) -> List[int]:
-        chain: List[int] = []
-        here = self.procs[pid].ppid if pid in self.procs else 0
-        while here in self.procs and here not in chain and here > 1:
-            chain.append(here)
-            here = self.procs[here].ppid
-        return chain
-
-    def descendants(self, pid: int, prune: Optional[Callable[[Proc], bool]] = None) -> List[Proc]:
-        """Every process below pid; with `prune`, a process it accepts is left out together with its subtree."""
-        found: List[Proc] = []
-        seen = {pid}
-        stack = list(self.children.get(pid, ()))
-        while stack:
-            here = stack.pop()
-            if here in seen or here not in self.procs:
-                continue
-            seen.add(here)
-            if prune is not None and prune(self.procs[here]):
-                continue
-            found.append(self.procs[here])
-            stack.extend(self.children.get(here, ()))
-        return found
-
-    def group(self, pgid: int) -> List[Proc]:
-        return [proc for proc in self.procs.values() if proc.pgid == pgid]
-
-    def age(self, proc: Proc) -> Optional[float]:
-        started = proc.started
-        return None if started is None else max(0.0, self.moment - started)
+        return cls(_proc.read(FIELDS, clock="utc", timeout=PS_TIMEOUT).procs)
 
 
 def read_or_none() -> Optional[Table]:
@@ -164,20 +59,11 @@ def read_or_none() -> Optional[Table]:
 def identities(pids: List[int], command: bool = False) -> Dict[int, Any]:
     """pid -> start time (with `command`, pid -> (start time, command)) for those of `pids` that still run and are
     not zombies. ProcError when ps cannot be asked: an unreadable answer is never "they are gone"."""
-    if not pids:
-        return {}
-    fields = "pid=,stat=,lstart=" + (",command=" if command else "")
-    text = run(["ps", "-ww", "-o", fields, "-p", ",".join(str(pid) for pid in pids)], ok=(0, 1))
-    found: Dict[int, Any] = {}
-    for line in text.splitlines():
-        parts = line.split(None, 7 if command else 2)
-        if len(parts) < 3 or not parts[0].isdigit() or parts[1].startswith("Z"):
-            continue
-        if not command:
-            found[int(parts[0])] = norm(parts[2])
-        elif len(parts) >= 7:
-            found[int(parts[0])] = (norm(" ".join(parts[2:7])), parts[7].strip() if len(parts) > 7 else "")
-    return found
+    spec = "pid=,stat=,lstart=" + (",command=" if command else "")
+    found = _proc.identities(pids, spec, clock="utc", timeout=PS_TIMEOUT)
+    if not command:
+        return {pid: here.start for pid, here in found.items()}
+    return {pid: (here.start, here.cmd) for pid, here in found.items()}
 
 
 def working_dirs(uid: int) -> Dict[int, str]:
@@ -187,15 +73,7 @@ def working_dirs(uid: int) -> Dict[int, str]:
 
 def working_dirs_or_none(uid: int) -> Optional[Dict[int, str]]:
     """This user's processes' working directories (one lsof call); None when lsof cannot be asked or lists none."""
-    try:
-        text = run(["lsof", "-nP", "-a", "-u", str(uid), "-d", "cwd", "-Fpn"], ok=(0, 1))
-    except ProcError:
+    listed = _proc.working_dirs({}, uid, timeout=PS_TIMEOUT, use_proc=False)
+    if not listed.complete:
         return None
-    found: Dict[int, str] = {}
-    pid = None
-    for line in text.splitlines():
-        if line.startswith("p") and line[1:].isdigit():
-            pid = int(line[1:])
-        elif line.startswith("n") and pid is not None:
-            found[pid] = line[1:]
-    return found or None
+    return {pid: cwd.path for pid, cwd in listed.paths.items()} or None

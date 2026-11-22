@@ -21,7 +21,6 @@ then belongs to the session alone, and says so.
 """
 from __future__ import annotations
 
-import calendar
 import json
 import os
 from pathlib import Path
@@ -213,11 +212,9 @@ def registered_alive(record: Dict[str, Any], table: _procs.Table) -> bool:
     if proc is None or proc.started is None:
         return False
     if isinstance(record.get("procStart"), str):
-        try:
-            return abs(calendar.timegm(time.strptime(_procs.norm(record["procStart"]), _procs.LSTART))
-                       - proc.started) <= 1  # both UTC
-        except ValueError:
-            pass
+        recorded = _procs.started_at(record["procStart"])
+        if recorded is not None:
+            return abs(recorded - proc.started) <= 1  # both UTC
     if isinstance(record.get("startedAt"), (int, float)):
         return -2 <= record["startedAt"] / 1000 - proc.started <= 120
     return _safety.claude(proc.cmd)
