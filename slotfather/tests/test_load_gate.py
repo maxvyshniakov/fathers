@@ -79,6 +79,17 @@ class LoadWaitTests(unittest.TestCase):
         self.assertEqual(3, sf_board.dashboard_admission([], held, 4, 0, None, None, DEFAULTS, "normal", None))
         self.assertEqual(4, sf_board.dashboard_admission([], [], 4, 0, None, None, DEFAULTS, "normal", why),
                          "an idle machine starts its first request")
+        # fathers#211: load_block stays untangled from memory_block around warning_admits and idle-host waiters.
+        self.assertEqual(0, sf_board.dashboard_admission([], held, 4, 0, sf_schedule.WARNING_WAIT, None, DEFAULTS,
+                                                         "warning", why),
+                         "warning_admits never admits beside running leases while load_block holds")
+        self.assertEqual(0, sf_board.dashboard_admission([], held, 4, 0, None, None, DEFAULTS, "warning", why))
+        waiter = {"count": 1, "label": "waiting", "cmd": "work", "since": sf_config.now(), "state": "waiting"}
+        self.assertEqual(0, sf_board.dashboard_admission([waiter], [], 4, 0, None, None, DEFAULTS, "normal", why),
+                         "an earlier normal waiter consumes the idle-host exemption under load_block")
+        batch = dict(waiter, priority="batch")
+        self.assertEqual(4, sf_board.dashboard_admission([batch], [], 4, 0, None, None, DEFAULTS, "normal", why),
+                         "a generic normal probe ranks ahead of a batch waiter on an idle host under load_block")
 
 
 class GrantTests(SlotCase):

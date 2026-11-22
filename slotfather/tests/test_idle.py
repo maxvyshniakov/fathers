@@ -203,6 +203,12 @@ class AskTests(unittest.TestCase):
         tired = dict(lazy, yields=sf_config.YIELDS_MAX)
         self.assertEqual([], self.asks([waiter("next", 1, -60)], [tired, holder("busy", 1, -60)], [tired]))
 
+    def test_window_order_never_asks_an_idle_lease_to_yield(self) -> None:
+        """fathers#211: window order ignores rank pins, so idle_asks() must stay off in window order like yield_asks()."""
+        lazy = dict(holder("lazy", 1, -3600), yieldable=True)
+        self.settings["order"] = "window"
+        self.assertEqual([], self.asks([waiter("next", 1, -60)], [lazy, holder("busy", 1, -60)], [lazy]))
+
 
 class QueueTests(SlotCase):
     """Through real processes: the holder's record, status, and the ask a waiter's look writes."""

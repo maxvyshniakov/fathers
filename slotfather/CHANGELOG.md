@@ -202,6 +202,13 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 
 ### Fixed
 
+- Fixed scheduler, admission, and sweep edge cases: backfill head-drop now accounts for earlier grants (including
+  `-n MIN-MAX` range sizes) in the same look and refuses 0-second backfill past unknown earlier-queue slots;
+  `window` order refuses `slotfather ask-yield`, withdraws standing yield requests, and ignores stale yield markers
+  (including under `SLOTFATHER_QUEUE=window`); `status` matches `grant` for `-n MIN-MAX` requests under memory
+  pressure warning; dashboard admission keeps CPU load and memory pressure blocks distinct around `warning_admits`
+  and idle-machine grants; and `slotfather sweep` spares any stopping ancestor whose tree contains a spared child
+  (including under `--pid`) (fathers#211).
 - On macOS with a readable kernel memory-pressure level (`kern.memorystatus_vm_pressure_level >= 1`), `slotfather
   sweep` no longer reports a false `memory short: free swap ...` solely because the currently allocated
   `vm.swapusage` slice is below `swap_free_mb` or `swap_free_pct`, matching `platform.memory_level()`; Linux,

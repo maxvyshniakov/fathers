@@ -317,9 +317,11 @@ def plan(snap: Snapshot, settings: Mapping[str, Any], protected: Mapping[int, st
     enabled = set(settings["classes"])
     within = roots()
     session_dirs: set[str] | None = None
+    scope = {p for root in only for p in ([root, *snap.tree(root)] if root in snap.procs else [root])} \
+        if only is not None else None
     found: list[Item] = []
     for pid, proc in sorted(snap.procs.items()):
-        if only is not None and pid not in only:
+        if scope is not None and pid not in scope:
             continue
         if exempt(proc, snap):
             continue
@@ -402,6 +404,17 @@ def plan(snap: Snapshot, settings: Mapping[str, Any], protected: Mapping[int, st
                 item["action"] = "stop" if live else "would-stop"
         else:
             item["action"] = "report"
+    # A spared descendant in a stopping candidate's tree spares the ancestor too so stopping the tree never kills it.
+    spared = {item["pid"] for item in found if item["action"] == "spared"}
+    for item in found:
+        if item["action"] not in ("stop", "would-stop"):
+            continue
+        child = next((p for p in item["tree"] if p != item["pid"] and p in spared), None)
+        if child is not None:
+            item.update(action="spared",
+                        reason=f"{item['reason']}; a spared process (pid {child}) in its tree")
+    if only is not None:
+        found = [item for item in found if item["pid"] in only]
     # A candidate inside another that will be stopped goes with it; one inside another reported under a session is
     # in that one's tree.
     stopping = {item["pid"] for item in found if item["action"] in ("stop", "would-stop")}

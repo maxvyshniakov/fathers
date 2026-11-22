@@ -195,11 +195,18 @@ def unknown_end(entry: Entry, estimate: Estimate) -> bool:
     return estimate(entry) is None
 
 
+def _holds(entry: Entry, slots: int, granted_counts: dict[int, int] | None = None) -> int:
+    """Slots `entry` holds from `slots`, using its range grant size when already granted in this plan."""
+    if granted_counts is not None and id(entry) in granted_counts:
+        return granted_counts[id(entry)]
+    return _entry.holds(entry, slots)
+
+
 def blocking(count: int, held: list[Entry], have: int, slots: int, moment: float, estimate: Estimate,
-             fallback: float, overrun: float) -> list[Entry]:
+             fallback: float, overrun: float, granted_counts: dict[int, int] | None = None) -> list[Entry]:
     """The leases of `held` whose expected ends free_at() walks to free `count` slots from `have`, that end nobody
     knows (unknown_end()): what a head waiting for those slots is blocked by."""
-    ends = sorted(((expected_end(e, moment, estimate(e), fallback, overrun), _entry.holds(e, slots), n)
+    ends = sorted(((expected_end(e, moment, estimate(e), fallback, overrun), _holds(e, slots, granted_counts), n)
                    for n, e in enumerate(held)), key=lambda end: (end[0], end[1]))
     found: list[Entry] = []
     for _, size, n in ends:
@@ -219,11 +226,13 @@ def reserve(found: Plan, held: list[Entry], slots: int, used: int, moment: float
     is too)."""
     assert found.head is not None
     need: int = found.head["count"]
-    ends = [(expected_end(entry, moment, estimate(entry), fallback, overrun), _entry.holds(entry, slots))
+    ends = [(expected_end(entry, moment, estimate(entry), fallback, overrun),
+             _holds(entry, slots, found.granted_counts))
             for entry in held + found.grants]
     have, start = free_at(need, ends, slots - used, moment)
     found.start = start
-    found.blocked = blocking(need, held + found.grants, slots - used, slots, moment, estimate, fallback, overrun)
+    found.blocked = blocking(need, held + found.grants, slots - used, slots, moment, estimate, fallback, overrun,
+                             found.granted_counts)
     if have < need:  # slots held in an earlier queue, whose end is unknown: nothing passes
         found.start, found.known = moment, False
         return 0
@@ -234,7 +243,7 @@ def reserve(found: Plan, held: list[Entry], slots: int, used: int, moment: float
 
 
 def soonest_start(count: int, holding: list[Entry], slots: int, used: int, moment: float, estimate: Estimate,
-                  overrun: float) -> float | None:
+                  overrun: float, granted_counts: dict[int, int] | None = None) -> float | None:
     """When `count` slots are expected to be free if nothing more starts: by the expected ends of the leases in
     `holding`, a lease past its expected run running on for the overrun as reserve() counts it (#5). None when that
     is unknown: a lease whose run the history does not know (it may end any moment), or slots held in an earlier
@@ -244,7 +253,7 @@ def soonest_start(count: int, holding: list[Entry], slots: int, used: int, momen
         run = estimate(entry)
         if run is None:
             return None
-        ends.append((expected_end(entry, moment, run, run, overrun), _entry.holds(entry, slots)))
+        ends.append((expected_end(entry, moment, run, run, overrun), _holds(entry, slots, granted_counts)))
     have, start = free_at(count, ends, slots - used, moment)
     return start if have >= count else None
 
@@ -339,8 +348,8 @@ def plan(waiters: list[Entry], held: list[Entry], slots: int, moment: float, ord
                 continue
             if extra is None:
                 extra = promise()
-            if moment >= deadline:
-                continue  # the head has waited the limit: it holds back everyone behind it
+            if not found.known or moment >= deadline:
+                continue  # earlier-queue slots have unknown ends, or the head waited the limit: nothing passes
             run = estimate(entry)
             run = fallback if run is None else run
             if moment + run * safety <= min(bound, deadline):
@@ -390,7 +399,8 @@ def plan(waiters: list[Entry], held: list[Entry], slots: int, moment: float, ord
             found.head = entry
             gives_up = None if entry.get("granted") else _config.seconds(entry.get("until"))
             if gives_up is not None:
-                soonest = soonest_start(entry["count"], held + found.grants, slots, used, moment, estimate, overrun)
+                soonest = soonest_start(entry["count"], held + found.grants, slots, used, moment, estimate, overrun,
+                                        found.granted_counts)
                 if soonest is not None and soonest > gives_up:
                     # Its client gives up before the held leases are expected to free its slots: holding the
                     # others back would only leave slots idle until it leaves without running. Past its limit too
@@ -404,6 +414,8 @@ def plan(waiters: list[Entry], held: list[Entry], slots: int, moment: float, ord
             if timeout and promised is not None and moment - promised >= timeout:
                 trial = Plan()
                 trial.head = entry
+                trial.grants = list(found.grants)
+                trial.granted_counts = dict(found.granted_counts)
                 reserve(trial, held, slots, used, moment, estimate, fallback, overrun)
                 # Once it gave way, only the leases that blocked it then let it give way again: what was granted
                 # since (with an estimate, or by an older client) holds it back no more (fathers#160 review)
@@ -571,9 +583,9 @@ def idle_asks(waiters: list[Entry], held: list[Entry], idle: list[Entry], slots:
     in (`yieldable`), were asked fewer than YIELDS_MAX times, and whose slots would start a waiting request that would
     not start otherwise; that waiter is the one the request names. Nobody is asked while nobody waits, a lease that
     cannot yield is only marked, and nobody is ever stopped: the holder yields when its client gets round to it."""
-    if not waiters:
-        return []
     settings = settings or DEFAULTS
+    if not waiters or settings["order"] != "backfill":
+        return []
     holding = list(held)
     found: list[tuple[Entry, Entry]] = []
     for lease in idle:

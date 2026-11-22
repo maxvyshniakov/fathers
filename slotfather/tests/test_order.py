@@ -230,6 +230,15 @@ class BackfillTests(PlanCase):
         found = sf_schedule.plan([waiter("gate", 6, -700), waiter("short", 1, -10)], [], 6, M, None, runs(short=1), other=2,
                         settings=self.settings)
         self.assertEqual([], found.grants)
+        # fathers#211: a 0-second estimate must not pass either when found.known is False (nor via blocked-head p90).
+        zero = sf_schedule.plan([waiter("gate", 6, -700), waiter("instant", 1, -10)], [], 6, M, None, runs(instant=0.0),
+                                other=2, settings=self.settings)
+        self.assertEqual(([], False), (zero.grants, zero.known))
+        blocked_zero = sf_schedule.plan(
+            [dict(waiter("gate", 6, -700), reserved=M - 600), waiter("instant", 1, -10)],
+            [holder("unk", 1, -7200)], 6, M, None, runs(instant=0.0), other=2, settings=self.settings,
+            p90=runs(instant=0.0))
+        self.assertEqual(([], False), (blocked_zero.grants, blocked_zero.known))
 
     def test_a_new_request_gets_no_slots_behind_the_head_unless_its_run_is_known_to_be_short(self):
         waiters = [waiter("gate", 6, -700)]
