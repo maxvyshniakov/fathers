@@ -77,6 +77,32 @@ class GateTests(unittest.TestCase):
         self.assertTrue(res.started[0].pressed)
         self.assertEqual([("two", WARNING), ("second", WARNING)], [(e["label"], b.reason) for e, b in res.gated])
 
+    def test_warning_clamps_range_request_with_min_1_and_refuses_min_above_1(self) -> None:
+        """fathers#228: under memory warning, -n 1-MAX clamps to 1 slot and consumes the warning allowance,
+        while -n 2-MAX stays gated and does not consume the allowance; idle hosts keep the full range grant."""
+        held = [h("r", 1)]
+        ranged_1 = w("ranged-1", 1, min_count=1, max_count=3)
+        lone = w("lone", 1)
+        res = self.outcome([ranged_1, lone], held, 6, ("warning", "w"))
+        self.assertEqual([("ranged-1", 1, True)], [(s.entry["label"], s.count, s.pressed) for s in res.started])
+        self.assertEqual([("lone", WARNING)], [(e["label"], b.reason) for e, b in res.gated])
+
+        # -n 2-3 (min_count > 1) cannot clamp to 1, so lone behind it starts instead.
+        ranged_2 = w("ranged-2", 2, min_count=2, max_count=3)
+        res2 = self.outcome([ranged_2, lone], held, 6, ("warning", "w"))
+        self.assertEqual([("lone", 1, True)], [(s.entry["label"], s.count, s.pressed) for s in res2.started])
+        self.assertEqual([("ranged-2", WARNING)], [(e["label"], b.reason) for e, b in res2.gated])
+
+        # Idle machine still grants the full range count on its first request under warning.
+        idle_res = self.outcome([ranged_1], [], 4, ("warning", "w"))
+        self.assertEqual([("ranged-1", 3, True)], [(s.entry["label"], s.count, s.pressed) for s in idle_res.started])
+        self.assertEqual([], idle_res.gated)
+
+        # Pressed lease already running blocks -n 1-3 too.
+        pressed_res = self.outcome([ranged_1], [h("r", 1, **{sf_entry.PRESSED: True})], 4, ("warning", "w"))
+        self.assertEqual([], pressed_res.started)
+        self.assertEqual([("ranged-1", WARNING)], [(e["label"], b.reason) for e, b in pressed_res.gated])
+
     def test_warning_holds_every_grant_while_a_pressed_lease_runs(self) -> None:
         held = [h("r", 1, **{sf_entry.PRESSED: True})]
         warn = self.outcome([w("a", 1)], held, 4, ("warning", "w"))
@@ -174,13 +200,17 @@ class DashboardAdmissionTests(unittest.TestCase):
         self.assertEqual(0, sf_schedule.Admission([], held, 4, M, settings={**DEFAULTS, "warning_admits": 0.0},
                                                   host=warn).dashboard_room().admission)
         self.assertEqual(3, sf_schedule.Admission([], held, 4, M, settings=DEFAULTS).dashboard_room().admission)
-        # fathers#211: under warning, an earlier 1-slot waiter consumes the warning allowance; a refused 2-slot one
-        # or lower-priority batch waiter does not.
+        # fathers#211 / fathers#228: under warning, an earlier 1-slot or -n 1-MAX waiter consumes the warning
+        # allowance; a refused 2-slot, -n 2-MAX, or lower-priority batch waiter does not.
         one = w("one", 1)
         two = w("two", 2)
+        ranged_1 = w("ranged-1", 1, min_count=1, max_count=2)
+        ranged_2 = w("ranged-2", 2, min_count=2, max_count=3)
         batch = w("low", 1, priority="batch")
         self.assertEqual(0, sf_schedule.Admission([one], held, 4, M, settings=DEFAULTS, host=warn).dashboard_room().admission)
+        self.assertEqual(0, sf_schedule.Admission([ranged_1], held, 4, M, settings=DEFAULTS, host=warn).dashboard_room().admission)
         self.assertEqual(1, sf_schedule.Admission([two], held, 4, M, settings=DEFAULTS, host=warn).dashboard_room().admission)
+        self.assertEqual(1, sf_schedule.Admission([ranged_2], held, 6, M, settings=DEFAULTS, host=warn).dashboard_room().admission)
         self.assertEqual(1, sf_schedule.Admission([batch], held, 4, M, settings=DEFAULTS, host=warn).dashboard_room().admission)
 
 
@@ -257,8 +287,9 @@ class GrantTests(SlotCase):
                          "a 1-slot request behind a refused larger one starts under warning")
 
     def test_expected_matches_grant_for_range_requests_under_warning(self) -> None:
-        """fathers#211: query.expected() routes granted_counts through Admission's resource gate, so a -n 1-2 request
-        planned for 2 free slots under warning reports memory_wait and does not falsely consume the allowance."""
+        """fathers#211 / fathers#228: under warning, a -n 1-2 range request clamps to 1 slot (consuming the warning
+        allowance so a 1-slot waiter behind it reports memory_wait), matching across status_json() and grant(),
+        while a -n 2-3 range request (min_count > 1) reports memory_wait and does not consume the allowance."""
         self.entry("running", 1, "held")
         ranged = self.entry("ranged", 1, min_count=1, max_count=2)
         lone = self.entry("lone", 1)
@@ -266,10 +297,30 @@ class GrantTests(SlotCase):
         with mock.patch.dict(os.environ, self.env, clear=True):
             snap: dict[str, Any] = cast(Any, sf_query).status_json(self.state)
         by_label = {e["label"]: e for e in snap["entries"]}
-        self.assertEqual((WARNING, None), (by_label["ranged"]["memory_wait"], by_label["ranged"]["est_start"]))
-        self.assertIsNone(by_label["lone"]["memory_wait"])
+        self.assertIsNone(by_label["ranged"]["memory_wait"])
+        self.assertIsNotNone(by_label["ranged"]["est_start"])
+        self.assertEqual((WARNING, None), (by_label["lone"]["memory_wait"], by_label["lone"]["est_start"]))
         self.assertEqual(WARNING, self.grant("8000 2"))
-        self.assertEqual(("waiting", "held"), (self.state_of(ranged), self.state_of(lone)))
+        self.assertEqual(("held", "waiting"), (self.state_of(ranged), self.state_of(lone)))
+        ranged_entry = json.loads(ranged.read_text())
+        self.assertEqual(1, ranged_entry["count"])
+        self.assertTrue(ranged_entry[sf_entry.PRESSED])
+
+        # Clean up and verify -n 2-3 (min_count > 1) stays gated under warning and lets lone start on a 5-slot queue.
+        for path in self.queue.iterdir():
+            path.unlink()
+        self.assertEqual(0, self.tool("slots", "5").returncode)
+        self.entry("running", 1, "held")
+        ranged2 = self.entry("ranged2", 2, min_count=2, max_count=3)
+        lone2 = self.entry("lone2", 1)
+        with mock.patch.dict(os.environ, self.env, clear=True):
+            snap2: dict[str, Any] = cast(Any, sf_query).status_json(self.state)
+        self.assertEqual(5, snap2["slots"])
+        by_label2 = {e["label"]: e for e in snap2["entries"]}
+        self.assertEqual((WARNING, None), (by_label2["ranged2"]["memory_wait"], by_label2["ranged2"]["est_start"]))
+        self.assertIsNone(by_label2["lone2"]["memory_wait"])
+        self.assertEqual(WARNING, self.grant("8000 2"))
+        self.assertEqual(("waiting", "held"), (self.state_of(ranged2), self.state_of(lone2)))
 
     def test_critical_and_low_swap_stop_every_request(self):
         for memory in ("8000 4", "100 1", "100 2"):

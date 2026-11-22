@@ -74,17 +74,17 @@ Labelled = list[tuple[_process.Lease, str]]
 
 
 def leases(directory: Path) -> tuple[dict[int, int], Labelled]:
-    """The live leases, each with its label, of the queue (reaped as `status` does) and the earlier queues, and the
-    process table they were judged on (pid -> ppid). That table is read under the queue lock, where the reap needs it,
-    not the snapshot's, which is read without it. A table ps could not give raises (fathers#121): this sweep stops
-    nothing."""
+    """The live leases, each with its label, of the queue (reaped as `status` does), live unknown entries of newer
+    clients (`look.reserved`), and the earlier queues, and the process table they were judged on (pid -> ppid). That
+    table is read under the queue lock, where the reap needs it, not the snapshot's, which is read without it. A
+    table ps could not give raises (fathers#121): this sweep stops nothing."""
     look = _query.look(directory, log=True)  # the one look every reader takes (fathers#36)
     found: Labelled = [(_process.Lease(str(path), entry.get("pid"), since=_process.lease_started_epoch(entry)),
                         str(entry.get("label") or path.stem))
                        for path, entry in look.found]
     found += [(_process.Lease(str(path), entry.get("pid"), since=_process.lease_started_epoch(entry)),
                str(entry.get("label") or path.stem))
-              for path, entry, _ in look.legacy]
+              for path, entry, _ in (*look.legacy, *look.reserved)]
     return _lineage.parents_of(look.table), found
 
 

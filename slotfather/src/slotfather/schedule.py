@@ -356,6 +356,8 @@ def plan(waiters: list[Entry], held: list[Entry], slots: int, moment: float, ord
             if not found.known or moment >= deadline:
                 continue  # earlier-queue slots have unknown ends, or the head waited the limit: nothing passes
             run = estimate(entry)
+            if found.dropped and run is None:
+                continue  # a head gave way: unknown-run requests wait behind it even under a second head (fathers#228)
             run = fallback if run is None else run
             if moment + run * safety <= min(bound, deadline):
                 take = _grant_size(entry, free, slots)  # ends before the head's reserved start
@@ -760,14 +762,16 @@ def _gate(
     *,
     memory_estimate: Estimate | None = None,
     granted_counts: dict[int, int] | None = None,
-) -> list[tuple[Entry, GateBlock | None]]:
+) -> list[tuple[Entry, int, GateBlock | None]]:
     """Which of plan()'s `grants` memory, expected-peak budget and CPU load let start now beside `held` (`used` slots
-    held in all), in their order: (entry, None) starts, (entry, GateBlock) waits. Normal memory starts them all unless
-    expected peak memory exceeds `memory_share` of `host.ram_mb` (fathers#9). While memory is short nothing starts
-    beside a running lease. Under warning, with `warning_admits` on, a 1-slot request starts when no running lease was
-    granted while memory was not normal (entry.PRESSED), so one such lease runs at a time; others wait. While
-    sustained CPU load holds grants (_load_wait(), fathers#184) nothing starts beside a running lease either. An idle
-    machine (nothing used) always starts its first request, and checks budget/load/memory on any 2nd+ grant."""
+    held in all), in their order: (entry, grant_count, None) starts (clamping a `-n 1-MAX` range grant to 1 under
+    warning), (entry, grant_count, GateBlock) waits. Normal memory starts them all unless expected peak memory exceeds
+    `memory_share` of `host.ram_mb` (fathers#9). While memory is short nothing starts beside a running lease. Under
+    warning, with `warning_admits` on, a 1-slot request (or a `-n 1-MAX` range request, clamped to 1 slot) starts
+    when no running lease was granted while memory was not normal (entry.PRESSED), so one such lease runs at a time;
+    others wait. While sustained CPU load holds grants (_load_wait(), fathers#184) nothing starts beside a running
+    lease either. An idle machine (nothing used) always starts its first request, and checks budget/load/memory on
+    any 2nd+ grant."""
     if not grants:
         return []
     kind, why = host.memory
@@ -790,15 +794,23 @@ def _gate(
     load_ready = False
     load_why: str | None = None
     admitted: list[Entry] = []
-    found: list[tuple[Entry, GateBlock | None]] = []
+    found: list[tuple[Entry, int, GateBlock | None]] = []
     for entry in grants:
         grant_count = (granted_counts or {}).get(id(entry), int(entry["count"]))
         block: GateBlock | None = None
         if used and kind != "normal":
             if not allowance:
                 block = GateBlock("memory", why or WARNING_WAIT)
-            elif grant_count != 1 or entry.get("all") or pressed:
+            elif entry.get("all") or pressed:
                 block = GateBlock("memory", WARNING_WAIT)
+            elif grant_count != 1:
+                min_count = entry.get("min_count")
+                base = min_count if type(min_count) is int else int(entry["count"])
+                upper = entry.get("max_count")
+                if base == 1 and int(entry["count"]) == 1 and type(upper) is int and upper > 1:
+                    grant_count = 1
+                else:
+                    block = GateBlock("memory", WARNING_WAIT)
         need_mb: float | None = None
         if block is None and used and share > 0:
             if not budget_ready:
@@ -823,7 +835,7 @@ def _gate(
             if budget_ready and ram_mb is not None and ram_mb > 0 and need_mb is not None:
                 held_mb += need_mb
             pressed = pressed or kind != "normal"
-        found.append((entry, block))
+        found.append((entry, grant_count, block))
     return found
 
 
@@ -872,7 +884,11 @@ def forecast(waiters: list[Entry], held: list[Entry], slots: int, moment: float,
         for entry in step.grants:
             found[id(originals[id(entry)])] = at
             queue = [e for e in queue if e is not entry]
-            started = _entry.trial_held(entry, time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(at)))
+            started = _entry.trial_held(
+                entry,
+                time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(at)),
+                count=step.granted_count(entry),
+            )
             run = estimate(entry)
             ends[id(started)] = at + (fallback if run is None else run)
             running.append(started)
@@ -1049,24 +1065,15 @@ class Admission:
         gated: list[tuple[Entry, GateBlock]] = []
         if found.grants:
             gate_settings = self._shared_settings if gate_by_shared else self._settings
-            checked = _gate(
-                found.grants,
-                self._held,
-                self._used,
-                self._slots,
-                self._host,
-                gate_settings,
-                memory_estimate=self._memory_estimate,
-                granted_counts=found.granted_counts,
-            )
+            found, keeper, checked = self._gate_with_clamp(found, keeper, gate_settings, reserve_head=False)
             pressed = self._host.memory[0] != "normal"
-            for copy, block in checked:
+            for copy, count, block in checked:
                 orig = self._original(copy)
                 if block is None:
                     started.append(
                         StartedGrant(
                             orig,
-                            found.granted_count(copy),
+                            count,
                             effective_priority(copy, self._settings, self._moment),
                             pressed,
                         )
@@ -1077,6 +1084,101 @@ class Admission:
         mapped_plan = self._remap_plan(found)
         mapped_keeper = mapped_plan if keeper is found else self._remap_plan(keeper)
         return GrantOutcome(mapped_plan, mapped_keeper, started, gated, reason)
+
+    def _gate_with_clamp(
+        self,
+        found: Plan,
+        keeper: Plan,
+        gate_settings: dict[str, Any],
+        *,
+        reserve_head: bool,
+    ) -> tuple[Plan, Plan, list[tuple[Entry, int, GateBlock | None]]]:
+        """Run `_gate` and, if any `-n 1-MAX` grant clamped down to 1 under warning, re-plan with clamped bounds so
+        `grants`, `granted_counts`, `head`, `reserved`, `gated`, and `reason` stay consistent when `MAX >= free`."""
+        checked = _gate(
+            found.grants,
+            self._held,
+            self._used,
+            self._slots,
+            self._host,
+            gate_settings,
+            memory_estimate=self._memory_estimate,
+            granted_counts=found.granted_counts,
+        )
+        clamped = {
+            id(copy): count
+            for copy, count, block in checked
+            if block is None and count < found.granted_count(copy)
+        }
+        if not clamped:
+            return found, keeper, checked
+        clamped_waiters: list[Entry] = []
+        back: dict[int, Entry] = {}
+        for copy in self._waiters:
+            if id(copy) in clamped:
+                adj = dict(copy)
+                adj["count"] = clamped[id(copy)]
+                adj["max_count"] = clamped[id(copy)]
+            else:
+                adj = dict(copy)
+            back[id(adj)] = copy
+            clamped_waiters.append(adj)
+
+        def remap_to_waiters(p: Plan) -> Plan:
+            mapped = Plan()
+            mapped.grants = [back[id(e)] for e in p.grants]
+            mapped.granted_counts = {id(back[eid]): cnt for eid, cnt in p.granted_counts.items()}
+            mapped.reason = p.reason
+            mapped.head = back[id(p.head)] if p.head is not None else None
+            mapped.start = p.start
+            mapped.reserved = p.reserved
+            mapped.blocked = list(p.blocked)
+            mapped.dropped = [(back[id(e)], list(blockers)) for e, blockers in p.dropped]
+            mapped.known = p.known
+            return mapped
+
+        replanned = plan(
+            clamped_waiters,
+            self._held,
+            self._slots,
+            self._moment,
+            estimate=self._estimate,
+            other=self._other,
+            reserve_head=reserve_head,
+            settings=self._settings,
+            window=self._window,
+            p90=self._p90,
+        )
+        replanned_keeper = (
+            replanned
+            if keeper is found
+            else shared_plan(
+                replanned,
+                clamped_waiters,
+                self._held,
+                self._slots,
+                self._moment,
+                self._estimate,
+                self._other,
+                self._settings,
+                self._shared_settings,
+                self._window,
+                self._p90,
+            )
+        )
+        mapped_found = remap_to_waiters(replanned)
+        mapped_keeper = mapped_found if replanned_keeper is replanned else remap_to_waiters(replanned_keeper)
+        rechecked = _gate(
+            mapped_found.grants,
+            self._held,
+            self._used,
+            self._slots,
+            self._host,
+            gate_settings,
+            memory_estimate=self._memory_estimate,
+            granted_counts=mapped_found.granted_counts,
+        )
+        return mapped_found, mapped_keeper, rechecked
 
     def forecast(self) -> dict[int, dict[str, Any]]:
         """Expected outlook for each waiter keyed by id(original waiter), gating immediate grants by shared_settings."""
@@ -1101,20 +1203,11 @@ class Admission:
             else {}
         )
         found = self._plan_with_head()
-        blocks = {
-            id(entry): block
-            for entry, block in _gate(
-                found.grants,
-                self._held,
-                self._used,
-                self._slots,
-                self._host,
-                self._shared_settings,
-                memory_estimate=self._memory_estimate,
-                granted_counts=found.granted_counts,
-            )
-            if block is not None
-        }
+        if found.grants:
+            found, _, checked = self._gate_with_clamp(found, found, self._shared_settings, reserve_head=True)
+        else:
+            checked = []
+        blocks = {id(entry): block for entry, _count, block in checked if block is not None}
         warn = float(self._settings.get("warn_wait") or 0)
         idle = max(0, self._slots - self._used - sum(_holds(e, self._slots, found.granted_counts) for e in found.grants))
         stalled = bool(found.blocked) and found.reserved is not None and self._moment >= found.reserved
@@ -1223,7 +1316,7 @@ class Admission:
                 memory_estimate=self._memory_estimate,
                 granted_counts=found.granted_counts,
             )
-            if any(entry is probe and block is None for entry, block in checked):
+            if any(entry is probe and block is None for entry, _count, block in checked):
                 return count
         return 0
 

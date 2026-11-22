@@ -748,9 +748,11 @@ def trial_yielded(entry: Mapping[str, Any], rank: float | None) -> Record:
     return dict(entry, state=WAITING, rank=rank)
 
 
-def trial_held(entry: Mapping[str, Any], granted: str) -> Record:
+def trial_held(entry: Mapping[str, Any], granted: str, count: int | None = None) -> Record:
     """A copy of a waiter as it would hold from `granted`: for a forecast that plays the queue forward."""
     found = dict(entry, state=HELD, granted=granted)
+    if count is not None and count >= 1:
+        found["count"] = count
     found.pop("yielded", None)
     return found
 

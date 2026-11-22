@@ -203,6 +203,10 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 
 ### Fixed
 
+- `slotfather sweep` protects live processes belonging to newer clients' unknown queue entries, wait forecasts
+  account for the full slot count granted to `-n MIN-MAX` range requests, `-n 1-MAX` grants clamp to 1 slot under a
+  memory-pressure warning, and requests with no run history are no longer admitted ahead of a head that gave way
+  after a second head is chosen (fathers#228).
 - Releasing or aborting a measurement session removes its session record beside the queue entry instead of leaving a
   stale file behind, finishing a `slotfather lock` wait updates the enclosing lease in one queue step so it cannot
   clear another waiter's active lock wait, and history and `slotfather stats` count leases that yielded only for a

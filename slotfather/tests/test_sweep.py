@@ -819,6 +819,51 @@ class LiveTests(SweepCase):
         self.assertIn("inside the live lease leased · echo", found["items"][0]["reason"])
         self.assertTrue(self.alive(orphan))
 
+    def test_a_newer_clients_reserved_unknown_entry_spares_its_live_children(self):
+        """fathers#228: sweep protects live unknown entries (`look.reserved`) written by a newer client."""
+        work = self.tmp / "reserved-wt"
+        work.mkdir()
+        child_pid_path = self.tmp / "reserved-child.pid"
+        holder = subprocess.Popen(
+            ["sh", "-c", f'sleep 120 & echo $! > "{child_pid_path}"; wait'],
+            cwd=work, start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        self.processes.append(holder)
+        child_pid = self.pid_file(child_pid_path)
+        table = sf_process.processes()
+        self.assertIn(holder.pid, table)
+        queue_dir = self.state / "queue"
+        queue_dir.mkdir(parents=True, exist_ok=True)
+        entry_path = queue_dir / f"0000000001-{holder.pid}.json"
+        entry_data = {
+            "pid": holder.pid,
+            "start": table[holder.pid][1],
+            "count": 2,
+            "label": "newer-client-lease",
+            "cmd": "sleep 120",
+            "since": "2026-11-22T00:00:00Z",
+            "state": "paused",
+        }
+        entry_path.write_text(json.dumps(entry_data) + "\n")
+        before = entry_path.read_bytes()
+        work.rmdir()
+
+        parents, found_leases = sweep.leases(self.state)
+        self.assertIn(str(entry_path), [lease.path for lease, _ in found_leases])
+        protected, _ = sweep.protection(parents, found_leases)
+        self.assertEqual("newer-client-lease", protected.get(holder.pid))
+        self.assertEqual("newer-client-lease", protected.get(child_pid))
+
+        report = self.report("--live", "--pid", str(child_pid), "--pid", str(holder.pid))
+        self.assertEqual(
+            {child_pid: "spared", holder.pid: "spared"},
+            {i["pid"]: i["action"] for i in report["items"]},
+            report,
+        )
+        self.assertTrue(all("inside the live lease newer-client-lease" in i["reason"] for i in report["items"]))
+        self.assertTrue(self.alive(holder.pid) and self.alive(child_pid))
+        self.assertEqual(before, entry_path.read_bytes(), "unknown entry is left untouched")
+
 
 class SessionLiveTests(SweepCase):
     def setUp(self):

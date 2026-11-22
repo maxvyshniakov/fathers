@@ -61,6 +61,38 @@ class SchedulerRangeTests(unittest.TestCase):
         p = sf_schedule.plan([ranged], held_5, 6, T0, settings=dict(sf_config.ORDER_DEFAULTS))
         self.assertEqual([], p.grants)
 
+    def test_forecast_uses_granted_count_for_range_waiters(self) -> None:
+        """fathers#228: forecast() records a granted -n MIN-MAX waiter with its granted slot count, not MIN."""
+        slots = 4
+        settings = dict(sf_config.ORDER_DEFAULTS)
+        # 1 held (ends at T0+100), 3 free -> ranged (1-3, runs 600s) is granted 3 slots at T0.
+        # Later (2 slots) waits: at T0+100 only 1 slot is free (ranged holds 3, not 1), so later starts at T0+600.
+        held = [dict(waiter("h", 1), state="held", granted=STAMP)]
+        ranged = waiter("ranged", 1, max_count=3)
+        later = waiter("later", 2)
+
+        def est(entry: dict[str, Any]) -> float | None:
+            return {"h": 100.0, "ranged": 600.0, "later": 60.0}.get(str(entry.get("label")))
+
+        starts = sf_schedule.forecast([ranged, later], held, slots, T0, estimate=est, settings=settings)
+        self.assertEqual(T0, starts[id(ranged)])
+        self.assertEqual(T0 + 600.0, starts[id(later)])
+
+        # Also through Admission.forecast(): an idle 4-slot queue where ranged (1-4) takes all 4 slots.
+        ranged_all = waiter("ranged-all", 1, max_count=4)
+        behind = waiter("behind", 2)
+        adm = sf_schedule.Admission(
+            [ranged_all, behind],
+            [],
+            slots,
+            T0,
+            settings=settings,
+            estimate=lambda e: 600.0 if e.get("label") == "ranged-all" else 60.0,
+        )
+        outlook = adm.forecast()
+        self.assertEqual(T0, outlook[id(ranged_all)]["est_start"])
+        self.assertEqual(T0 + 600.0, outlook[id(behind)]["est_start"])
+
     def test_parse_slots_accepts_count_range_all_and_rejects_bad_ranges(self) -> None:
         self.assertEqual(("all", None), sf_cli.parse_slots("all"))
         self.assertEqual((3, None), sf_cli.parse_slots("3"))

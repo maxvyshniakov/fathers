@@ -147,6 +147,34 @@ class PlanTests(unittest.TestCase):
                          "fast-prior (M+10) and known-fast (M+60) free 4 slots before unknown-slow is needed")
         self.assertEqual([], kept.dropped)
 
+    def test_unknown_run_request_is_blocked_under_second_head_extra_after_first_head_dropped(self) -> None:
+        """fathers#228: once a head gave way, an unknown-run request is still refused even after a second head is
+        chosen with spare slots (`extra > 0`) or a distant reservation."""
+        # 8 slots, 3 held by one unknown-run lease (running 2h -> ends M+3600) -> 5 free.
+        # head1 (8 slots) is past reservation_timeout -> drops into found.dropped.
+        # head2 (6 slots, past window, not yet past reservation_timeout) becomes found.head;
+        # when lane-big frees 3 slots at M+3600, have=8, staying=0 -> extra = 8 - 6 = 2 slots spare.
+        self.held = [holder("lane-big", 3, -7200)]
+        head1 = waiter("measure-8", 8, -9000, reserved=M - 1900)
+        head2 = waiter("build-6", 6, -1200)
+        unknown = waiter("unknown", 1, -60)
+        known = waiter("known", 1, -30)
+        found = self.plan([head1, head2, unknown, known], {"known": 5000})
+        self.assertEqual(["measure-8"], [e["label"] for e, _ in found.dropped])
+        self.assertEqual("build-6", found.head and found.head["label"])
+        self.assertEqual(
+            ["known"],
+            [e["label"] for e in found.grants],
+            "known takes a spare slot from head2's extra, while unknown is refused ahead of dropped head1",
+        )
+
+        # Also verify unknown is refused when head2's bound is far enough out that fallback * safety <= bound.
+        self.held = [holder("lane-huge", 3, -36000)]  # 10h in -> overrun 5h (18000s) > fallback*safety (10800s)
+        found_far = self.plan([head1, head2, unknown, known], {"known": 60})
+        self.assertEqual(["measure-8"], [e["label"] for e, _ in found_far.dropped])
+        self.assertEqual("build-6", found_far.head and found_far.head["label"])
+        self.assertEqual(["known"], [e["label"] for e in found_far.grants])
+
 
 class GrantTests(unittest.TestCase):
     """grant() on a queue of 4 slots (the entry pins' harness: fixed clock, fake holders)."""
