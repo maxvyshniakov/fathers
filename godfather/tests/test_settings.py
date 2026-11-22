@@ -837,13 +837,26 @@ class DeferredTests(PanelCase):
         self.assertNotIn("set", [request.kind for request in settings.waiting], "no save before its check")
         while settings.waiting:
             settings.answer()
+        self.assertIsNotNone(settings.panel.pending, "still on the field: the pending value stays until moving on")
+        self.assertEqual("memory", settings.panel.pending.value if settings.panel.pending else None)
         settings.tick(settings_model.SETTLE_SECONDS)
         settings.key("\r")
+        self.assertIsNotNone(settings.panel.pending, "still pending while focused on the field")
         self.assertEqual([], [argv for argv in self.writes() if "memory" in argv], "a refused value is never sent")
         settings.key("down")  # moving on drops it, its reason kept under its row
         self.assertIsNone(settings.panel.pending)
         self.assertIn("memory is unknown", settings.text(idle()))
         self.assertEqual({"slots": 4}, self.saved_capacity())
+
+        # Moving on before a slow refused check answers drops the pending change once the check arrives.
+        settings.select(MODE)
+        settings.key("right")  # Memory, its check in flight
+        settings.key("down")  # cursor moved away while check is still pending
+        self.assertNotEqual(MODE, settings.focus)
+        while settings.waiting:
+            settings.answer()
+        self.assertIsNone(settings.panel.pending)
+        self.assertIn("memory is unknown", settings.text(idle()))
 
     def test_enter_on_a_typed_value_waits_for_its_check_then_saves(self) -> None:
         settings = self.open()

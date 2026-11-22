@@ -197,6 +197,11 @@ Versions and release rules: [README.md](README.md#versions).
 
 ### Fixed
 
+- In Settings, a slow `settings check` reply that refuses a pending value no longer drops the value while the row still
+  has focus; clicking a footer hint or outside the `EVENTS` filter field while editing `/` now exits filter edit mode
+  cleanly instead of typing the hint key into the filter or leaving edit mode active; and `Ask to yield` is now offered
+  on aged held leases by comparing a held lease's own priority class against each waiter's served class, matching
+  Slotfather's `ask-yield` rules (fathers#212).
 - Main-session background Junkfather entries with `no_ttl: true` now render `—` in the `PROCESSES` table, `PROCESS
   DETAILS` and process links instead of a ~100-year TTL from Junkfather's sentinel `ttl`; snapshots from older
   Junkfather installs without `no_ttl` keep working unchanged (fathers#207).
