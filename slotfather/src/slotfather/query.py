@@ -503,8 +503,9 @@ def status_json(directory: Path | None = None, pid: int | None = None, look: Loo
         both: list[dict[str, Any]] = [*entries_found, *legacy]
         lease_specs = [_process.Lease(str(item["lease"]), item["pid"], n < len(entries_found))
                        for n, item in enumerate(both)]
-        membership = _process.lease_membership(_lineage.parents_of(table), lease_specs, [pid])
-        if sys.platform == "darwin" and both and pid in table and not membership.leases.get(pid):
+        parents = _lineage.parents_of(table)
+        membership = _process.lease_membership(parents, lease_specs, [pid])
+        if sys.platform == "darwin" and both and parents.get(pid) == 1 and not membership.leases.get(pid):
             targeted = _process.commands([pid]).get(pid, "")
             if targeted and _process.is_detached_browser_helper(targeted):
                 helper_ctx = _process.helper_snapshot()

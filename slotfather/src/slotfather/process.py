@@ -283,9 +283,8 @@ def helper_snapshot(timeout: float = 5) -> ProcessContext | None:
 
 
 def lease_started_epoch(entry: Mapping[str, Any]) -> float | None:
-    """Epoch seconds when a held lease began running work (for filtering out older pre-existing detached helpers).
-    Uses `since` if the lease has yielded and resumed (so pre-yield children stay eligible), else `granted` or `since`."""
-    raw = entry.get("since") if entry.get("yields") else (entry.get("granted") or entry.get("since"))
+    """Epoch seconds when a held lease began running work (for filtering out older pre-existing detached helpers)."""
+    raw = entry.get("granted") or entry.get("since")
     if not isinstance(raw, str) or not raw:
         return None
     for fmt in ("%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S.%fZ"):
@@ -759,12 +758,13 @@ def carrying(pids: list[int], lease: str) -> set[int]:
 # Lease membership
 
 class Lease(NamedTuple):
-    """A live lease as membership needs it: the path its SLOTFATHER_LEASE holds, its holder's pid, and whether a
+    """A live lease as membership needs it: the path its SLOTFATHER_LEASE holds, its holder's pid, whether a
     process outside its tree can belong to it by that marker (`status --json --pid` counts an earlier queue's
-    lease by its tree alone)."""
+    lease by its tree alone), and optionally its start epoch for detached helper correlation."""
     path: str
     pid: object
     by_environment: bool = True
+    since: float | None = None
 
 
 class Membership(NamedTuple):
@@ -810,6 +810,7 @@ def lease_membership(parents: Mapping[int, int], leases: Sequence[Lease], pids: 
             carried = marked.get(pid, set())
             found[pid] = sorted(found[pid] + [(index, "env") for index in rest if leases[index].path in carried])
     if commands is not None and leases and any(not memberships for memberships in found.values()):
+        effective_since = [lease.since for lease in leases] if lease_since is None else lease_since
         extra_owned: dict[int, set[int]] = {}
         for pid, memberships in found.items():
             for index, via in memberships:
@@ -817,7 +818,7 @@ def lease_membership(parents: Mapping[int, int], leases: Sequence[Lease], pids: 
                     extra_owned.setdefault(index, set()).add(pid)
         attributed = detached_browser_helpers(
             parents, commands, [lease.pid for lease in leases],
-            uids=uids, starts=starts, lease_since=lease_since, extra_owned=extra_owned or None,
+            uids=uids, starts=starts, lease_since=effective_since, extra_owned=extra_owned or None,
         )
         resolved: set[int] = set()
         for index, helper_pids in attributed.items():

@@ -358,8 +358,9 @@ not an assertion that an agent owns another process.
 A `leases` record contains `id`, `lease` (path), `state`, `count`, `label`,
 `pid` (holder), `start` (holder identity), `priority`, `ticket`, `meta`, `legacy` and `via`.
 Priority is `interactive`, `normal` or `batch`. `via` is `tree`
-for the holder or its descendants, or `env` for a detached process carrying
-that exact `SLOTFATHER_LEASE`. Stale holder identities never match. Legacy
+for the holder or its descendants, `env` for a detached process carrying
+that exact `SLOTFATHER_LEASE`, or `helper` for a detached macOS browser/XPC
+helper unambiguously attributed to the lease. Stale holder identities never match. Legacy
 counts use that older queue's capacity units. No environment contents are
 returned.
 
@@ -370,7 +371,8 @@ live processes are reported, also without a working-directory scan.
 
 On macOS, exact-PID queries use standard-library `ctypes` with libproc for
 process identities, then one targeted `ps` read for the requested process's
-and its ancestors' full arguments. That command never requests environments.
+and its ancestors' full arguments (plus one full `ps` snapshot when a `PPID=1`
+process looks like a detached browser/XPC helper and leases are active). That command never requests environments.
 The adapters' identities must agree. Unsupported native interfaces or an
 unavailable required identity fall back to the portable process-table adapter.
 

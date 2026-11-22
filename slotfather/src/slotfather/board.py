@@ -14,6 +14,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import sys
 import time
 from typing import Any, Iterable, cast
 
@@ -81,20 +82,6 @@ def process_usage() -> tuple[dict[int, tuple[float, int, str]], dict[int, list[i
         return _process.cpu_table()
     except _process.PsError as error:
         raise OSError(f"CPU process sample failed: {error.detail}") from None
-
-
-_DEFAULT_PROCESS_USAGE = process_usage
-
-
-def _cpu_sample() -> tuple[dict[int, tuple[float, int, str]], dict[int, list[int]], _process.ProcessContext | None]:
-    """One CPU process sample; uses cpu_snapshot() on macOS unless process_usage was patched by a test."""
-    if process_usage is _DEFAULT_PROCESS_USAGE:
-        try:
-            return _process.cpu_snapshot()
-        except _process.PsError as error:
-            raise OSError(f"CPU process sample failed: {error.detail}") from None
-    own, children = process_usage()
-    return own, children, None
 
 
 def process_tree(pid: object, own: dict[int, tuple[float, int, str]],
@@ -471,7 +458,7 @@ def dashboard_model(look: _query.Look | None = None) -> dict[str, Any]:
     other = sum(count for _, _, count in [*legacy, *look.reserved])  # earlier queues' and live unknown entries' slots
     slots: int = look.basis["slots"]
     saved: bool = look.basis["saved"]
-    own, children, context = _cpu_sample()
+    own, children = process_usage()
 
     mem_est = _estimates.memory_estimator(directory) if live else None
     settings_for_mem = look.settings or _settings.order_settings(directory)
@@ -531,6 +518,7 @@ def dashboard_model(look: _query.Look | None = None) -> dict[str, Any]:
     held, live_waiters = _entry.split(live)
     active_entries = [*held, *(e for _, e, _ in legacy)]
     detached: dict[int, set[int]] = {}
+    context = _process.helper_snapshot() if sys.platform == "darwin" and active_entries else None
     if context is not None and active_entries:
         detached = _process.detached_browser_helpers(
             context.parents, context.commands, [e.get("pid") for e in active_entries],

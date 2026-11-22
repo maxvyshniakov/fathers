@@ -79,9 +79,11 @@ def leases(directory: Path) -> tuple[dict[int, int], Labelled]:
     not the snapshot's, which is read without it. A table ps could not give raises (fathers#121): this sweep stops
     nothing."""
     look = _query.look(directory, log=True)  # the one look every reader takes (fathers#36)
-    found: Labelled = [(_process.Lease(str(path), entry.get("pid")), str(entry.get("label") or path.stem))
+    found: Labelled = [(_process.Lease(str(path), entry.get("pid"), since=_process.lease_started_epoch(entry)),
+                        str(entry.get("label") or path.stem))
                        for path, entry in look.found]
-    found += [(_process.Lease(str(path), entry.get("pid")), str(entry.get("label") or path.stem))
+    found += [(_process.Lease(str(path), entry.get("pid"), since=_process.lease_started_epoch(entry)),
+               str(entry.get("label") or path.stem))
               for path, entry, _ in look.legacy]
     return _lineage.parents_of(look.table), found
 

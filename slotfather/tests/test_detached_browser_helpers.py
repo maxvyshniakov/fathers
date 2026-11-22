@@ -275,10 +275,16 @@ class DashboardAttributionTests(unittest.TestCase):
                 if sf_process.IDENTITY in argv:
                     text = "".join(f"{pid} {ppid} S {start}\n" for pid, ppid, _, _, _, start, _ in rows)
                     return subprocess.CompletedProcess(argv, 0, text, "")
-                if sf_process.CPU_FULL in argv:
+                if sf_process.CPU in argv:
                     text = "".join(
-                        f"{pid} {ppid} {uid} {cpu:.1f} {rss} {start} {cmd}\n"
-                        for pid, ppid, uid, cpu, rss, start, cmd in rows
+                        f"{pid} {ppid} {cpu:.1f} {rss} {cmd.split()[0] if cmd else ''}\n"
+                        for pid, ppid, _, cpu, rss, _, cmd in rows
+                    )
+                    return subprocess.CompletedProcess(argv, 0, text, "")
+                if sf_process.HELPER_SNAPSHOT in argv:
+                    text = "".join(
+                        f"{pid} {ppid} {uid} {start} {cmd}\n"
+                        for pid, ppid, uid, _, _, start, cmd in rows
                     )
                     return subprocess.CompletedProcess(argv, 0, text, "")
             return subprocess.CompletedProcess(argv, 0, "", "")
