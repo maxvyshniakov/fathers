@@ -606,9 +606,9 @@ def load_wait(averages: tuple[float, float, float] | None, cores: int, slots: in
     gate = float(settings.get("load_gate", _config.ORDER_DEFAULTS["load_gate"]))
     if averages is None or not gate > 0 or cores < 1 or slots < 1:
         return None
-    load = min(averages[0], averages[1])
-    if not math.isfinite(load):
+    if not (math.isfinite(averages[0]) and math.isfinite(averages[1])):
         return None
+    load = min(averages[0], averages[1])
     unleased = max(0.0, load - min(max(0, held), slots) * cores / slots)
     if unleased >= gate * cores:
         return f"CPU load {load:.1f}: {unleased:.1f} unleased is at or above {gate * cores:g} cores"

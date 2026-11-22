@@ -166,6 +166,18 @@ class GrantTests(SlotCase):
         self.assertNotIn("load_gate", json.loads((self.state / "order.json").read_text()),
                          "the default is not written: older clients refuse keys they do not know")
 
+    def test_settings_cli_refuses_load_gate_without_mutating_order_json(self) -> None:
+        self.assertIsNone(sf_schedule.load_wait((50.0, float("nan"), 5.0), 12, 8, 2, {"load_gate": 1.0}))
+        self.assertIsNone(sf_schedule.load_wait((50.0, 50.0, 50.0), 0, 8, 2, {"load_gate": 1.0}))
+        self.assertIsNone(sf_schedule.load_wait((50.0, 50.0, 50.0), 12, 0, 2, {"load_gate": 1.0}))
+        for argv in (("settings", "check", "order.load_gate", "2", "--json"),
+                     ("settings", "set", "order.load_gate", "2", "--json"),
+                     ("settings", "reset", "order.load_gate", "--json")):
+            res = self.tool(*argv)
+            self.assertEqual(2, res.returncode, res.stderr)
+            self.assertFalse(json.loads(res.stdout)["ok"])
+        self.assertFalse((self.state / "order.json").exists())
+
 
 if __name__ == "__main__":
     unittest.main()

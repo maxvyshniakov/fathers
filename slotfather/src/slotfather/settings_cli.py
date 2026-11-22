@@ -349,7 +349,7 @@ def change(reading: Reading, key: str, text: str) -> tuple[dict[str, Any], dict[
         if text not in _config.QUEUE_ORDERS:
             raise Invalid(f"Queue order is one of {', '.join(_config.QUEUE_ORDERS)}.")
         return {"order.json": {"order": text}}, reply
-    if knob not in _config.ORDER_KNOBS:
+    if knob not in KNOBS:
         raise Invalid(f"no setting {key!r}; `slotfather settings --json` lists them")
     value, problem = parse(knob, text, reading.mode())
     if problem:
@@ -363,7 +363,7 @@ def reset_change(key: str) -> dict[str, Any]:
     if key in CAPACITY_KEYS:
         return {"capacity.json": None}
     knob = key[len("order."):] if key.startswith("order.") else ""
-    if knob in _config.ORDER_DEFAULTS:
+    if knob in ORDER_FIELDS:
         return {"order.json": {knob: _config.ORDER_DEFAULTS[knob]}}
     raise Invalid(f"no setting {key!r}; `slotfather settings --json` lists them")
 

@@ -569,8 +569,9 @@ def advise(maximum: int | None = None, exclusive: bool = False, cores_now: int |
     held = sum(_entry.holds(e, slots) for e in holders) + other
     waiters = [e for e in live if _entry.is_waiting(e)]
     estimate = _queue.estimator(_config.state_dir())
+    order_settings = _settings.order_settings()
     waiting = bool(waiters) and _schedule.room(waiters, max(0, slots - held), holders, estimate, other,
-                                               _settings.order_settings(), label=label, command=command, slots=slots,
+                                               order_settings, label=label, command=command, slots=slots,
                                                moment=time.time(), window=_config.overtake_window()) == 0
     machine = cores_now or _config.cores()
     averages = averages or _platform.loads()
@@ -585,5 +586,5 @@ def advise(maximum: int | None = None, exclusive: bool = False, cores_now: int |
     # fathers#184: why sustained CPU load holds new leases beside running ones now (None: it does not, or nothing is
     # held, and an idle machine starts its first request); like memory, it does not shrink the job count.
     found["load_block"] = _schedule.load_wait(averages, machine, slots, min(held, slots),
-                                              _settings.order_settings()) if held else None
+                                              order_settings) if held else None
     return found
