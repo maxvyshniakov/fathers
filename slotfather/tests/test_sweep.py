@@ -917,16 +917,26 @@ class SessionLiveTests(SweepCase):
     def test_two_waits_for_one_pattern_never_end_and_get_a_note(self):
         """Linux's pgrep finds each loop itself; macOS's skips its own ancestors but finds the other loop."""
         marker = f"sweep-wait-{os.getpid()}-{time.monotonic_ns()}"
+        started_files = [self.tmp / f"wait-{i}.started" for i in range(2)]
         ready_files = [self.tmp / f"wait-{i}.ready" for i in range(2)]
         waits = [
             subprocess.Popen(
-                ["sh", "-c", f'until ! pgrep -f "{marker}" >/dev/null; do : > "$READY"; sleep 0.05; done'],
-                env={**self.env, "READY": str(ready)},
+                [
+                    "sh",
+                    "-c",
+                    f': > "$STARTED"; read _; until ! pgrep -f "{marker}" >/dev/null; do : > "$READY"; sleep 0.05; done',
+                ],
+                stdin=subprocess.PIPE,
+                env={**self.env, "STARTED": str(started), "READY": str(ready)},
                 start_new_session=True,
             )
-            for ready in ready_files
+            for started, ready in zip(started_files, ready_files, strict=True)
         ]
         self.processes.extend(waits)
+        self.wait_for(lambda: all(s.exists() for s in started_files), "both pgrep wait shells to start")
+        for wait in waits:
+            assert wait.stdin is not None
+            wait.stdin.close()
         self.wait_for(lambda: all(r.exists() for r in ready_files), "both pgrep wait loops to match")
         self.assertEqual([None, None], [w.poll() for w in waits], "neither loop ends")
         pids = [w.pid for w in waits]
