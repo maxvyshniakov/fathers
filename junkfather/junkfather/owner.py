@@ -93,7 +93,7 @@ def detect(env: Mapping[str, str], table: Optional[_procs.Table], cwd: str, me: 
     if session:
         owner.update(kind="claude", session=session)
         pid = int(env["CLAUDE_PID"]) if (env.get("CLAUDE_PID") or "").isdigit() else None
-        proc = table.get(pid) if table is not None and pid else nearest(table, me, _safety.claude)
+        proc = table.get(pid) if table is not None and pid else None
         if proc is None and table is not None:
             proc = nearest(table, me, _safety.claude)
     elif codex:

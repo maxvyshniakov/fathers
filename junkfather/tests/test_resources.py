@@ -360,6 +360,25 @@ class SafariTests(ResourceCase):
         self.assertIn("person's own browser", refused.stderr)
         self.assertEqual([], self.store.entries())
 
+    def test_unowned_never_queries_or_reports_safari_tp(self):
+        from unittest import mock
+        browser = self.spawn(str(self.app), start_new_session=True)
+        self.wait_for(lambda: self.runs(browser.pid), what="the browser")
+        self.assertFalse(resources.KINDS["safari-tp"].reports)
+        snap = resources.Snapshot(procs.Table.read())
+        queried: List[str] = []
+
+        def fake_listing(kind: str) -> resources.Listing:
+            queried.append(kind)
+            return {}
+
+        with mock.patch.object(resources, "tool", return_value="/usr/bin/true"), \
+                mock.patch.object(snap, "listing", side_effect=fake_listing):
+            found, unknown = resources.unowned(snap, {})
+        self.assertEqual(([], []), (found, unknown))
+        self.assertNotIn("safari-tp", queried)
+        self.assertEqual({"simulator", "docker", "tailscale-serve"}, set(queried))
+
 
 class CommandKindTests(ResourceCase):
     def test_a_command_pair_checks_and_stops_it_without_a_shell(self):
@@ -408,4 +427,66 @@ class EventKindsTests(ResourceCase):
             resources.STOP_TIMEOUT = original
         self.assertEqual("failed", outcome["result"])
         self.assertIn("did not answer", outcome["error"])  # `sleep 30` exits 0: only the timeout says this
+
+
+class ResourceReapSkipReasonTests(ResourceCase):
+    """fathers#210: `resources.reap` reports `begin_reap`'s lock-time refusal reason without a TOCTOU reload."""
+
+    def test_resource_reap_distinguishes_lock_time_skip_reasons_without_reload(self):
+        from typing import Callable, Optional, Tuple
+        from unittest import mock
+        from junkfather import entry as entry_module, reap as reap_module
+        from junkfather.state import Store
+        from support import as_entry
+
+        cases: List[Tuple[str, Callable[[Store], Any], Optional[entry_module.Guard], Optional[reap_module.Lifecycle],
+                          Optional[str]]] = [
+            ("already exited", lambda s: s.update("jres", lambda e: e.update(state="exited")), None, None, None),
+            ("already gone", lambda s: entry_module.gone(s, "jres"), None, None, None),
+            ("another reaper has it", lambda s: s.update("jres", lambda e: e.update(
+                state="reaping", reaping={"reason": "other", "at": 1.0, "by": 4242, "by_start": "x"})),
+             None, None, None),
+            ("not expired", lambda s: entry_module.extended(s, "jres", 3600.0, now=100.0),
+             entry_module.require_due(100.0), None, None),
+            ("owner changed", lambda s: entry_module.handed(s, "jres", {"kind": "claude", "session": "s2"}),
+             None, reap_module.Lifecycle.SESSION_END, "s1"),
+            ("custom guard", lambda _s: None, lambda _e: "custom guard", None, None),
+            ("guard refused", lambda _s: None, lambda _e: False, None, None),
+        ]
+        real_begin = entry_module.begin_reap
+        real_load = self.store.load
+
+        for expected, change, guard, lifecycle, owner_id in cases:
+            with self.subTest(expected=expected):
+                self.store.save(as_entry({
+                    "v": 1, "id": "jres", "state": "running", "mode": "resource", "group": False,
+                    "keep": "owner", "owner": {"kind": "claude", "session": "s1"},
+                    "resource": {"kind": "command", "id": "x", "alive": ["true"], "stop": ["false"]},
+                    "argv": [], "cwd": "/", "created": 1.0, "ttl": 60.0, "expires": 50.0,
+                    "pid": None, "pgid": None, "start": None, "seen": None, "known": [], "handed": []}))
+                after_begin = [False]
+                post_loads: List[str] = []
+
+                def load_spy(entry_id: str, flag: List[bool] = after_begin,
+                             seen: List[str] = post_loads) -> Optional[entry_module.Entry]:
+                    if flag[0]:
+                        seen.append(entry_id)
+                    return real_load(entry_id)
+
+                def mutate_then_begin(store: Any, entry_id: str, why_arg: str, *args: Any,
+                                      mutate: Any = change, flag: List[bool] = after_begin, **kwargs: Any) -> Any:
+                    mutate(store)
+                    outcome = real_begin(store, entry_id, why_arg, *args, **kwargs)
+                    loaded_now = real_load(entry_id)
+                    if loaded_now is not None:
+                        store.save(as_entry({**loaded_now, "state": "reaped"}))
+                    flag[0] = True
+                    return outcome
+
+                with mock.patch.object(self.store, "load", side_effect=load_spy), \
+                        mock.patch.object(entry_module, "begin_reap", side_effect=mutate_then_begin), \
+                        mock.patch.object(resources, "stop", side_effect=AssertionError("resource stop ran")):
+                    result = reap_module.reap(self.store, "jres", "reap", lifecycle=lifecycle, owner=owner_id,
+                                              allowed=guard)
+                self.assertEqual(("skipped", expected, []), (result["result"], result["reason"], post_loads))
 

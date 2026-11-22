@@ -711,7 +711,7 @@ def stopped_event(store: Store, subject: Dict[str, Any], actor: Optional[Dict[st
 
 def reap(store: Store, entry: Entry, reason: str, grace: float, dry_run: bool,
          actor: Optional[Dict[str, Any]], *, lifecycle: Optional[_reap.Lifecycle] = None,
-         allowed: Optional[Callable[[Entry], bool]] = None) -> Dict[str, Any]:
+         allowed: Optional[_entry.Guard] = None) -> Dict[str, Any]:
     """End one running resource entry through its kind's stop command (reap.reap hands resource entries here). A
     dry run asks the kind whether its stop would be refused (a worktree's guards)."""
     recorded = entry.get("resource") or {}
@@ -727,13 +727,8 @@ def reap(store: Store, entry: Entry, reason: str, grace: float, dry_run: bool,
         refused = kind.check(resource) if kind is not None and state is not False else None
         return {"id": entry_id, "result": "gone" if state is False else "would-fail" if refused else "would-stop",
                 "reason": f"{reason}; {refused}" if refused else reason, "pids": [], "how": describe(resource)}
-    me = _entry.begin_reap(store, entry_id, reason, allowed=allowed)
+    me, why = _entry.begin_reap(store, entry_id, reason, allowed=allowed)
     if me is None:
-        current = store.load(entry_id)
-        why = ("another reaper has it"
-               if current is None or current.get("state") != _entry.RUNNING or allowed is None or allowed(current)
-               else "not expired" if not _entry.due(current) and reason.startswith("ttl expired")
-               else "owner changed")
         return {"id": entry_id, "result": "skipped", "reason": why, "pids": [],
                 "how": describe(resource)}
     outcome = stop(resource, grace, alive)
@@ -762,8 +757,8 @@ def unowned(snapshot: Snapshot, owned: Mapping[str, str]) -> Tuple[List[Dict[str
     for kind in KINDS.values():
         if not kind.reports:
             continue
-        if kind.name != "safari-tp" and not tool({"simulator": "xcrun", "docker": "docker",
-                                                  "tailscale-serve": "tailscale"}.get(kind.name, kind.name)):
+        if not tool({"simulator": "xcrun", "docker": "docker",
+                     "tailscale-serve": "tailscale"}.get(kind.name, kind.name)):
             continue  # not installed here: nothing of it can run
         listed = snapshot.listing(kind.name)
         if listed is None:

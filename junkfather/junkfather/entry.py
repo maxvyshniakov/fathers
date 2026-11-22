@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import os
 import time
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, TypedDict, cast
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, TypedDict, Union, cast
 
 from . import procs as _procs
 from .state import Store, VERSION
@@ -277,12 +277,32 @@ def noted_error(store: Store, entry_id: str, error: Dict[str, Any], now: Optiona
 
 # Reaping
 
+Guard = Callable[[Entry], Union[bool, Optional[str]]]
+
+
+def require_due(now: Optional[float] = None) -> Guard:
+    """A `begin_reap` guard requiring `entry` to be past its finite TTL (at `now`, else when checked)."""
+    return lambda e: None if due(e, now) else "not expired"
+
+
+def guard_why(guard: Optional[Guard], entry: Entry, reason: str = "") -> Optional[str]:
+    """Why `guard` refuses `entry`, or None when it allows the reap."""
+    if guard is None:
+        return None
+    verdict = guard(entry)
+    if verdict is None or verdict is True:
+        return None
+    if verdict is False:
+        return "not expired" if reason.startswith("ttl expired") and not due(entry) else "guard refused"
+    return verdict
+
+
 def begin_reap(store: Store, entry_id: str, reason: str, table: Optional[_procs.Table] = None,
-               allowed: Optional[Callable[[Entry], bool]] = None) -> Optional[int]:
-    """running -> reaping, held by this process; its pid, or None when the entry no longer runs, `allowed` no longer
-    holds, or another reaper has it. `allowed` is checked under the store lock with the state, so a predicate on
-    the owner (a lifecycle reap's, fathers#189) and a handoff (`handed`) cannot interleave: whichever writes first
-    wins, and `handed` refuses an entry already reaping."""
+               allowed: Optional[Guard] = None) -> Tuple[Optional[int], str]:
+    """running -> reaping, held by this process; (its pid, "") when claimed, or (None, why) as seen under the store
+    lock when the entry no longer runs, `allowed` refuses it, or another reaper has it. `allowed` is checked under
+    the store lock with the state, so a predicate on the owner (a lifecycle reap's, fathers#189) and a handoff
+    (`handed`) cannot interleave: whichever writes first wins, and `handed` refuses an entry already reaping."""
     me = os.getpid()
     if table is None:
         try:
@@ -290,14 +310,34 @@ def begin_reap(store: Store, entry_id: str, reason: str, table: Optional[_procs.
         except _procs.ProcError:
             table = None
     mine = ((table.get(me) if table is not None else None) or _procs.Proc(me, 0, 0, 0, "", "", "")).start
-    def check(e: Entry) -> bool:
-        return e.get("state") == RUNNING and (allowed is None or allowed(e))
+    why: List[str] = []
 
-    marked = _move(store, entry_id, check, lambda e: e.update(
-        {"state": REAPING, "reaping": {"reason": reason, "at": time.time(), "by": me, "by_start": mine}}))
-    if marked is None or (marked.get("reaping") or {}).get("by") != me:
+    def step(e: Entry) -> Optional[bool]:
+        state = e.get("state")
+        if state == REAPING:
+            why.append("another reaper has it")
+            return False
+        if state == STARTING:
+            why.append("still starting")
+            return False
+        if state != RUNNING:
+            why.append(f"already {state}")
+            return False
+        refused = guard_why(allowed, e, reason)
+        if refused is not None:
+            why.append(refused)
+            return False
+        e.update({"state": REAPING, "reaping": {"reason": reason, "at": time.time(), "by": me, "by_start": mine}})
         return None
-    return me
+
+    marked = store.update(entry_id, step)
+    if marked is None:
+        return None, (why[0] if why else "no such entry")
+    if why:
+        return None, why[0]
+    if (marked.get("reaping") or {}).get("by") != me:
+        return None, "another reaper has it"
+    return me, ""
 
 
 def end_reap(store: Store, entry_id: str, me: int, done: bool, end: Dict[str, Any], error: Dict[str, Any]

@@ -250,7 +250,7 @@ def reap(store: Store, entry_id: str, reason: str, grace: Optional[float] = None
          actor: Optional[Dict[str, Any]] = None, reader: Optional[Callable[[], _procs.Table]] = None,
          report_failure: bool = True, *, lifecycle: Optional[Lifecycle] = None,
          owner: Optional[str] = None, agent: Optional[str] = None,
-         allowed: Optional[Callable[[Entry], bool]] = None) -> Dict[str, Any]:
+         allowed: Optional[_entry.Guard] = None) -> Dict[str, Any]:
     """End one running entry. Returns {"id", "result", "reason", "pids", "how"}; result "skipped" when the entry
     is not running (someone else reaped it, it exited, it is still starting) or the guard no longer holds,
     "would-stop" in a dry run. `table` serves the first read only; every later round reads the machine again
@@ -263,10 +263,14 @@ def reap(store: Store, entry_id: str, reason: str, grace: Optional[float] = None
     stopper = stopper or stop
     guard = allowed
     if lifecycle is not None and owner is not None:
-        owner_id, extra = owner, allowed
+        owner_id = owner
+        extra = allowed
 
-        def matching(e: Entry) -> bool:
-            return matches_owner(e, owner_id, agent, lifecycle=lifecycle) and (extra is None or extra(e))
+        def matching(e: Entry) -> Optional[str]:
+            if not matches_owner(e, owner_id, agent, lifecycle=lifecycle):
+                return "owner changed"
+            return _entry.guard_why(extra, e, reason)
+        guard = matching
         guard = matching
     entry = store.load(entry_id)
     if entry is None:
@@ -298,13 +302,8 @@ def reap(store: Store, entry_id: str, reason: str, grace: Optional[float] = None
     if dry_run:
         return {"id": entry_id, "result": "would-stop" if targets else "gone", "reason": reason,
                 "pids": [p.pid for p in targets], "how": how}
-    me = _entry.begin_reap(store, entry_id, reason, table, allowed=guard)
+    me, why = _entry.begin_reap(store, entry_id, reason, table, allowed=guard)
     if me is None:
-        current = store.load(entry_id)
-        why = (" another reaper has it"
-               if current is None or current.get("state") != _entry.RUNNING or guard is None or guard(current)
-               else "not expired" if not _entry.due(current) and reason.startswith("ttl expired")
-               else "owner changed").strip()
         return {"id": entry_id, "result": "skipped", "reason": why, "pids": [], "how": how}
     # The entry as it was marked: its members can have changed since it was read (a background shell's watcher
     # records an exec'd leader's new command), and no one changes them while it is reaping.

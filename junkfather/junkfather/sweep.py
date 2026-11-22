@@ -178,13 +178,10 @@ def sweep(store: Store, dry_run: bool = False, table: Optional[_procs.Table] = N
             report["gone"].append({"id": entry["id"], "how": how})
             continue
         reason = None
-        guard: Optional[Callable[[Entry], bool]] = None
+        guard: Optional[_entry.Guard] = None
         if _entry.due(entry, now):
             reason = "ttl expired"
-
-            def still_due(e: Entry, at: float = now) -> bool:
-                return _entry.due(e, at)
-            guard = still_due
+            guard = _entry.require_due(now)
         elif _owner.alive(entry.get("owner") or {}, table, sessions) is False:
             reason = f"owner gone ({_owner.describe(entry.get('owner') or {})})"
         if reason:
@@ -326,13 +323,10 @@ def sweep_resource(store: Store, entry: Entry, snapshot: "_resources.Snapshot", 
         report["notes"].append(f"{entry['id']}: whether {_resources.describe(resource)} runs cannot be told")
         return
     reason = None
-    guard: Optional[Callable[[Entry], bool]] = None
+    guard: Optional[_entry.Guard] = None
     if _entry.due(entry, now):
         reason = "ttl expired"
-
-        def still_due(e: Entry, at: float = now) -> bool:
-            return _entry.due(e, at)
-        guard = still_due
+        guard = _entry.require_due(now)
     elif _owner.alive(entry.get("owner") or {}, snapshot.table, sessions) is False:
         reason = f"owner gone ({_owner.describe(entry.get('owner') or {})})"
     if reason:

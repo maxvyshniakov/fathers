@@ -75,6 +75,32 @@ class DetectTests(unittest.TestCase):
         found = owner.detect({"JUNKFATHER_LANE_RECORDS": "/nonexistent"}, t, "/", me=310)
         self.assertEqual(("shell", None, 300), (found["kind"], found["session"], found["pid"]))
 
+    def test_claude_session_without_claude_pid_checks_nearest_once_on_hit_and_miss(self):
+        from typing import Callable, List
+        from unittest import mock
+
+        hit_table = table(proc(500, cmd="/Users/x/.local/share/claude/versions/2.1.322"),
+                          proc(510, ppid=500, cmd="/bin/zsh"), proc(520, ppid=510, cmd="python3"))
+        miss_table = table(proc(510, ppid=1, cmd="/bin/zsh"), proc(520, ppid=510, cmd="python3"))
+        real_nearest = owner.nearest
+
+        for label, current_table, env, expected_pid in (
+            ("hit without CLAUDE_PID", hit_table, {"CLAUDE_CODE_SESSION_ID": "s1"}, 500),
+            ("miss without CLAUDE_PID", miss_table, {"CLAUDE_CODE_SESSION_ID": "s1"}, None),
+            ("miss with stale CLAUDE_PID", miss_table, {"CLAUDE_CODE_SESSION_ID": "s1", "CLAUDE_PID": "999"}, None),
+        ):
+            calls: List[int] = []
+
+            def spy(tbl: Optional[procs.Table], pid: int, test: Callable[[str], bool],
+                    seen: List[int] = calls) -> Optional[procs.Proc]:
+                seen.append(pid)
+                return real_nearest(tbl, pid, test)
+
+            with self.subTest(label=label), mock.patch.object(owner, "nearest", side_effect=spy), \
+                    mock.patch.object(owner, "registry", return_value=[]):
+                found = owner.detect({**env, "JUNKFATHER_LANE_RECORDS": "/nonexistent"}, current_table, "/", me=520)
+            self.assertEqual((expected_pid, [520]), (found["pid"], calls))
+
 
 class ClaimTests(Case):
     def claim(self, agent: Optional[str], command: str, at: float, tool: str) -> None:

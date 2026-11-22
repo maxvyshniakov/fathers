@@ -501,3 +501,107 @@ class FailureStreakTests(Case):
         self.assertEqual("ps did not answer", events[0]["details"]["error"])
         recorded = self.loaded("jtest")
         self.assertEqual(("running", "ps did not answer"), (recorded["state"], recorded["last_error"]["error"]))
+
+
+class ForcedUnownedBypassTests(Case):
+    """fathers#210: `reap --pid PID --force` goes straight to `reap_unowned` and never reaps a live owned entry."""
+
+    def list_unowned(self, pid: int) -> None:
+        mine = procs.Table.read().get(pid)
+        assert mine is not None
+        self.state.mkdir(parents=True, exist_ok=True)
+        (self.state / "unowned.json").write_text(json.dumps(
+            {"v": 1, "items": [{"pid": pid, "start": mine.start, "cmd": mine.cmd}]}))
+
+    def test_reap_pid_force_refuses_when_a_running_entry_adopted_the_listed_pid(self):
+        child = self.spawn("sleep", "600", start_new_session=True)
+        self.runs_600(child)
+        self.list_unowned(child.pid)
+        self.assertEqual(0, self.cli("adopt", str(child.pid), "--ttl", "1h").returncode)
+        (owned,) = self.store.entries()
+        for extra in ((), ("--dry-run",)):
+            forced = self.cli("reap", "--pid", str(child.pid), "--force", *extra)
+            self.assertEqual(3, forced.returncode, forced.stderr)
+            self.assertEqual("", forced.stdout)
+            self.assertEqual(f"junkfather: refusing pid {child.pid}: an entry owns it now (reap that entry)\n",
+                             forced.stderr)
+            self.assertEqual("running", self.state_of(owned["id"]))
+            self.assertTrue(self.runs(child.pid))
+        by_entry = self.cli("reap", "--pid", str(child.pid), "--grace", "1")
+        self.assertEqual(0, by_entry.returncode, by_entry.stderr)
+        self.assertEqual("reaped", self.state_of(owned["id"]))
+        self.assertIsNotNone(child.wait(10))
+
+    def test_reap_pid_force_refuses_a_child_spawned_under_a_running_entry(self):
+        owned = self.own_detached(self.env, "--ttl", "1h", argv=("sh", "-c", "sleep 600 & wait"))
+        sub = self.runs_600(type("P", (), {"pid": owned["pid"]})(), below=True)  # type: ignore[arg-type]
+        self.list_unowned(sub)
+        forced = self.cli("reap", "--pid", str(sub), "--force")
+        self.assertEqual(3, forced.returncode, forced.stderr)
+        self.assertEqual(f"junkfather: refusing pid {sub}: an entry owns it now (reap that entry)\n", forced.stderr)
+        self.assertEqual("running", self.state_of(owned["id"]))
+        self.assertTrue(self.runs(sub) and self.runs(owned["pid"]))
+        self.assertEqual(0, self.cli("reap", "--id", owned["id"], "--grace", "1").returncode)
+
+
+class BeginReapSkipReasonTests(Case):
+    """fathers#210: `reap.reap` reports the exact lock-time reason from `begin_reap` without a TOCTOU reload."""
+
+    def test_lock_time_skip_reasons_distinguish_exit_reaper_expiry_owner_and_guard_without_reload(self):
+        from typing import Callable
+        from unittest import mock
+        from junkfather import entry as entry_module
+        from junkfather.state import Store
+
+        cases: List[Tuple[str, Callable[[Store], Any], Optional[entry_module.Guard], Optional[reap.Lifecycle],
+                          Optional[str], str]] = [
+            ("already exited", lambda s: s.update("jtest", lambda e: e.update(state="exited", exit=0)),
+             None, None, None, "reap"),
+            ("already gone", lambda s: entry_module.gone(s, "jtest"),
+             None, None, None, "reap"),
+            ("another reaper has it", lambda s: s.update("jtest", lambda e: e.update(
+                state="reaping", reaping={"reason": "other", "at": 1.0, "by": 4242, "by_start": A})),
+             None, None, None, "reap"),
+            ("not expired", lambda s: entry_module.extended(s, "jtest", 3600.0, now=100.0),
+             entry_module.require_due(100.0), None, None, "reap"),
+            ("owner changed", lambda s: entry_module.handed(s, "jtest", {"kind": "claude", "session": "s2"}),
+             None, reap.Lifecycle.SESSION_END, "s1", "session-end"),
+            ("lane moved", lambda _s: None, lambda _e: "lane moved", None, None, "reap"),
+            ("guard refused", lambda _s: None, lambda _e: False, None, None, "reap"),
+        ]
+        real_begin = entry_module.begin_reap
+        real_load = self.store.load
+
+        for expected, change, guard, lifecycle, owner_id, reason in cases:
+            with self.subTest(expected=expected):
+                record = entry(pid=100, known=[[100, A]])
+                record["owner"] = {"kind": "claude", "session": "s1"}
+                self.store.save(record)
+                after_begin = [False]
+                post_loads: List[str] = []
+
+                def load_spy(entry_id: str, flag: List[bool] = after_begin,
+                             seen: List[str] = post_loads) -> Optional[Entry]:
+                    if flag[0]:
+                        seen.append(entry_id)
+                    return real_load(entry_id)
+
+                def mutate_then_begin(store: Any, entry_id: str, why_arg: str, *args: Any,
+                                      mutate: Any = change, flag: List[bool] = after_begin, **kwargs: Any) -> Any:
+                    mutate(store)
+                    outcome = real_begin(store, entry_id, why_arg, *args, **kwargs)
+                    # Mutate the stored entry again right after the lock releases: any post-lock reload would
+                    # misclassify the reason instead of keeping what `begin_reap` saw under the lock.
+                    real_load_entry = real_load(entry_id)
+                    if real_load_entry is not None:
+                        store.save(as_entry({**real_load_entry, "state": "reaped"}))
+                    flag[0] = True
+                    return outcome
+
+                with mock.patch.object(self.store, "load", side_effect=load_spy), \
+                        mock.patch.object(entry_module, "begin_reap", side_effect=mutate_then_begin):
+                    result = reap.reap(self.store, "jtest", reason,
+                                       reader=lambda: table(proc(100, cmd="node server.js")),
+                                       stopper=lambda _t, _g: self.fail("stopped a skipped entry"),
+                                       lifecycle=lifecycle, owner=owner_id, allowed=guard)
+                self.assertEqual(("skipped", expected, []), (result["result"], result["reason"], post_loads))
