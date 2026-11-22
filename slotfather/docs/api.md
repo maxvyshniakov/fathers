@@ -71,7 +71,7 @@ Per-entry fields:
 - `session` (measurement sessions only): active [session](sessions.md) summary (`name`, `idle`, `expect`, `stopping`, `runs`, `busy`, `last_use`, `active`).
 - `blocked_by`, `idle_slots`, `gave_way` (only when applicable, fathers#160): leases with no end estimate blocking a head past its reserved start (`[{"label", "pid"}]`), idle slot count, and the blocking list recorded when a head gave way.
 - `unknown`, `holds`, `warning` (unknown entries only, fathers#19): why the entry is unknown, slots reserved while its holder runs, and the `status` warning text.
-- `via` (`--pid PID` only): `"tree"` (holder or descendant) or `"env"` (detached process carrying `SLOTFATHER_LEASE`). `procs --json` and `sweep` use the same membership rule (fathers#38).
+- `via` (`--pid PID` only): `"tree"` (holder or descendant), `"env"` (detached process carrying `SLOTFATHER_LEASE`), or `"helper"` (detached macOS browser/XPC helper attributed to a live lease, fathers#202). `procs --json` and `sweep` use the same membership rule (fathers#38).
 
 **Unknown entries** (fathers#19): an entry whose `state` is neither `waiting` nor `held`, or whose `pid`, `count`, `start`, or `since` is missing or malformed, may belong to a newer client and is left untouched (never granted, reaped, ranked, or deleted).
 

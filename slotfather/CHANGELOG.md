@@ -190,6 +190,12 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 
 ### Fixed
 
+- On macOS, detached browser and WebKit XPC helper processes spawned via `launchd` (`PPID=1`, such as Playwright
+  `ms-playwright/webkit-*` `com.apple.WebKit.{WebContent,GPU,Networking}.Development` or isolated-profile browser
+  helpers) are attributed to their owning live lease for dashboard `LEASE DETAILS` CPU/memory/process accounting,
+  run history (`cpu_detached`, `rss_peak_mb`, `processes`), idle tracking, `status --json --pid`, `procs --json`,
+  and `sweep` protection (`via: "helper"`), while excluding unrelated user/system browsers and refusing ambiguous
+  attribution when multiple runs share the same browser driver concurrently (fathers#202).
 - `events.jsonl` strips Unicode line and paragraph separators (`U+2028`, `U+2029`), caps general strings at 1000
   characters (400 for commands) and bounds the `events.lock` wait to 1 s, and `install.py` vendors `fathers_common`
   into each immutable release and includes it in the source digest and dirty checks (fathers#117).
