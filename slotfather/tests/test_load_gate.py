@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """CPU load admission (fathers#184): sustained CPU load holds grants beside running leases; an idle machine still
-starts its first request. load_wait() and memory_gate() alone, then grant(), `status`, the dashboard block, `advise`
-and `order --load-gate` on injected queues, with the SLOTFATHER_LOADAVG seam."""
+starts its first request. Admission alone, then grant(), `status`, the dashboard block, `advise` and
+`order --load-gate` on injected queues, with the SLOTFATHER_LOADAVG seam."""
 from __future__ import annotations
 import sys as _path_sys
 from pathlib import Path as _Path
@@ -17,6 +17,7 @@ from slotfather import settings as sf_settings
 
 import json
 import os
+import time
 import unittest
 from typing import Any, cast
 from unittest import mock
@@ -24,6 +25,8 @@ from unittest import mock
 from test_slotfather import SlotCase
 
 DEFAULTS: dict[str, Any] = dict(sf_config.ORDER_DEFAULTS)
+M = 1_800_000_000.0
+SINCE = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(M))
 
 
 def flat(load: float) -> tuple[float, float, float]:
@@ -31,10 +34,14 @@ def flat(load: float) -> tuple[float, float, float]:
 
 
 class LoadWaitTests(unittest.TestCase):
-    """load_wait() alone: 12 cores, 4 slots (3 cores a slot)."""
+    """Admission load gate: 12 cores, 4 slots (3 cores a slot)."""
 
     def wait(self, averages: tuple[float, float, float] | None, held: int, **settings: float) -> str | None:
-        return sf_schedule.load_wait(averages, 12, 4, held, {**DEFAULTS, **settings})
+        holders = [{"count": 1, "label": f"h{n}", "state": "held", "since": SINCE, "granted": SINCE}
+                   for n in range(held)]
+        adm = sf_schedule.Admission([], holders, 4, M, settings={**DEFAULTS, **settings},
+                                    host=sf_schedule.Host(averages=averages, cores=12))
+        return adm.dashboard_room().load_block
 
     def test_unleased_load_at_the_cores_holds(self) -> None:
         self.assertIsNone(self.wait(flat(11.9), 0))
@@ -55,17 +62,30 @@ class LoadWaitTests(unittest.TestCase):
         self.assertIsNotNone(self.wait(flat(24), 0, load_gate=2.0))
         self.assertIsNone(self.wait(flat(99), 4, load_gate=0.0))
         self.assertIsNone(self.wait(None, 4))
-        self.assertIsNotNone(sf_schedule.load_wait(flat(99), 12, 4, 0, {}), "the default applies without the key")
+        without_key = {k: v for k, v in DEFAULTS.items() if k != "load_gate"}
+        adm = sf_schedule.Admission([], [], 4, M, settings=without_key,
+                                    host=sf_schedule.Host(averages=flat(99), cores=12))
+        self.assertIsNotNone(adm.dashboard_room().load_block, "the default applies without the key")
 
-    def test_memory_gate_starts_the_first_on_an_idle_machine_and_nothing_beside_running_leases(self) -> None:
-        load = "CPU load 25.0: 25.0 unleased is at or above 12 cores"
-        grants: list[dict[str, Any]] = [{"count": 1, "label": "a"}, {"count": 1, "label": "b"}]
-        idle = sf_schedule.memory_gate(grants, [], 0, ("normal", None), DEFAULTS, load=load)
-        self.assertEqual([None, load], [why for _, why in idle])
-        busy = sf_schedule.memory_gate(grants, [{"count": 1}], 1, ("normal", None), DEFAULTS, load=load)
-        self.assertEqual([load, load], [why for _, why in busy])
-        free = sf_schedule.memory_gate(grants, [{"count": 1}], 1, ("normal", None), DEFAULTS)
-        self.assertEqual([None, None], [why for _, why in free])
+    def test_admission_starts_the_first_on_an_idle_machine_and_nothing_beside_running_leases(self) -> None:
+        grants: list[dict[str, Any]] = [
+            {"count": 1, "label": "a", "since": SINCE, "state": "waiting"},
+            {"count": 1, "label": "b", "since": SINCE, "state": "waiting"},
+        ]
+        hot = sf_schedule.Host(averages=flat(25.0), cores=12)
+        idle = sf_schedule.Admission(grants, [], 4, M, settings=DEFAULTS, host=hot).plan_grants()
+        self.assertEqual(["a"], [s.entry["label"] for s in idle.started])
+        self.assertEqual([("b", "load")], [(e["label"], b.kind) for e, b in idle.gated])
+        self.assertEqual("CPU load 25.0: 25.0 unleased is at or above 12 cores", idle.gated[0][1].reason)
+
+        held = [{"count": 1, "label": "running", "since": SINCE, "granted": SINCE, "state": "held"}]
+        busy = sf_schedule.Admission(grants, held, 4, M, settings=DEFAULTS, host=hot).plan_grants()
+        self.assertEqual([], busy.started)
+        self.assertEqual([("a", "load"), ("b", "load")], [(e["label"], b.kind) for e, b in busy.gated])
+
+        free = sf_schedule.Admission(grants, held, 4, M, settings=DEFAULTS).plan_grants()
+        self.assertEqual(["a", "b"], [s.entry["label"] for s in free.started])
+        self.assertEqual([], free.gated)
 
     def test_the_default_is_not_written_to_order_json(self) -> None:
         self.assertNotIn("load_gate", sf_settings.order_bytes(sf_config.ORDER_DEFAULTS))
@@ -73,22 +93,22 @@ class LoadWaitTests(unittest.TestCase):
         self.assertEqual(["load_gate"], sf_settings.order_extension_keys({"load_gate": 2.0}))
 
     def test_the_dashboard_admits_nothing_beside_running_leases_while_the_load_holds(self) -> None:
-        held = [{"count": 1, "label": "running", "state": "held"}]
-        why = "CPU load 25.0"
-        self.assertEqual(0, sf_board.dashboard_admission([], held, 4, 0, None, None, DEFAULTS, "normal", why))
-        self.assertEqual(3, sf_board.dashboard_admission([], held, 4, 0, None, None, DEFAULTS, "normal", None))
-        self.assertEqual(4, sf_board.dashboard_admission([], [], 4, 0, None, None, DEFAULTS, "normal", why),
+        held = [{"count": 1, "label": "running", "since": SINCE, "granted": SINCE, "state": "held"}]
+        hot = sf_schedule.Host(averages=flat(25.0), cores=12)
+        calm = sf_schedule.Host(averages=flat(0.0), cores=12)
+        self.assertEqual(0, sf_schedule.Admission([], held, 4, M, settings=DEFAULTS, host=hot).dashboard_room().admission)
+        self.assertEqual(3, sf_schedule.Admission([], held, 4, M, settings=DEFAULTS, host=calm).dashboard_room().admission)
+        self.assertEqual(4, sf_schedule.Admission([], [], 4, M, settings=DEFAULTS, host=hot).dashboard_room().admission,
                          "an idle machine starts its first request")
         # fathers#211: load_block stays untangled from memory_block around warning_admits and idle-host waiters.
-        self.assertEqual(0, sf_board.dashboard_admission([], held, 4, 0, sf_schedule.WARNING_WAIT, None, DEFAULTS,
-                                                         "warning", why),
+        warn_hot = sf_schedule.Host(memory=("warning", "level 2"), averages=flat(25.0), cores=12)
+        self.assertEqual(0, sf_schedule.Admission([], held, 4, M, settings=DEFAULTS, host=warn_hot).dashboard_room().admission,
                          "warning_admits never admits beside running leases while load_block holds")
-        self.assertEqual(0, sf_board.dashboard_admission([], held, 4, 0, None, None, DEFAULTS, "warning", why))
-        waiter = {"count": 1, "label": "waiting", "cmd": "work", "since": sf_config.now(), "state": "waiting"}
-        self.assertEqual(0, sf_board.dashboard_admission([waiter], [], 4, 0, None, None, DEFAULTS, "normal", why),
+        waiter = {"count": 1, "label": "waiting", "cmd": "work", "since": SINCE, "state": "waiting"}
+        self.assertEqual(0, sf_schedule.Admission([waiter], [], 4, M, settings=DEFAULTS, host=hot).dashboard_room().admission,
                          "an earlier normal waiter consumes the idle-host exemption under load_block")
         batch = dict(waiter, priority="batch")
-        self.assertEqual(4, sf_board.dashboard_admission([batch], [], 4, 0, None, None, DEFAULTS, "normal", why),
+        self.assertEqual(4, sf_schedule.Admission([batch], [], 4, M, settings=DEFAULTS, host=hot).dashboard_room().admission,
                          "a generic normal probe ranks ahead of a batch waiter on an idle host under load_block")
 
 
@@ -178,9 +198,19 @@ class GrantTests(SlotCase):
                          "the default is not written: older clients refuse keys they do not know")
 
     def test_settings_cli_refuses_load_gate_without_mutating_order_json(self) -> None:
-        self.assertIsNone(sf_schedule.load_wait((50.0, float("nan"), 5.0), 12, 8, 2, {"load_gate": 1.0}))
-        self.assertIsNone(sf_schedule.load_wait((50.0, 50.0, 50.0), 0, 8, 2, {"load_gate": 1.0}))
-        self.assertIsNone(sf_schedule.load_wait((50.0, 50.0, 50.0), 12, 0, 2, {"load_gate": 1.0}))
+        held = [{"count": 2, "label": "h", "since": SINCE, "granted": SINCE, "state": "held"}]
+        self.assertIsNone(sf_schedule.Admission(
+            [], held, 8, M, settings={**DEFAULTS, "load_gate": 1.0},
+            host=sf_schedule.Host(averages=(50.0, float("nan"), 5.0), cores=12),
+        ).dashboard_room().load_block)
+        self.assertIsNone(sf_schedule.Admission(
+            [], held, 8, M, settings={**DEFAULTS, "load_gate": 1.0},
+            host=sf_schedule.Host(averages=(50.0, 50.0, 50.0), cores=0),
+        ).dashboard_room().load_block)
+        self.assertIsNone(sf_schedule.Admission(
+            [], held, 0, M, settings={**DEFAULTS, "load_gate": 1.0},
+            host=sf_schedule.Host(averages=(50.0, 50.0, 50.0), cores=12),
+        ).dashboard_room().load_block)
         for argv in (("settings", "check", "order.load_gate", "2", "--json"),
                      ("settings", "set", "order.load_gate", "2", "--json"),
                      ("settings", "reset", "order.load_gate", "--json")):

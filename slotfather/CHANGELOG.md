@@ -202,6 +202,9 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 
 ### Fixed
 
+- Enforced the `memory_share` expected-peak memory budget on the second and later concurrent grants of an initially
+  idle machine, and applied the blocked-head `p90` backfill rule consistently across dashboard admission, `available`,
+  `advise`, `ask-yield`, and `yield` (fathers#214).
 - Fixed scheduler, admission, and sweep edge cases: backfill head-drop now accounts for earlier grants (including
   `-n MIN-MAX` range sizes) in the same look and refuses 0-second backfill past unknown earlier-queue slots;
   `window` order refuses `slotfather ask-yield`, withdraws standing yield requests, and ignores stale yield markers

@@ -242,15 +242,17 @@ class BackfillTests(PlanCase):
 
     def test_a_new_request_gets_no_slots_behind_the_head_unless_its_run_is_known_to_be_short(self):
         waiters = [waiter("gate", 6, -700)]
-        with mock.patch.object(sf_config, "now", return_value=stamp(0)), mock.patch.object(time, "time", return_value=M):
-            self.assertEqual(0, sf_schedule.room(waiters, 5, self.held, runs(one=3600), settings=self.settings, moment=M))
-            self.assertEqual(0, sf_schedule.room(waiters, 5, moment=M))
-            self.assertEqual(5, sf_schedule.room([waiter("gate", 6, -100)], 5, self.held, runs(one=3600),
-                                        settings=self.settings, moment=M))
-            self.assertEqual(5, sf_schedule.room(waiters, 5, self.held, runs(one=3600, mine=60), settings=self.settings,
-                                        label="mine", command="make mine", moment=M))
-            self.settings["fallback"] = 60
-            self.assertEqual(5, sf_schedule.room(waiters, 5, self.held, runs(one=3600), settings=self.settings, moment=M))
+        self.assertEqual(0, sf_schedule.Admission(waiters, self.held, 6, M, settings=self.settings,
+                                                  estimate=runs(one=3600)).room())
+        self.assertEqual(0, sf_schedule.Admission(waiters, self.held, 6, M,
+                                                  settings={**self.settings, "order": "window"}).room())
+        self.assertEqual(5, sf_schedule.Admission([waiter("gate", 6, -100)], self.held, 6, M, settings=self.settings,
+                                                  estimate=runs(one=3600)).room())
+        self.assertEqual(5, sf_schedule.Admission(waiters, self.held, 6, M, settings=self.settings,
+                                                  estimate=runs(one=3600, mine=60)).room(label="mine", command="make mine"))
+        self.settings["fallback"] = 60
+        self.assertEqual(5, sf_schedule.Admission(waiters, self.held, 6, M, settings=self.settings,
+                                                  estimate=runs(one=3600)).room())
 
 
 class CapacityChangeTests(PlanCase):
@@ -284,8 +286,7 @@ class CapacityChangeTests(PlanCase):
         self.assertEqual((6, 4), (sf_entry.holds(whole, 6), sf_entry.holds(holder("four", 4, -60), 6)))
         self.assertEqual([], self.started([waiter("w", 1, -30)], [whole], slots=6))
         self.assertEqual(["w"], self.started([waiter("w", 1, -30)], [holder("four", 4, -60)], slots=6))
-        with mock.patch.object(sf_config, "now", return_value=stamp(0)), mock.patch.object(time, "time", return_value=M):
-            self.assertEqual(0, sf_schedule.room([], 0, [whole], settings=self.settings, slots=6, moment=M))
+        self.assertEqual(0, sf_schedule.Admission([], [whole], 6, M, settings=self.settings).room())
 
     def test_a_drain_counts_when_an_interactive_waiter_asks_yieldable_holders(self):
         self.settings["yield_after"] = 60

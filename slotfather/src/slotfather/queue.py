@@ -8,6 +8,7 @@ import contextlib
 import math
 import os
 from pathlib import Path
+import time
 from typing import Any, Callable, Iterator, Mapping, cast
 
 from . import config as _config
@@ -195,3 +196,54 @@ def memory_estimator(directory: Path) -> _schedule.Estimate:
             loaded.append(_estimates.memory_estimator(directory))
         return loaded[0](entry)
     return estimate
+
+
+def _ram_mb() -> float | None:
+    ram_gib = _platform.memory_gib()
+    return None if ram_gib is None else ram_gib * 1024.0
+
+
+def live_host(
+    *,
+    averages: tuple[float, float, float] | None = None,
+    cores: int | None = None,
+) -> _schedule.Host:
+    """Host resource readers wired lazily to platform/config, with optional pre-sampled overrides."""
+    return _schedule.Host(
+        memory=_platform.memory_level,
+        ram_mb=_ram_mb,
+        averages=_platform.load_averages if averages is None else averages,
+        cores=_config.cores if cores is None else cores,
+    )
+
+
+def admission(
+    directory: Path,
+    waiters: list[_schedule.Entry],
+    held: list[_schedule.Entry],
+    slots: int,
+    other: int,
+    *,
+    moment: float | None = None,
+    settings: dict[str, Any] | None = None,
+    shared_settings: dict[str, Any] | None = None,
+    estimate: _schedule.Estimate | None = None,
+    host: _schedule.Host | None = None,
+) -> _schedule.Admission:
+    """Build an Admission over live queue state with lazy estimators and host readers."""
+    return _schedule.Admission(
+        waiters,
+        held,
+        slots,
+        time.time() if moment is None else moment,
+        other=other,
+        settings=_settings.order_settings(directory) if settings is None else settings,
+        shared_settings=_settings.order_settings(directory, environment=False)
+        if shared_settings is None
+        else shared_settings,
+        window=_config.overtake_window(),
+        host=live_host() if host is None else host,
+        estimate=estimator(directory) if estimate is None else estimate,
+        p90=estimator(directory, p90=True),
+        memory_estimate=memory_estimator(directory),
+    )

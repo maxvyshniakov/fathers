@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import math
 import time
-from typing import Any, Callable, Optional
+from typing import Any, Callable, NamedTuple, Optional
 
 from . import config as _config
 from . import entry as _entry
@@ -16,6 +16,8 @@ from . import entry as _entry
 
 Entry = _entry.Record  # a queue entry, waiting or held, as the queue files hold it
 Estimate = Callable[[Entry], Optional[float]]  # an entry's expected run in seconds; None when unknown
+MemoryState = tuple[str, Optional[str]]  # ("normal", None), ("warning", why) or ("short", why)
+LoadAverages = tuple[float, float, float]  # (1m, 5m, 15m) load averages
 DEFAULTS: dict[str, Any] = _config.ORDER_DEFAULTS  # the order settings where a caller gives none (read-only)
 WINDOW: float = float(_config.OVERTAKE_WINDOW)  # the overtaking window where a caller gives none
 
@@ -607,14 +609,110 @@ WARNING_WAIT = "memory pressure warning: one 1-slot lease at a time"
 LOAD_PEAK = 1.5  # fathers#184: min(load1, load5) at this multiple of the gate's cores holds grants too
 
 
-def load_wait(averages: tuple[float, float, float] | None, cores: int, slots: int, held: int,
-              settings: dict[str, Any]) -> str | None:
+class _Unset:
+    pass
+
+
+_UNSET = _Unset()
+
+
+class Host:
+    """Host resource readings for Admission: plain values or zero-arg callables memoized on first property read."""
+
+    def __init__(
+        self,
+        memory: MemoryState | Callable[[], MemoryState] = ("normal", None),
+        ram_mb: float | None | Callable[[], float | None] = None,
+        averages: LoadAverages | None | Callable[[], LoadAverages | None] = None,
+        cores: int | Callable[[], int] = 0,
+    ) -> None:
+        self._memory_src = memory
+        self._ram_mb_src = ram_mb
+        self._averages_src = averages
+        self._cores_src = cores
+        self._memory: MemoryState | _Unset = _UNSET
+        self._ram_mb: float | None | _Unset = _UNSET
+        self._averages: LoadAverages | None | _Unset = _UNSET
+        self._cores: int | _Unset = _UNSET
+
+    @property
+    def memory(self) -> tuple[str, str | None]:
+        if isinstance(self._memory, _Unset):
+            src = self._memory_src
+            self._memory = src() if callable(src) else src
+        return self._memory
+
+    @property
+    def ram_mb(self) -> float | None:
+        if isinstance(self._ram_mb, _Unset):
+            src = self._ram_mb_src
+            self._ram_mb = src() if callable(src) else src
+        return self._ram_mb
+
+    @property
+    def averages(self) -> tuple[float, float, float] | None:
+        if isinstance(self._averages, _Unset):
+            src = self._averages_src
+            self._averages = src() if callable(src) else src
+        return self._averages
+
+    @property
+    def cores(self) -> int:
+        if isinstance(self._cores, _Unset):
+            src = self._cores_src
+            self._cores = src() if callable(src) else src
+        return self._cores
+
+
+class GateBlock(NamedTuple):
+    kind: str  # "memory", "budget", or "load"
+    reason: str
+
+
+class StartedGrant(NamedTuple):
+    entry: Entry
+    count: int  # pyright: ignore[reportIncompatibleMethodOverride]
+    served: str
+    pressed: bool
+
+
+class GrantOutcome(NamedTuple):
+    plan: Plan
+    keeper: Plan
+    started: list[StartedGrant]
+    gated: list[tuple[Entry, GateBlock]]
+    reason: str | None
+
+
+class DashboardRoom(NamedTuple):
+    admission: int
+    memory_block: str | None
+    load_block: str | None
+    memory_budget_block: str | None
+    memory_expected_mb: float
+    memory_budget_mb: float | None
+    start: float | None
+    reserved: float | None
+
+
+class AdviseBlock(NamedTuple):
+    queue_room: int
+    waiting: bool
+    run_estimate: float | None
+    memory_level: str
+    memory_short: str | None
+    load_block: str | None
+    memory_budget_block: str | None
+
+
+def _load_wait(averages: tuple[float, float, float] | None, cores: int, slots: int, held: int,
+               settings: dict[str, Any]) -> str | None:
     """Why sustained CPU load holds back grants beside running leases (fathers#184), or None. With `load_gate` G
     (an order setting; 0 disables) and `held` slots of `slots` held on `cores` cores, under load `averages` (1, 5
     and 15 minutes; None: unknown, no gate): the load is min(load1, load5), so a short burst does not count; the
     unleased load is that less the held slots' share of the cores, as `advise` counts it (query.size()). It holds
     at an unleased load of G x cores, or at a load of LOAD_PEAK x G x cores, whatever the leases themselves run.
-    memory_gate() applies it beside running leases only: an idle machine always starts its first request."""
+    _gate() applies it beside running leases only: an idle machine always starts its first request."""
     gate = float(settings.get("load_gate", _config.ORDER_DEFAULTS["load_gate"]))
     if averages is None or not gate > 0 or cores < 1 or slots < 1:
         return None
@@ -629,11 +727,11 @@ def load_wait(averages: tuple[float, float, float] | None, cores: int, slots: in
     return None
 
 
-def budget_wait(held_mb: float, need_mb: float, ram_mb: float | None, share: float) -> str | None:
+def _budget_wait(held_mb: float, need_mb: float, ram_mb: float | None, share: float) -> str | None:
     """Why expected peak memory holds a request back beside running leases (fathers#9), or None: when the held
     leases' expected peak (`held_mb`) and the request's (`need_mb`) exceed `share` of `ram_mb`. Unknown RAM or a share
-    of 0 has no budget. memory_gate() applies it beside running leases only, and the dashboard's admission and
-    `advise` read the same rule (fathers#206)."""
+    of 0 has no budget. _gate() applies it beside running leases only, and the dashboard's admission and `advise`
+    read the same rule through Admission (fathers#206, fathers#214)."""
     if ram_mb is None or not ram_mb > 0 or not share > 0:
         return None
     budget_mb = ram_mb * share
@@ -643,24 +741,33 @@ def budget_wait(held_mb: float, need_mb: float, ram_mb: float | None, share: flo
     return None
 
 
-def memory_gate(grants: list[Entry], held: list[Entry], used: int, memory: tuple[str, str | None],
-                settings: dict[str, Any], *, memory_estimate: Estimate | None = None,
-                ram_mb: float | None = None,
-                granted_counts: dict[int, int] | None = None,
-                load: str | None = None) -> list[tuple[Entry, str | None]]:
-    """Which of plan()'s `grants` memory and CPU load let start now beside `held` (`used` slots held in all), in
-    their order: (entry, None) starts, (entry, why) waits. Normal memory starts them all unless expected peak memory
-    exceeds `memory_share` of `ram_mb` (fathers#9). While memory is short nothing starts beside a running lease.
-    Under warning, with `warning_admits` on, a 1-slot request starts when no running lease was granted while memory
-    was not normal (entry.PRESSED), so one such lease runs at a time; others wait. While `load` says why sustained
-    CPU load holds grants (load_wait(), fathers#184) nothing starts beside a running lease either. An idle machine
-    (nothing used) always starts its first request."""
-    kind, why = memory
+def _gate(
+    grants: list[Entry],
+    held: list[Entry],
+    used: int,
+    slots: int,
+    host: Host,
+    settings: dict[str, Any],
+    *,
+    memory_estimate: Estimate | None = None,
+    granted_counts: dict[int, int] | None = None,
+) -> list[tuple[Entry, GateBlock | None]]:
+    """Which of plan()'s `grants` memory, expected-peak budget and CPU load let start now beside `held` (`used` slots
+    held in all), in their order: (entry, None) starts, (entry, GateBlock) waits. Normal memory starts them all unless
+    expected peak memory exceeds `memory_share` of `host.ram_mb` (fathers#9). While memory is short nothing starts
+    beside a running lease. Under warning, with `warning_admits` on, a 1-slot request starts when no running lease was
+    granted while memory was not normal (entry.PRESSED), so one such lease runs at a time; others wait. While
+    sustained CPU load holds grants (_load_wait(), fathers#184) nothing starts beside a running lease either. An idle
+    machine (nothing used) always starts its first request, and checks budget/load/memory on any 2nd+ grant."""
+    if not grants:
+        return []
+    kind, why = host.memory
     allowance = kind == "warning" and float(settings.get("warning_admits", 1)) >= 1
     pressed = any(e.get(_entry.PRESSED) for e in held)
     share = float(settings.get("memory_share", _config.ORDER_DEFAULTS["memory_share"]))
     default_mb = float(settings.get("memory_default_mb", _config.ORDER_DEFAULTS["memory_default_mb"]))
-    budget_mb = ram_mb * share if (ram_mb is not None and ram_mb > 0 and share > 0 and memory_estimate is not None) else None
+    load_gate = float(settings.get("load_gate", _config.ORDER_DEFAULTS["load_gate"]))
+    initial_used = used
 
     def expected_mb(item: Entry) -> float:
         if memory_estimate is None:
@@ -668,26 +775,46 @@ def memory_gate(grants: list[Entry], held: list[Entry], used: int, memory: tuple
         found_mb = memory_estimate(item)
         return float(found_mb) if found_mb is not None else default_mb
 
-    held_mb = sum(expected_mb(e) for e in held) if budget_mb is not None else 0.0
-    found: list[tuple[Entry, str | None]] = []
+    budget_ready = False
+    ram_mb: float | None = None
+    held_mb = 0.0
+    load_ready = False
+    load_why: str | None = None
+    admitted: list[Entry] = []
+    found: list[tuple[Entry, GateBlock | None]] = []
     for entry in grants:
         grant_count = (granted_counts or {}).get(id(entry), int(entry["count"]))
-        reason = None
+        block: GateBlock | None = None
         if used and kind != "normal":
             if not allowance:
-                reason = why
+                block = GateBlock("memory", why or WARNING_WAIT)
             elif grant_count != 1 or entry.get("all") or pressed:
-                reason = WARNING_WAIT
-        if reason is None and used and budget_mb is not None:
-            reason = budget_wait(held_mb, expected_mb(entry), ram_mb, share)
-        if reason is None and used and load:
-            reason = load
-        if reason is None:
+                block = GateBlock("memory", WARNING_WAIT)
+        need_mb: float | None = None
+        if block is None and used and share > 0:
+            if not budget_ready:
+                budget_ready = True
+                ram_mb = host.ram_mb
+                if ram_mb is not None and ram_mb > 0:
+                    held_mb = sum(expected_mb(e) for e in held) + sum(expected_mb(e) for e in admitted)
+            if ram_mb is not None and ram_mb > 0:
+                need_mb = expected_mb(entry)
+                budget_reason = _budget_wait(held_mb, need_mb, ram_mb, share)
+                if budget_reason is not None:
+                    block = GateBlock("budget", budget_reason)
+        if block is None and used and load_gate > 0:
+            if not load_ready:
+                load_ready = True
+                load_why = _load_wait(host.averages, host.cores, slots, initial_used, settings)
+            if load_why is not None:
+                block = GateBlock("load", load_why)
+        if block is None:
             used += max(1, grant_count)
-            if budget_mb is not None:
-                held_mb += expected_mb(entry)
+            admitted.append(entry)
+            if budget_ready and ram_mb is not None and ram_mb > 0 and need_mb is not None:
+                held_mb += need_mb
             pressed = pressed or kind != "normal"
-        found.append((entry, reason))
+        found.append((entry, block))
     return found
 
 
@@ -751,24 +878,409 @@ def forecast(waiters: list[Entry], held: list[Entry], slots: int, moment: float,
     return found
 
 
-def room(waiters: list[Entry], free: int, held: list[Entry] | None = None, estimate: Estimate | None = None,
-         other: int = 0, settings: dict[str, Any] | None = None, label: str = "", command: str = "",
-         slots: int | None = None, *, moment: float, window: float = WINDOW) -> int:
-    """The slots a new request gets at once behind `waiters` with `free` slots unheld, as grant() admits it: one
-    for `command` under `label`, whose run the estimates know, or else one of unknown run (the fallback). Without
-    `held` (the entries holding slots; `other` slots more held without one), the window order's answer. `slots`
-    is the capacity; without it, what `free` and the held slots add up to (wrong only while a shrink drains).
-    `moment` is when the request would come (the policy reads no clock)."""
-    if slots is None:
-        slots = free + sum(int(e["count"]) for e in held or ()) + other
-    if held is not None:  # the whole capacity: what grant() fits the waiters to
-        fit(waiters, slots)
-    settings = settings or DEFAULTS
-    order = settings["order"] if held is not None else "window"
+def _room(
+    waiters: list[Entry],
+    free: int,
+    held: list[Entry],
+    estimate: Estimate | None,
+    other: int,
+    settings: dict[str, Any],
+    label: str,
+    command: str,
+    slots: int,
+    *,
+    moment: float,
+    window: float = WINDOW,
+    p90: Estimate | None = None,
+) -> int:
+    """The slots a new request gets at once behind `waiters` with `free` slots unheld, by queue order alone."""
+    if free <= 0:
+        return 0
+    if not waiters:
+        return free
     since = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(moment))
     for count in range(free, 0, -1):
         probe: Entry = {"count": count, "label": label, "cmd": command, "since": since}
-        if any(entry is probe for entry in plan(waiters + [probe], held or [], slots, moment, order, estimate,
-                                                         other, settings=settings, window=window).grants):
+        found = plan(
+            waiters + [probe],
+            held,
+            slots,
+            moment,
+            settings["order"],
+            estimate,
+            other,
+            settings=settings,
+            window=window,
+            p90=p90,
+        )
+        if any(entry is probe for entry in found.grants):
             return count
     return 0
+
+
+class Admission:
+    """The single admission & resource-gate seam across grant(), status/forecast, dashboard, advise and replay
+    (fathers#214). Enforces fit(), p90, plan(), and _gate() (memory pressure, memory_share budget, CPU load) on
+    private copies of `waiters` without mutating caller dicts, keeping host/estimator reads strictly lazy."""
+
+    def __init__(
+        self,
+        waiters: list[Entry],
+        held: list[Entry],
+        slots: int,
+        moment: float,
+        *,
+        other: int = 0,
+        settings: dict[str, Any] | None = None,
+        shared_settings: dict[str, Any] | None = None,
+        window: float = WINDOW,
+        host: Host | None = None,
+        estimate: Estimate | None = None,
+        p90: Estimate | None = None,
+        memory_estimate: Estimate | None = None,
+    ) -> None:
+        self._originals: dict[int, Entry] = {}
+        self._waiters: list[Entry] = []
+        for entry in waiters:
+            copy = dict(entry)
+            self._originals[id(copy)] = entry
+            self._waiters.append(copy)
+        fit(self._waiters, slots)
+        self._held: list[Entry] = list(held)
+        self._slots: int = slots
+        self._moment: float = moment
+        self._other: int = other
+        self._settings: dict[str, Any] = settings if settings is not None else DEFAULTS
+        self._shared_settings: dict[str, Any] = shared_settings if shared_settings is not None else self._settings
+        self._window: float = window
+        self._host: Host = host if host is not None else Host()
+        self._estimate: Estimate = estimate if estimate is not None else no_estimate
+        self._p90: Estimate | None = p90
+        self._memory_estimate: Estimate | None = memory_estimate
+        self._used: int = sum(_entry.holds(e, slots) for e in self._held) + other
+        self._reserved_plan: Plan | None = None
+        self._forecast_cache: dict[int, dict[str, Any]] | None = None
+
+    def _original(self, entry: Entry) -> Entry:
+        return self._originals.get(id(entry), entry)
+
+    def _remap_plan(self, found: Plan) -> Plan:
+        mapped = Plan()
+        mapped.grants = [self._original(e) for e in found.grants]
+        mapped.granted_counts = {
+            id(self._original(e)): found.granted_counts[id(e)]
+            for e in found.grants
+            if id(e) in found.granted_counts
+        }
+        mapped.reason = found.reason
+        mapped.head = None if found.head is None else self._original(found.head)
+        mapped.start = found.start
+        mapped.reserved = found.reserved
+        mapped.known = found.known
+        mapped.blocked = [self._original(b) for b in found.blocked]
+        mapped.dropped = [
+            (self._original(e), [self._original(b) for b in blockers])
+            for e, blockers in found.dropped
+        ]
+        return mapped
+
+    def _plan_with_head(self) -> Plan:
+        if self._reserved_plan is None:
+            self._reserved_plan = plan(
+                self._waiters,
+                self._held,
+                self._slots,
+                self._moment,
+                estimate=self._estimate,
+                other=self._other,
+                reserve_head=True,
+                settings=self._settings,
+                window=self._window,
+                p90=self._p90,
+            )
+        return self._reserved_plan
+
+    def expected_memory(self, entry: Entry, *, settings: dict[str, Any] | None = None) -> tuple[float, str]:
+        """An entry's expected peak RSS in MB and its source ("history" or "default")."""
+        cfg = settings if settings is not None else self._settings
+        default_mb = float(cfg.get("memory_default_mb", _config.ORDER_DEFAULTS["memory_default_mb"]))
+        if self._memory_estimate is not None:
+            peak = self._memory_estimate(entry)
+            if peak is not None:
+                return float(peak), "history"
+        return default_mb, "default"
+
+    def plan_grants(self, *, gate_by_shared: bool = False) -> GrantOutcome:
+        """Plan grants and apply resource gates, returning original waiter references and gate blocks."""
+        found = plan(
+            self._waiters,
+            self._held,
+            self._slots,
+            self._moment,
+            estimate=self._estimate,
+            other=self._other,
+            settings=self._settings,
+            window=self._window,
+            p90=self._p90,
+        )
+        keeper = shared_plan(
+            found,
+            self._waiters,
+            self._held,
+            self._slots,
+            self._moment,
+            self._estimate,
+            self._other,
+            self._settings,
+            self._shared_settings,
+            self._window,
+            self._p90,
+        )
+        started: list[StartedGrant] = []
+        gated: list[tuple[Entry, GateBlock]] = []
+        if found.grants:
+            gate_settings = self._shared_settings if gate_by_shared else self._settings
+            checked = _gate(
+                found.grants,
+                self._held,
+                self._used,
+                self._slots,
+                self._host,
+                gate_settings,
+                memory_estimate=self._memory_estimate,
+                granted_counts=found.granted_counts,
+            )
+            pressed = self._host.memory[0] != "normal"
+            for copy, block in checked:
+                orig = self._original(copy)
+                if block is None:
+                    started.append(
+                        StartedGrant(
+                            orig,
+                            found.granted_count(copy),
+                            effective_priority(copy, self._settings, self._moment),
+                            pressed,
+                        )
+                    )
+                else:
+                    gated.append((orig, block))
+        reason = gated[0][1].reason if gated else found.reason
+        mapped_plan = self._remap_plan(found)
+        mapped_keeper = mapped_plan if keeper is found else self._remap_plan(keeper)
+        return GrantOutcome(mapped_plan, mapped_keeper, started, gated, reason)
+
+    def forecast(self) -> dict[int, dict[str, Any]]:
+        """Expected outlook for each waiter keyed by id(original waiter), gating immediate grants by shared_settings."""
+        if self._forecast_cache is not None:
+            return self._forecast_cache
+        if not self._waiters:
+            self._forecast_cache = {}
+            return self._forecast_cache
+        starts = (
+            forecast(
+                self._waiters,
+                self._held,
+                self._slots,
+                self._moment,
+                self._estimate,
+                self._other,
+                self._settings,
+                self._window,
+                self._p90,
+            )
+            if self._settings["order"] == "backfill"
+            else {}
+        )
+        found = self._plan_with_head()
+        blocks = {
+            id(entry): block
+            for entry, block in _gate(
+                found.grants,
+                self._held,
+                self._used,
+                self._slots,
+                self._host,
+                self._shared_settings,
+                memory_estimate=self._memory_estimate,
+                granted_counts=found.granted_counts,
+            )
+            if block is not None
+        }
+        warn = float(self._settings.get("warn_wait") or 0)
+        idle = max(0, self._slots - self._used - sum(_holds(e, self._slots, found.granted_counts) for e in found.grants))
+        stalled = bool(found.blocked) and found.reserved is not None and self._moment >= found.reserved
+        dropped = {id(entry): blockers for entry, blockers in found.dropped}
+
+        def names(leases: list[Entry]) -> list[dict[str, Any]]:
+            return [{"label": e.get("label"), "pid": e.get("pid")} for e in leases]
+
+        result: dict[int, dict[str, Any]] = {}
+        for copy in self._waiters:
+            began = _entry.waiting_since(copy)
+            waited = None if began is None else max(0.0, self._moment - began)
+            is_head = copy is found.head
+            block = blocks.get(id(copy))
+            result[id(self._originals[id(copy)])] = {
+                "priority": effective_priority(copy, self._settings, self._moment)
+                if self._settings["order"] == "backfill"
+                else _entry.priority_of(copy),
+                "aged": self._settings["order"] == "backfill" and aged(copy, self._settings, self._moment),
+                "est_start": None if block is not None else starts.get(id(copy)),
+                "head": is_head,
+                "memory_wait": block.reason if block is not None and block.kind != "load" else None,
+                "load_wait": block.reason if block is not None and block.kind == "load" else None,
+                "reserved": found.reserved if is_head else None,
+                "waited": waited,
+                "long_wait": bool(warn and waited is not None and waited >= warn),
+                "blocked_by": names(found.blocked) if is_head and stalled else None,
+                "idle": idle if is_head and stalled else None,
+                "gave_way": names(dropped[id(copy)]) if id(copy) in dropped else None,
+            }
+        self._forecast_cache = result
+        return result
+
+    def room(self, label: str = "", command: str = "", *, gated: bool = False) -> int:
+        """Largest request size admitted now: by queue order alone (`gated=False`) or through _gate() (`gated=True`)."""
+        free = max(0, self._slots - self._used)
+        if free <= 0:
+            return 0
+        if not gated:
+            return _room(
+                self._waiters,
+                free,
+                self._held,
+                self._estimate,
+                self._other,
+                self._settings,
+                label,
+                command,
+                self._slots,
+                moment=self._moment,
+                window=self._window,
+                p90=self._p90,
+            )
+        if not self._waiters and not self._used:
+            return free
+        max_count = free
+        probe_meta: Entry = {"label": label, "cmd": command}
+        if self._used:
+            kind, _ = self._host.memory
+            allowance = kind == "warning" and float(self._settings.get("warning_admits", 1)) >= 1
+            if kind != "normal":
+                if not allowance or any(e.get(_entry.PRESSED) for e in self._held):
+                    return 0
+                max_count = 1
+            share = float(self._settings.get("memory_share", _config.ORDER_DEFAULTS["memory_share"]))
+            if share > 0:
+                ram_mb = self._host.ram_mb
+                if ram_mb is not None and ram_mb > 0:
+                    held_mb = sum(self.expected_memory(e)[0] for e in self._held)
+                    need_mb = self.expected_memory(probe_meta)[0]
+                    if _budget_wait(held_mb, need_mb, ram_mb, share) is not None:
+                        return 0
+            load_gate = float(self._settings.get("load_gate", _config.ORDER_DEFAULTS["load_gate"]))
+            if (
+                load_gate > 0
+                and _load_wait(self._host.averages, self._host.cores, self._slots, self._used, self._settings)
+                is not None
+            ):
+                return 0
+            if not self._waiters:
+                return max_count
+        since = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(self._moment))
+        for count in range(max_count, 0, -1):
+            probe: Entry = {"count": count, "label": label, "cmd": command, "since": since}
+            found = plan(
+                self._waiters + [probe],
+                self._held,
+                self._slots,
+                self._moment,
+                self._settings["order"],
+                self._estimate,
+                self._other,
+                settings=self._settings,
+                window=self._window,
+                p90=self._p90,
+            )
+            if not any(entry is probe for entry in found.grants):
+                continue
+            checked = _gate(
+                found.grants,
+                self._held,
+                self._used,
+                self._slots,
+                self._host,
+                self._settings,
+                memory_estimate=self._memory_estimate,
+                granted_counts=found.granted_counts,
+            )
+            if any(entry is probe and block is None for entry, block in checked):
+                return count
+        return 0
+
+    def dashboard_room(self) -> DashboardRoom:
+        """Gated admission count, resource blocks, expected-peak budget totals, and head projection for the dashboard."""
+        start: float | None = None
+        reserved: float | None = None
+        if self._settings["order"] == "backfill" and self._waiters:
+            found = self._plan_with_head()
+            if found.head is not None:
+                start = found.start
+                reserved = found.reserved
+        memory_kind, memory_block = self._host.memory
+        if memory_kind == "warning" and float(self._settings.get("warning_admits", 1)) >= 1:
+            memory_block = WARNING_WAIT
+        load_block = _load_wait(
+            self._host.averages, self._host.cores, self._slots, min(self._used, self._slots), self._settings
+        )
+        share = float(self._settings.get("memory_share", _config.ORDER_DEFAULTS["memory_share"]))
+        ram_mb = self._host.ram_mb
+        held_mb = sum(self.expected_memory(e)[0] for e in self._held)
+        memory_budget_block: str | None = None
+        if self._used and ram_mb is not None and ram_mb > 0 and share > 0:
+            need_mb = self.expected_memory({"label": "", "cmd": ""})[0]
+            memory_budget_block = _budget_wait(held_mb, need_mb, ram_mb, share)
+        memory_budget_mb = round(ram_mb * share, 1) if (ram_mb is not None and ram_mb > 0 and share > 0) else None
+        memory_expected_mb = round(held_mb, 1)
+        admission = self.room(gated=True)
+        return DashboardRoom(
+            admission,
+            memory_block,
+            load_block,
+            memory_budget_block,
+            memory_expected_mb,
+            memory_budget_mb,
+            start,
+            reserved,
+        )
+
+    def advise_block(self, label: str = "", command: str = "") -> AdviseBlock:
+        """Queue room, waiting state, run estimate, and machine gates for `advise`."""
+        queue_room = self.room(label, command, gated=False)
+        waiting = bool(self._waiters) and queue_room == 0
+        run_estimate = self._estimate({"label": label, "cmd": command}) if command else None
+        memory_level, memory_short = self._host.memory
+        load_block = (
+            _load_wait(
+                self._host.averages, self._host.cores, self._slots, min(self._used, self._slots), self._settings
+            )
+            if self._used
+            else None
+        )
+        memory_budget_block: str | None = None
+        if self._used:
+            share = float(self._settings.get("memory_share", _config.ORDER_DEFAULTS["memory_share"]))
+            ram_mb = self._host.ram_mb
+            if ram_mb is not None and ram_mb > 0 and share > 0:
+                held_mb = sum(self.expected_memory(e)[0] for e in self._held)
+                need_mb = self.expected_memory({"label": label, "cmd": command})[0]
+                memory_budget_block = _budget_wait(held_mb, need_mb, ram_mb, share)
+        return AdviseBlock(
+            queue_room,
+            waiting,
+            run_estimate,
+            memory_level,
+            memory_short,
+            load_block,
+            memory_budget_block,
+        )

@@ -87,6 +87,26 @@ class Look(NamedTuple):
     def draining(self) -> int:
         return draining(self.held, self.slots)
 
+    def admission(
+        self,
+        *,
+        moment: float | None = None,
+        host: _schedule.Host | None = None,
+    ) -> _schedule.Admission:
+        """Build an Admission for this look's live queue entries, capacity and settings."""
+        held, waiters = _entry.split(self.live)
+        return _queue.admission(
+            self.directory,
+            waiters,
+            held,
+            self.slots,
+            self.other,
+            moment=moment,
+            settings=self.settings,
+            estimate=self.estimate,
+            host=host,
+        )
+
 
 Table = dict[int, tuple[int, str]]
 
@@ -161,63 +181,13 @@ def expected(directory: Path, entries: list[dict[str, Any]], slots: int, other: 
              moment: float | None = None, settings: dict[str, Any] | None = None) -> dict[int, dict[str, Any]]:
     """What the queue expects of each waiter in `entries` (live queue entries) at `moment`: id(entry) ->
     {"priority" (the class it is served in), "aged", "est_start" (epoch seconds, None where the forecast does not
-    reach it or memory holds it back), "head", "reserved" (the head's promised start), "waited", "long_wait",
+    reach it or memory/load holds it back), "head", "reserved" (the head's promised start), "waited", "long_wait",
     "memory_wait" (why memory holds back a request the order would start now, else None), "load_wait" (why
-    sustained CPU load does, fathers#184, else None)}. Read only: the forecast works on copies (schedule.forecast())."""
-    moment = time.time() if moment is None else moment
-    settings = settings or _settings.order_settings(directory)  # a look's own where it gives them (fathers#36)
-    held, waiting = _entry.split(entries)
-    waiters = [dict(e) for e in waiting]
-    originals = {id(copy): e for copy, e in zip(waiters, waiting)}
+    sustained CPU load does, fathers#184, else None)}. Read only: Admission works on private copies."""
+    held, waiters = _entry.split(entries)
     if not waiters:
         return {}
-    estimate = _queue.estimator(directory)
-    p90 = _queue.estimator(directory, p90=True)
-    window = _config.overtake_window()
-    _schedule.fit(waiters, slots)
-    starts = _schedule.forecast(waiters, held, slots, moment, estimate, other, settings, window, p90) \
-        if settings["order"] == "backfill" else {}
-    found = _schedule.plan(waiters, held, slots, moment, estimate=estimate, other=other, reserve_head=True,
-                           settings=settings, window=window, p90=p90)
-    # The order would start these now; memory may hold them back (grant()'s gate), with no start a forecast can tell.
-    memory = _platform.memory_level() if found.grants else ("normal", None)
-    used = sum(_entry.holds(e, slots) for e in held) + other
-    shared = _settings.order_settings(directory, environment=False)  # the queue's rule, not this reader's
-    ram_gib = _platform.memory_gib() if (found.grants and used) else None
-    ram_mb = None if ram_gib is None else ram_gib * 1024.0
-    load = _schedule.load_wait(_platform.load_averages(), _config.cores(), slots, used, shared) \
-        if found.grants else None
-    held_back = {id(e): why for e, why in _schedule.memory_gate(
-        found.grants, held, used, memory, shared,
-        memory_estimate=_queue.memory_estimator(directory) if ram_mb is not None else None,
-        ram_mb=ram_mb, granted_counts=found.granted_counts, load=load) if why}
-    warn = float(settings.get("warn_wait") or 0)
-    # fathers#160: the slots no request takes now, and the leases with no end estimate a head waits on
-    idle = max(0, slots - used - sum(_entry.holds(e, slots) for e in found.grants))
-    stalled = bool(found.blocked) and found.reserved is not None and moment >= found.reserved  # its promise broke
-    dropped = {id(entry): blockers for entry, blockers in found.dropped}
-
-    def names(leases: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        return [{"label": e.get("label"), "pid": e.get("pid")} for e in leases]
-
-    result: dict[int, dict[str, Any]] = {}
-    for copy in waiters:
-        began = _entry.waiting_since(copy)
-        waited = None if began is None else max(0.0, moment - began)
-        is_head = copy is found.head
-        result[id(originals[id(copy)])] = {
-            "priority": _schedule.effective_priority(copy, settings, moment) if settings["order"] == "backfill"
-            else _entry.priority_of(copy),
-            "aged": settings["order"] == "backfill" and _schedule.aged(copy, settings, moment),
-            "est_start": None if id(copy) in held_back else starts.get(id(copy)), "head": is_head,
-            "memory_wait": held_back.get(id(copy)) if held_back.get(id(copy)) != load else None,
-            "load_wait": load if load and held_back.get(id(copy)) == load else None,
-            "reserved": found.reserved if is_head else None,
-            "waited": waited, "long_wait": bool(warn and waited is not None and waited >= warn),
-            "blocked_by": names(found.blocked) if is_head and stalled else None,
-            "idle": idle if is_head and stalled else None,
-            "gave_way": names(dropped[id(copy)]) if id(copy) in dropped else None}
-    return result
+    return _queue.admission(directory, waiters, held, slots, other, moment=moment, settings=settings).forecast()
 
 
 def status_lines(directory: Path | None = None) -> list[str]:
@@ -430,7 +400,12 @@ def pid_look(directory: Path | None, pid: int | None) -> Look:
     return look(directory, lambda: status_processes(directory, pid))
 
 
-def status_json(directory: Path | None = None, pid: int | None = None, look: Look | None = None) -> dict[str, Any]:
+def status_json(
+    directory: Path | None = None,
+    pid: int | None = None,
+    look: Look | None = None,
+    admission: _schedule.Admission | None = None,
+) -> dict[str, Any]:
     """The queue for programs (`status --json`): every live entry with its lease id (the entry's name), the lease
     path (what SLOTFATHER_LEASE holds), holder pid and process group, its live process tree and its metadata. With
     `pid`, only the entries that process belongs to, each with `via`: "tree" (the holder or a descendant) or "env"
@@ -460,27 +435,28 @@ def status_json(directory: Path | None = None, pid: int | None = None, look: Loo
     serving = _schedule.ranked(waiting, settings, moment) if settings["order"] == "backfill" else waiting
     places = {id(e): n for n, e in enumerate(serving, 1)}
     earlier = look.legacy
-    # A guard asking about one process (--pid) needs no forecast.
-    expect = outlook(directory, [e for _, e in live], slots, sum(c for _, _, c in [*earlier, *kept]), moment,
-                     look.settings) \
-        if pid is None else {}
+    # A guard asking about one process (--pid) needs no forecast or peak-memory enrichment.
+    adm: _schedule.Admission | None = None
+    expect: dict[int, dict[str, Any]] = {}
+    if pid is None:
+        adm = admission if admission is not None else look.admission(moment=moment)
+        with contextlib.suppress(Exception):
+            expect = adm.forecast()
     known = None
     if pid is None:  # expected runs per run type (fathers#106); not for a guard asking about one process
         with contextlib.suppress(Exception):
             from . import runtype as _runtype
             known = _runtype.cached(directory)
-    mem_est = _queue.memory_estimator(directory) if (pid is None and live) else None
-    default_mb = float(settings.get("memory_default_mb", _config.ORDER_DEFAULTS["memory_default_mb"]))
     for (_, entry), item in zip(live, entries_found):
         if known is not None:
             with contextlib.suppress(Exception):  # the dashboard's poll never fails for it
                 from . import runtype as _runtype
                 item.update(_runtype.entry_view(entry, known, moment))
-        if mem_est is not None:
+        if adm is not None:
             with contextlib.suppress(Exception):
-                peak = mem_est(entry)
-                item["est_memory_mb"] = round(peak if peak is not None else default_mb, 1)
-                item["est_memory_source"] = "history" if peak is not None else "default"
+                peak, source = adm.expected_memory(entry)
+                item["est_memory_mb"] = round(peak, 1)
+                item["est_memory_source"] = source
         item["position"] = places.get(id(entry))  # waiters: their place in the order the queue serves them
         found = expect.get(id(entry))
         aged_to = entry.get("aged") if entry.get("aged") in _config.PRIORITIES else None
@@ -555,14 +531,7 @@ def available(directory: Path | None = None, label: str = "", command: str = "")
     """How many slots a new request fits by queue order, before memory checks: the free ones less what waiters take first, or none while a
     waiter past the overtaking window holds back everyone behind it, unless (backfill) the request is expected to
     end before that waiter can start. Without `command` its run counts as unknown (the fallback)."""
-    directory = directory or _config.state_dir()
-    live, legacy, _, basis = locked_snapshot(directory)
-    held, waiters = _entry.split(live)
-    other = sum(count for _, _, count in legacy)
-    slots = int(basis["slots"])
-    return _schedule.room(waiters, max(0, slots - held_slots(live, legacy, slots)),
-                          held, _queue.estimator(directory), other, _settings.order_settings(), label=label,
-                          command=command, slots=slots, moment=time.time(), window=_config.overtake_window())
+    return look(directory).admission().room(label, command, gated=False)
 
 
 def size(maximum: int, cores: int, total: int, averages: tuple[float, float, float], held: int,
@@ -588,47 +557,23 @@ def advise(maximum: int | None = None, exclusive: bool = False, cores_now: int |
     """size() for the queue as it is now: slots held by others (the caller's own lease is not one) and
     whether a request waits, a request for `command` under `label` when given (else one of unknown run), with
     "run_estimate", the run the history expects of it (None: unknown, counted as the fallback)."""
-    live, legacy, table, basis = locked_snapshot()
+    found_look = look()
+    live, legacy, table, basis = found_look.live, [*found_look.legacy, *found_look.reserved], found_look.table, found_look.basis
     mine = _queue.inherited_lease(table)
     holders = [e for e in live if _entry.is_held(e) and not (mine and e["pid"] == mine[1]["pid"])]
     other = sum(count for path, _, count in legacy if not (mine and path == mine[0]))
     slots = int(basis["slots"])
     held = sum(_entry.holds(e, slots) for e in holders) + other
     waiters = [e for e in live if _entry.is_waiting(e)]
-    estimate = _queue.estimator(_config.state_dir())
-    order_settings = _settings.order_settings()
-    waiting = bool(waiters) and _schedule.room(waiters, max(0, slots - held), holders, estimate, other,
-                                               order_settings, label=label, command=command, slots=slots,
-                                               moment=time.time(), window=_config.overtake_window()) == 0
     machine = cores_now or _config.cores()
     averages = averages or _platform.loads()
-    found = size(maximum or slots, machine, slots, averages, min(held, slots), waiting, exclusive)
-    found["run_estimate"] = estimate({"label": label, "cmd": command}) if command else None
-    # How the capacity was found (#653), and why memory holds new leases back now, at warning or worse (None: it
-    # does not), with the level ("normal", "warning": one 1-slot lease at a time, "short"); the job count does not
-    # shrink for it: a caller that starts memory-heavy workers should.
-    memory_kind, memory_why = _platform.memory_level()
+    host = _queue.live_host(averages=averages, cores=machine)
+    adm = _queue.admission(found_look.directory, waiters, holders, slots, other,
+                           settings=found_look.settings, estimate=found_look.estimate, host=host)
+    block = adm.advise_block(label, command)
+    found = size(maximum or slots, machine, slots, averages, min(held, slots), block.waiting, exclusive)
+    found["run_estimate"] = block.run_estimate
     found.update(capacity_mode=basis["mode"], gib_per_slot=basis["gib_per_slot"], memory_gib=basis["memory_gib"],
-                 memory_short=memory_why, memory_level=memory_kind)
-    # fathers#184: why sustained CPU load holds new leases beside running ones now (None: it does not, or nothing is
-    # held, and an idle machine starts its first request); like memory, it does not shrink the job count.
-    found["load_block"] = _schedule.load_wait(averages, machine, slots, min(held, slots),
-                                              order_settings) if held else None
-    # fathers#206: why grant()'s memory_share budget holds this request back beside the leases others hold now: their
-    # expected peak memory and the request's exceed the share of the queue's memory (None: it does not, nothing is
-    # held, or the memory is unknown); like the others, it does not shrink the job count.
-    found["memory_budget_block"] = None
-    if held:
-        memory_estimate = _queue.memory_estimator(_config.state_dir())
-        default_mb = float(order_settings.get("memory_default_mb", _config.ORDER_DEFAULTS["memory_default_mb"]))
-
-        def peak(entry: dict[str, Any]) -> float:
-            found_mb = memory_estimate(entry)
-            return float(found_mb) if found_mb is not None else default_mb
-
-        ram_gib = _platform.memory_gib()
-        found["memory_budget_block"] = _schedule.budget_wait(
-            sum(peak(e) for e in holders), peak({"label": label, "cmd": command}),
-            None if ram_gib is None else ram_gib * 1024.0,
-            float(order_settings.get("memory_share", _config.ORDER_DEFAULTS["memory_share"])))
+                 memory_short=block.memory_short, memory_level=block.memory_level,
+                 load_block=block.load_block, memory_budget_block=block.memory_budget_block)
     return found

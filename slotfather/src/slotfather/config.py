@@ -99,7 +99,7 @@ ORDER_KNOBS = {"safety": ("BACKFILL_SAFETY", 1.0, "up"), "limit": ("BACKFILL_LIM
                "memory_share": ("MEMORY_SHARE", 0.0, "down"),
                "memory_default_mb": ("MEMORY_DEFAULT_MB", 0.0, "up"),
                # fathers#184: beside running leases, sustained CPU load holds further grants at this multiple of the
-               # cores (schedule.load_wait()); 0 disables. A client's environment can only lower it (hold sooner),
+               # cores (schedule.Admission); 0 disables. A client's environment can only lower it (hold sooner),
                # never turn it off.
                "load_gate": ("LOAD_GATE", 0.0, "limit")}
 

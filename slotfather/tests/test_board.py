@@ -261,15 +261,16 @@ class AdmissionTests(SlotCase):
         self.finish(holder)
 
     def test_the_memory_exemption_for_a_first_lease_is_consumed_by_a_waiter_ahead(self) -> None:
-        from slotfather import config
-        tool = board()
+        from slotfather import config, schedule
         settings = dict(config.ORDER_DEFAULTS)
+        moment = time.time()
         waiter = dict(count=1, label="waiting", cmd="work", since=config.now(), state="waiting")
-        self.assertEqual(0, tool.dashboard_admission([waiter], [], 6, 0, "memory pressure", None, settings))
-        self.assertEqual(6, tool.dashboard_admission([], [], 6, 0, "memory pressure", None, settings))
-        self.assertEqual(5, tool.dashboard_admission([waiter], [], 6, 0, None, None, settings))
-        waiter["priority"] = "batch"
-        self.assertEqual(6, tool.dashboard_admission([waiter], [], 6, 0, "memory pressure", None, settings),
+        short = schedule.Host(memory=("short", "memory pressure"))
+        self.assertEqual(0, schedule.Admission([waiter], [], 6, moment, settings=settings, host=short).dashboard_room().admission)
+        self.assertEqual(6, schedule.Admission([], [], 6, moment, settings=settings, host=short).dashboard_room().admission)
+        self.assertEqual(5, schedule.Admission([waiter], [], 6, moment, settings=settings).dashboard_room().admission)
+        batch = dict(waiter, priority="batch")
+        self.assertEqual(6, schedule.Admission([batch], [], 6, moment, settings=settings, host=short).dashboard_room().admission,
                          "a normal probe ranked first may use the idle-host exemption")
 
 

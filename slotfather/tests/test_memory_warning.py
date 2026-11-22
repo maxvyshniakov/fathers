@@ -2,7 +2,7 @@
 """Memory admission by pressure level: normal admits as the order allows; a warning (macOS level 2, Linux PSI some)
 admits one 1-slot lease at a time beside running ones, `order --warning-admits 0` none; critical, a swap floor or
 little memory stops; an idle machine starts its first request. grant() on injected queues, with the
-SLOTFATHER_MEMORY_FILE seam, and memory_gate() alone."""
+SLOTFATHER_MEMORY_FILE seam, and Admission alone."""
 from __future__ import annotations
 import sys as _path_sys
 from pathlib import Path as _Path
@@ -17,6 +17,7 @@ from slotfather import schedule as sf_schedule
 
 import json
 import os
+import time
 import unittest
 from typing import Any, cast
 from unittest import mock
@@ -25,6 +26,9 @@ from test_linux import PROC
 from test_slotfather import SlotCase
 
 WARNING = sf_schedule.WARNING_WAIT
+DEFAULTS: dict[str, Any] = dict(sf_config.ORDER_DEFAULTS)
+M = 1_800_000_000.0
+SINCE = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(M))
 
 
 def clean_environment(**values: str) -> dict[str, str]:
@@ -32,35 +36,69 @@ def clean_environment(**values: str) -> dict[str, str]:
     return {**{k: v for k, v in os.environ.items() if not k.startswith("SLOTFATHER_")}, **values}
 
 
+def w(label: str, count: int, **extra: Any) -> dict[str, Any]:
+    return {"label": label, "count": count, "cmd": "work", "since": SINCE, "state": "waiting", **extra}
+
+
+def h(label: str, count: int, **extra: Any) -> dict[str, Any]:
+    return {"label": label, "count": count, "cmd": "work", "since": SINCE, "granted": SINCE, "state": "held", **extra}
+
+
 class GateTests(unittest.TestCase):
-    """memory_gate() alone: which of plan()'s grants memory lets start."""
+    """Admission.plan_grants() under memory pressure and peak-memory budgets."""
 
-    def gate(self, grants: list[dict[str, Any]], held: list[dict[str, Any]], used: int, memory: tuple[str, str | None],
-             admits: float = 1.0) -> list[str | None]:
-        return [why for _, why in sf_schedule.memory_gate(grants, held, used, memory, {"warning_admits": admits})]
+    def outcome(
+        self,
+        waiters: list[dict[str, Any]],
+        held: list[dict[str, Any]],
+        slots: int,
+        memory: tuple[str, str | None],
+        admits: float = 1.0,
+    ) -> sf_schedule.GrantOutcome:
+        return sf_schedule.Admission(
+            waiters,
+            held,
+            slots,
+            M,
+            settings={**DEFAULTS, "warning_admits": admits},
+            host=sf_schedule.Host(memory=memory),
+        ).plan_grants()
 
-    def test_normal_admits_every_grant(self):
-        grants = [{"count": 1}, {"count": 2}, {"count": 4, "all": True}]
-        self.assertEqual([None, None, None], self.gate(grants, [{"count": 1}], 1, ("normal", None)))
+    def test_normal_admits_every_grant(self) -> None:
+        grants = [w("a", 1), w("b", 2)]
+        res = self.outcome(grants, [h("r", 1)], 4, ("normal", None))
+        self.assertEqual(["a", "b"], [s.entry["label"] for s in res.started])
+        self.assertEqual([], res.gated)
 
-    def test_warning_admits_one_1_slot_grant_and_refuses_larger_ones(self):
-        grants = [{"count": 2}, {"count": 1}, {"count": 1}, {"count": 1, "all": True}]
-        self.assertEqual([WARNING, None, WARNING, WARNING], self.gate(grants, [{"count": 1}], 1, ("warning", "w")))
+    def test_warning_admits_one_1_slot_grant_and_refuses_larger_ones(self) -> None:
+        grants = [w("two", 2), w("one", 1), w("second", 1)]
+        res = self.outcome(grants, [h("r", 1)], 6, ("warning", "w"))
+        self.assertEqual(["one"], [s.entry["label"] for s in res.started])
+        self.assertTrue(res.started[0].pressed)
+        self.assertEqual([("two", WARNING), ("second", WARNING)], [(e["label"], b.reason) for e, b in res.gated])
 
-    def test_warning_holds_every_grant_while_a_pressed_lease_runs(self):
-        held = [{"count": 1, sf_entry.PRESSED: True}]
-        self.assertEqual([WARNING], self.gate([{"count": 1}], held, 1, ("warning", "w")))
-        self.assertEqual([None], self.gate([{"count": 1}], held, 1, ("normal", None)), "normal again: as before")
+    def test_warning_holds_every_grant_while_a_pressed_lease_runs(self) -> None:
+        held = [h("r", 1, **{sf_entry.PRESSED: True})]
+        warn = self.outcome([w("a", 1)], held, 4, ("warning", "w"))
+        self.assertEqual(([], [("a", WARNING)]), (warn.started, [(e["label"], b.reason) for e, b in warn.gated]))
+        norm = self.outcome([w("a", 1)], held, 4, ("normal", None))
+        self.assertEqual((["a"], []), ([s.entry["label"] for s in norm.started], norm.gated))
 
-    def test_short_memory_and_a_disabled_allowance_stop_everything_beside_running_leases(self):
-        self.assertEqual(["s", "s"], self.gate([{"count": 1}, {"count": 2}], [{"count": 1}], 1, ("short", "s")))
-        self.assertEqual(["w"], self.gate([{"count": 1}], [{"count": 1}], 1, ("warning", "w"), admits=0.0))
+    def test_short_memory_and_a_disabled_allowance_stop_everything_beside_running_leases(self) -> None:
+        short = self.outcome([w("a", 1), w("b", 2)], [h("r", 1)], 4, ("short", "s"))
+        self.assertEqual(([], [("a", "s"), ("b", "s")]), (short.started, [(e["label"], b.reason) for e, b in short.gated]))
+        off = self.outcome([w("a", 1)], [h("r", 1)], 4, ("warning", "w"), admits=0.0)
+        self.assertEqual(([], [("a", "w")]), (off.started, [(e["label"], b.reason) for e, b in off.gated]))
 
-    def test_an_idle_machine_starts_its_first_request_whatever_memory_says(self):
+    def test_an_idle_machine_starts_its_first_request_whatever_memory_says(self) -> None:
         for memory in (("short", "s"), ("warning", "w")):
             with self.subTest(memory=memory[0]):
-                found = self.gate([{"count": 4, "all": True}, {"count": 1}], [], 0, memory)
-                self.assertEqual([None, memory[1] if memory[0] == "short" else WARNING], found)
+                whole = self.outcome([w("big", 4, all=True)], [], 4, memory)
+                self.assertEqual((["big"], []), ([s.entry["label"] for s in whole.started], whole.gated))
+                pair = self.outcome([w("first", 1), w("second", 1)], [], 4, memory)
+                self.assertEqual(["first"], [s.entry["label"] for s in pair.started])
+                expected_why = memory[1] if memory[0] == "short" else WARNING
+                self.assertEqual([("second", expected_why)], [(e["label"], b.reason) for e, b in pair.gated])
 
     def test_expected_peak_memory_defers_grant_although_slots_are_free(self) -> None:
         from slotfather import estimates as sf_estimates
@@ -69,30 +107,35 @@ class GateTests(unittest.TestCase):
         est.add_memory("lane-1", "verify.sh", 9000.0)
         est.add_memory("lane-2", "verify.sh", 9500.0)
         # 16 GiB RAM * 0.85 = 13926.4 MB; one 9500 MB lease held, second 9500 MB exceeds budget
-        held: list[dict[str, Any]] = [{"count": 1, "label": "lane-3", "cmd": "verify.sh"}]
-        grants: list[dict[str, Any]] = [{"count": 1, "label": "lane-4", "cmd": "verify.sh"}]
-        gated = sf_schedule.memory_gate(
-            grants, held, 1, ("normal", None),
-            {"warning_admits": 1.0, "memory_share": 0.85, "memory_default_mb": 2048.0},
-            memory_estimate=lambda e: est.peak_mb(e.get("label"), e.get("cmd")),
-            ram_mb=16384.0)
-        self.assertIsNotNone(gated[0][1])
-        self.assertIn("expected memory", gated[0][1] or "")
+        held = [h("lane-3", 1, cmd="verify.sh")]
+        waiters = [w("lane-4", 1, cmd="verify.sh")]
+        host = sf_schedule.Host(ram_mb=16384.0)
+
+        def mem_est(entry: sf_schedule.Entry) -> float | None:
+            return est.peak_mb(entry.get("label"), entry.get("cmd"))
+        gated = sf_schedule.Admission(
+            waiters, held, 4, M,
+            settings={**DEFAULTS, "warning_admits": 1.0, "memory_share": 0.85, "memory_default_mb": 2048.0},
+            host=host, memory_estimate=mem_est,
+        ).plan_grants()
+        self.assertEqual([], gated.started)
+        self.assertIn("expected memory", gated.reason or "")
         # Unknown family uses configurable default (2048 MB): 9500 + 2048 = 11548 <= 13926 -> admitted
-        unknown_grants: list[dict[str, Any]] = [{"count": 1, "label": "brand-new", "cmd": "echo hi"}]
-        admitted = sf_schedule.memory_gate(
-            unknown_grants, held, 1, ("normal", None),
-            {"warning_admits": 1.0, "memory_share": 0.85, "memory_default_mb": 2048.0},
-            memory_estimate=lambda e: est.peak_mb(e.get("label"), e.get("cmd")),
-            ram_mb=16384.0)
-        self.assertIsNone(admitted[0][1])
+        unknown_waiters = [w("brand-new", 1, cmd="echo hi")]
+        admitted = sf_schedule.Admission(
+            unknown_waiters, held, 4, M,
+            settings={**DEFAULTS, "warning_admits": 1.0, "memory_share": 0.85, "memory_default_mb": 2048.0},
+            host=host, memory_estimate=mem_est,
+        ).plan_grants()
+        self.assertEqual(["brand-new"], [s.entry["label"] for s in admitted.started])
         # Raising default_mb to 6000 MB causes unknown family to exceed budget too
-        deferred = sf_schedule.memory_gate(
-            unknown_grants, held, 1, ("normal", None),
-            {"warning_admits": 1.0, "memory_share": 0.85, "memory_default_mb": 6000.0},
-            memory_estimate=lambda e: est.peak_mb(e.get("label"), e.get("cmd")),
-            ram_mb=16384.0)
-        self.assertIsNotNone(deferred[0][1])
+        deferred = sf_schedule.Admission(
+            unknown_waiters, held, 4, M,
+            settings={**DEFAULTS, "warning_admits": 1.0, "memory_share": 0.85, "memory_default_mb": 6000.0},
+            host=host, memory_estimate=mem_est,
+        ).plan_grants()
+        self.assertEqual([], deferred.started)
+        self.assertIsNotNone(deferred.reason)
         # order.json bytes stay unchanged when memory knobs are at defaults
         self.assertNotIn("memory_share", sf_settings.order_bytes(sf_config.ORDER_DEFAULTS))
         self.assertNotIn("memory_default_mb", sf_settings.order_bytes(sf_config.ORDER_DEFAULTS))
@@ -120,26 +163,25 @@ class GateTests(unittest.TestCase):
 
 
 class DashboardAdmissionTests(unittest.TestCase):
-    def test_the_dashboard_admits_one_slot_under_warning_and_none_beside_a_pressed_lease(self):
-        from slotfather import board as sf_board
-        settings = dict(sf_config.ORDER_DEFAULTS)
-        held = [{"count": 1, "label": "running", "state": "held"}]
-        self.assertEqual(1, sf_board.dashboard_admission([], held, 4, 0, WARNING, None, settings, "warning"))
-        self.assertEqual(0, sf_board.dashboard_admission([], [{**held[0], sf_entry.PRESSED: True}], 4, 0,
-                                                         WARNING, None, settings, "warning"))
-        self.assertEqual(0, sf_board.dashboard_admission([], held, 4, 0, "level 4", None, settings, "short"))
-        self.assertEqual(0, sf_board.dashboard_admission([], held, 4, 0, "level 2", None,
-                                                         {**settings, "warning_admits": 0.0}, "warning"))
-        self.assertEqual(3, sf_board.dashboard_admission([], held, 4, 0, None, None, settings, "normal"))
+    def test_the_dashboard_admits_one_slot_under_warning_and_none_beside_a_pressed_lease(self) -> None:
+        held = [h("running", 1)]
+        warn = sf_schedule.Host(memory=("warning", "level 2"))
+        short = sf_schedule.Host(memory=("short", "level 4"))
+        self.assertEqual(1, sf_schedule.Admission([], held, 4, M, settings=DEFAULTS, host=warn).dashboard_room().admission)
+        self.assertEqual(0, sf_schedule.Admission([], [{**held[0], sf_entry.PRESSED: True}], 4, M,
+                                                  settings=DEFAULTS, host=warn).dashboard_room().admission)
+        self.assertEqual(0, sf_schedule.Admission([], held, 4, M, settings=DEFAULTS, host=short).dashboard_room().admission)
+        self.assertEqual(0, sf_schedule.Admission([], held, 4, M, settings={**DEFAULTS, "warning_admits": 0.0},
+                                                  host=warn).dashboard_room().admission)
+        self.assertEqual(3, sf_schedule.Admission([], held, 4, M, settings=DEFAULTS).dashboard_room().admission)
         # fathers#211: under warning, an earlier 1-slot waiter consumes the warning allowance; a refused 2-slot one
         # or lower-priority batch waiter does not.
-        one = {"count": 1, "label": "one", "cmd": "work", "since": sf_config.now(), "state": "waiting"}
-        two = {"count": 2, "label": "two", "cmd": "work", "since": sf_config.now(), "state": "waiting"}
-        batch = {"count": 1, "label": "low", "cmd": "work", "since": sf_config.now(), "state": "waiting",
-                 "priority": "batch"}
-        self.assertEqual(0, sf_board.dashboard_admission([one], held, 4, 0, WARNING, None, settings, "warning"))
-        self.assertEqual(1, sf_board.dashboard_admission([two], held, 4, 0, WARNING, None, settings, "warning"))
-        self.assertEqual(1, sf_board.dashboard_admission([batch], held, 4, 0, WARNING, None, settings, "warning"))
+        one = w("one", 1)
+        two = w("two", 2)
+        batch = w("low", 1, priority="batch")
+        self.assertEqual(0, sf_schedule.Admission([one], held, 4, M, settings=DEFAULTS, host=warn).dashboard_room().admission)
+        self.assertEqual(1, sf_schedule.Admission([two], held, 4, M, settings=DEFAULTS, host=warn).dashboard_room().admission)
+        self.assertEqual(1, sf_schedule.Admission([batch], held, 4, M, settings=DEFAULTS, host=warn).dashboard_room().admission)
 
 
 class GrantTests(SlotCase):
@@ -215,8 +257,8 @@ class GrantTests(SlotCase):
                          "a 1-slot request behind a refused larger one starts under warning")
 
     def test_expected_matches_grant_for_range_requests_under_warning(self) -> None:
-        """fathers#211: query.expected() passes found.granted_counts to memory_gate(), so a -n 1-2 request planned
-        for 2 free slots under warning reports memory_wait and does not falsely consume the allowance."""
+        """fathers#211: query.expected() routes granted_counts through Admission's resource gate, so a -n 1-2 request
+        planned for 2 free slots under warning reports memory_wait and does not falsely consume the allowance."""
         self.entry("running", 1, "held")
         ranged = self.entry("ranged", 1, min_count=1, max_count=2)
         lone = self.entry("lone", 1)

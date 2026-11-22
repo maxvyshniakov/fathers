@@ -373,20 +373,29 @@ class Replay:
                             window=sf_config.overtake_window(), p90=self.p90).grants
             by_id = {e["id"]: e for e in waiting}
             return [by_id[e["id"]] for e in found]
-        found = sf_schedule.plan(waiting, held, self.slots, moment, name, self.estimate, settings=settings,
-                                 window=sf_config.overtake_window(), p90=self.p90)
-        if settings.get("keep"):  # the head keeps its reservation from look to look, as grant() keeps it
-            sf_schedule.reservations(waiting, found)
         ram_mb: object = self.policy.get("memory_ram_mb")
-        if isinstance(ram_mb, (int, float)) and ram_mb > 0 and found.grants:
-            used = sum(int(e["count"]) for e in held)
-            gated = sf_schedule.memory_gate(
-                found.grants, held, used, ("normal", None), settings,
-                memory_estimate=lambda e: self.estimates.peak_mb(e.get("label"), e.get("cmd")),
-                ram_mb=float(ram_mb))
-            self.memory_deferred += sum(1 for _, why in gated if why)
-            return [e for e, why in gated if not why]
-        return found.grants
+        ram_limit = float(ram_mb) if isinstance(ram_mb, (int, float)) and not isinstance(ram_mb, bool) and ram_mb > 0 else None
+        host = sf_schedule.Host(ram_mb=ram_limit) if ram_limit is not None else sf_schedule.Host()
+        mem_est: sf_schedule.Estimate | None = (
+            (lambda e: self.estimates.peak_mb(e.get("label"), e.get("cmd"))) if ram_limit is not None else None
+        )
+        outcome = sf_schedule.Admission(
+            waiting,
+            held,
+            self.slots,
+            moment,
+            settings={**settings, "order": name},
+            window=sf_config.overtake_window(),
+            host=host,
+            estimate=self.estimate,
+            p90=self.p90,
+            memory_estimate=mem_est,
+        ).plan_grants()
+        if settings.get("keep"):  # the head keeps its reservation from look to look, as grant() keeps it
+            sf_schedule.reservations(waiting, outcome.plan)
+        if ram_limit is not None:
+            self.memory_deferred += len(outcome.gated)
+        return [item.entry for item in outcome.started]
 
     def simulate(self) -> list[dict[str, Any]]:
         env_overrides = cast(dict[str, str], self.policy.get("env", {}))

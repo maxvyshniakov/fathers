@@ -20,11 +20,11 @@ from typing import Any, Iterable, cast
 
 from . import config as _config
 from . import entry as _entry
-from . import estimates as _estimates
 from . import lineage as _lineage
 from . import platform as _platform
 from . import process as _process
 from . import query as _query
+from . import queue as _queue
 from . import schedule as _schedule
 from . import settings as _settings
 from . import state as _state
@@ -419,95 +419,36 @@ def held_history(events: list[dict[str, Any]], held_now: int, now_moment: dateti
     return steps[::-1]
 
 
-def dashboard_admission(waiters: list[dict[str, Any]], held: list[dict[str, Any]], slots: int, other: int,
-                        memory_block: str | None, estimate: _schedule.Estimate | None, settings: dict[str, Any],
-                        memory_kind: str = "short", load_block: str | None = None, *,
-                        memory_expected_mb: float = 0.0, memory_need_mb: float | None = None,
-                        ram_mb: float | None = None) -> int:
-    """Largest generic request grant() would admit, including earlier grants consuming the memory exemption; under a
-    memory-pressure warning (`memory_kind`) at most one slot, none beside a lease granted under pressure, none
-    beside running leases while sustained CPU load holds grants (`load_block`, fathers#184), and none beside running
-    leases whose expected peak memory (`memory_expected_mb`) and the request's (`memory_need_mb`, else the
-    `memory_default_mb` setting) exceed `memory_share` of `ram_mb` (schedule.budget_wait(), fathers#206)."""
-    used = sum(_entry.holds(entry, slots) for entry in held) + other
-    free = max(0, slots - used)
-    if not free:
-        return 0
-    share = float(settings.get("memory_share", _config.ORDER_DEFAULTS["memory_share"]))
-    need_mb = float(settings.get("memory_default_mb", _config.ORDER_DEFAULTS["memory_default_mb"])) \
-        if memory_need_mb is None else memory_need_mb
-    moment = time.time()
-    window = _config.overtake_window()
-    if waiters:
-        waiters = [dict(w) for w in waiters]
-        _schedule.fit(waiters, slots)
-    if used:
-        if load_block or _schedule.budget_wait(memory_expected_mb, need_mb, ram_mb, share):
-            return 0
-        if memory_block:
-            if memory_kind == "warning" and float(settings.get("warning_admits", 1)) >= 1:
-                if any(entry.get(_entry.PRESSED) for entry in held):
-                    return 0
-                if not waiters:
-                    return 1
-                probe: dict[str, Any] = dict(count=1, label="", cmd="", since=_config.now())
-                found = _schedule.plan(waiters + [probe], held, slots, moment, estimate=estimate,
-                                       other=other, settings=settings, window=window)
-                gated = _schedule.memory_gate(found.grants, held, used, ("warning", memory_block), settings,
-                                              granted_counts=found.granted_counts)
-                return 1 if any(entry is probe and why is None for entry, why in gated) else 0
-            return 0
-        if not waiters:
-            return free
-        return _schedule.room(waiters, free, held, estimate, other, settings=settings, slots=slots, moment=moment,
-                              window=window)
-    if not waiters:
-        return free
-    if memory_block or load_block:
-        # On an idle host only the first planned grant bypasses the memory or CPU load gate.
-        # A new generic request may rank ahead of a lower-priority existing waiter.
-        probe = dict(count=free, label="", cmd="", since=_config.now())
-        found = _schedule.plan(waiters + [probe], held, slots, moment, estimate=estimate,
-                               other=other, settings=settings, window=window)
-        return free if found.grants and found.grants[0] is probe else 0
-    return _schedule.room(waiters, free, held, estimate, other, settings=settings, slots=slots, moment=moment,
-                          window=window)
-
-
-def dashboard_model(look: _query.Look | None = None) -> dict[str, Any]:
+def dashboard_model(
+    look: _query.Look | None = None,
+    admission: _schedule.Admission | None = None,
+) -> dict[str, Any]:
     """The main screen's facts from one look at the queue (query.look(), taken now when not given): the lease and
     waiter rows in the order the screen shows them, capacity, admission, the machine and the recent events."""
     look = look or _query.look()
     directory = look.directory
     live = look.live
     legacy = look.legacy
-    other = sum(count for _, _, count in [*legacy, *look.reserved])  # earlier queues' and live unknown entries' slots
     slots: int = look.basis["slots"]
     saved: bool = look.basis["saved"]
     own, children = process_usage()
-
-    mem_est = _estimates.memory_estimator(directory) if live else None
-    settings_for_mem = look.settings or _settings.order_settings(directory)
-    default_mem_mb = float(settings_for_mem.get("memory_default_mb", _config.ORDER_DEFAULTS["memory_default_mb"]))
-    mem_share = float(settings_for_mem.get("memory_share", _config.ORDER_DEFAULTS["memory_share"]))
-
-    def expected_mb_of(entry: dict[str, Any]) -> tuple[float, str]:
-        """An entry's expected peak RSS in MB and where it comes from, as grant()'s memory gate counts it."""
-        if mem_est is not None:
-            with contextlib.suppress(Exception):
-                peak = mem_est(entry)
-                if peak is not None:
-                    return float(peak), "history"
-        return default_mem_mb, "default"
+    settings = look.settings or _settings.order_settings(directory)  # the look's (fathers#36)
+    default_mem_mb = float(settings.get("memory_default_mb", _config.ORDER_DEFAULTS["memory_default_mb"]))
+    machine, averages = _config.cores(), _platform.loads()
+    adm = admission if admission is not None else look.admission(
+        host=_queue.live_host(averages=averages, cores=machine)
+    )
 
     def est_memory_of(entry: dict[str, Any]) -> tuple[float, str]:
-        peak, source = expected_mb_of(entry)
-        return round(peak, 1), source
+        with contextlib.suppress(Exception):
+            peak, source = adm.expected_memory(entry)
+            return round(peak, 1), source
+        return round(default_mem_mb, 1), "default"
 
     def item(entry: dict[str, Any], kind: str, count: int, queue: str = "",
              extra: Iterable[int] = ()) -> dict[str, Any]:
         tree = process_tree(entry.get("pid"), own, children, extra) if kind != "waiting" else []
-        foreseen: dict[str, Any] = expected.get(id(entry)) or {}  # query.outlook(): its class and expected start
+        foreseen: dict[str, Any] = expected.get(id(entry)) or {}  # Admission.forecast(): its class and expected start
         est_mb, est_src = est_memory_of(entry)
         # The yield request on this entry's own marker, read under the queue lock (#20: by entry, not by pid)
         request = look.asked_of(entry) or {}
@@ -541,10 +482,10 @@ def dashboard_model(look: _query.Look | None = None) -> dict[str, Any]:
                 "lock": dashboard_text(_entry.lock_of(entry) or ""),  # fathers#159: waiting for this lock
                 "style": "text" if kind == "waiting" else "legacy"}
 
-    # The class each waiter is served in and its expected start (query.outlook(); nothing when it cannot be read).
+    # The class each waiter is served in and its expected start (Admission.forecast(); nothing when it cannot be read).
     expected: dict[int, dict[str, Any]] = {}
     with contextlib.suppress(Exception):
-        expected = _query.outlook(directory, live, slots, other, settings=look.settings)
+        expected = adm.forecast()
     # An `-n all` lease holds the whole capacity, also one grown under it (#7).
     held, live_waiters = _entry.split(live)
     active_entries = [*held, *(e for _, e, _ in legacy)]
@@ -560,54 +501,30 @@ def dashboard_model(look: _query.Look | None = None) -> dict[str, Any]:
                for index, e in enumerate(held)]
     holders += [item(e, "legacy", count, str(path.parent.parent), extra=detached.get(len(held) + index, ()))
                 for index, (path, e, count) in enumerate(legacy)]
-    settings = look.settings or _settings.order_settings(directory)  # the look's (fathers#36)
-    start: datetime.datetime | None = None
-    reserved: datetime.datetime | None = None
     order = settings["order"]
-    _schedule.fit(live_waiters, slots)  # as the queue grants them when the capacity shrank under them
     if order == "backfill":
         live_waiters = _schedule.ranked(live_waiters, settings, time.time())  # the order the queue serves them in
-    waiters = [item(e, "waiting", e["count"]) for e in live_waiters]
+    waiters = [item(e, "waiting", slots if e.get("all") or e["count"] > slots else e["count"])
+               for e in live_waiters]
     used = sum(h["count"] for h in holders) + sum(count for _, _, count in look.reserved)
-    if order == "backfill" and live_waiters:
-        with contextlib.suppress(Exception):  # an estimate that cannot be read leaves the sentence without a time
-            found = _schedule.plan(live_waiters, held, slots, time.time(), order,
-                                   _estimates.estimator(directory), other,
-                                   reserve_head=True, settings=settings, window=_config.overtake_window())
-            if found.head is not None and found.start is not None:
-                start = datetime.datetime.fromtimestamp(found.start, datetime.timezone.utc)
-            if found.head is not None and found.reserved is not None:
-                reserved = datetime.datetime.fromtimestamp(found.reserved, datetime.timezone.utc)
-    (memory_kind, memory_block), machine, averages = _platform.memory_level(), _config.cores(), _platform.loads()
-    if memory_kind == "warning" and float(settings.get("warning_admits", 1)) >= 1:
-        memory_block = _schedule.WARNING_WAIT
+    room = adm.dashboard_room()
+    start = datetime.datetime.fromtimestamp(room.start, datetime.timezone.utc) if room.start is not None else None
+    reserved = datetime.datetime.fromtimestamp(room.reserved, datetime.timezone.utc) if room.reserved is not None else None
     events = queue_events(directory)
     describe_events(events, directory, live)
     moment = datetime.datetime.now(datetime.timezone.utc)
     free = max(0, slots - used)
-    # fathers#184: why sustained CPU load holds new leases beside running ones, by the rule grant() applies
-    load_block = _schedule.load_wait(averages, machine, slots, min(used, slots), settings)
-    # fathers#206: grant()'s memory_share budget, for a generic request beside the held leases' expected peak
-    ram_gib = _platform.memory_gib()
-    ram_mb = None if ram_gib is None else ram_gib * 1024.0
-    held_mb = sum(expected_mb_of(e)[0] for e in held)
-    need_mb = expected_mb_of({"label": "", "cmd": ""})[0]
-    memory_budget_block = _schedule.budget_wait(held_mb, need_mb, ram_mb, mem_share) if used else None
-    admission = dashboard_admission(live_waiters, held, slots,
-                                    other, memory_block,
-                                    _estimates.estimator(directory) if live_waiters else None, settings, memory_kind,
-                                    load_block, memory_expected_mb=held_mb, memory_need_mb=need_mb, ram_mb=ram_mb)
     own_held = sum(h["count"] for h in holders if h["kind"] == "held")
-    memory_budget_mb = round(ram_gib * 1024.0 * mem_share, 1) if (ram_gib is not None and mem_share > 0) else None
-    memory_expected_mb = round(sum(float(h.get("est_memory_mb") or 0.0) for h in holders if h["kind"] == "held"), 1)
+    memory_budget_mb = None if room.memory_budget_mb is None else round(room.memory_budget_mb, 1)
+    memory_expected_mb = round(room.memory_expected_mb, 1)
     return {"directory": str(directory), "slots": slots, "saved": saved, "basis": look.basis, "cores": machine,
             "averages": averages, "draining": _query.draining(used, slots),
             "advice": cast(dict[str, Any], cast(Any, _query).size(slots, machine, slots, averages, min(used, slots),
-                                                                  bool(waiters) and admission == 0)),
-            "holders": holders, "waiters": waiters, "used": used, "free": free, "memory_block": memory_block,
-            "load_block": load_block, "memory_budget_block": memory_budget_block,
+                                                                  bool(waiters) and room.admission == 0)),
+            "holders": holders, "waiters": waiters, "used": used, "free": free, "memory_block": room.memory_block,
+            "load_block": room.load_block, "memory_budget_block": room.memory_budget_block,
             "memory_budget_mb": memory_budget_mb, "memory_expected_mb": memory_expected_mb,
-            "admission": admission,
+            "admission": room.admission,
             "order": order, "start": start, "reserved": reserved, "limit": settings["limit"],
             "memory": memory_facts(), "history": held_history(events, own_held, moment), "events": events[-60:],
             "updated": moment,
@@ -662,8 +579,9 @@ def full_status(directory: Path | None = None) -> dict[str, Any]:
     both from one look at the queue, with the host and the time."""
     from .events import host
     look = _query.look(directory)
-    found = _query.status_json(look.directory, look=look)
+    adm = look.admission()
+    found = _query.status_json(look.directory, look=look, admission=adm)
     found.update(host=host(), time=stamp(datetime.datetime.now(datetime.timezone.utc)),
-                 dashboard=dashboard_json(dashboard_model(look)))
+                 dashboard=dashboard_json(dashboard_model(look, admission=adm)))
     return found
 

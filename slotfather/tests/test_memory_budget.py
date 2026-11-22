@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""The expected-peak memory budget (fathers#9) as the readers report it (fathers#206): grant() holds a request back
-beside running leases whose expected peak memory and the request's exceed `memory_share` of the memory; the
-dashboard's admission, its `memory_budget_block` and `advise` say the same. budget_wait() and dashboard_admission()
-alone, then grant(), the dashboard block and `advise` on injected queues."""
+"""The expected-peak memory budget (fathers#9) as the readers report it (fathers#206, fathers#214): grant() holds a
+request back beside running leases whose expected peak memory and the request's exceed `memory_share` of the memory
+(including the 2nd+ grant on an initially idle host); the dashboard's admission, its `memory_budget_block` and
+`advise` share the same Admission seam. Admission alone, then grant(), the dashboard block and `advise` on injected
+queues."""
 from __future__ import annotations
 import sys as _path_sys
 from pathlib import Path as _Path
@@ -17,6 +18,7 @@ from slotfather import schedule as sf_schedule
 
 import json
 import os
+import time
 import unittest
 from typing import Any
 from unittest import mock
@@ -24,61 +26,100 @@ from unittest import mock
 from test_slotfather import SlotCase
 
 DEFAULTS: dict[str, Any] = dict(sf_config.ORDER_DEFAULTS)
-HELD: list[dict[str, Any]] = [{"count": 1, "label": "running", "state": "held"}]
+M = 1_800_000_000.0
+SINCE = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(M))
+HELD: list[dict[str, Any]] = [{"count": 1, "label": "running", "since": SINCE, "granted": SINCE, "state": "held"}]
 
 
-class BudgetWaitTests(unittest.TestCase):
-    """budget_wait() alone: 16 GiB, 85% (13926.4 MB)."""
+class AdmissionBudgetTests(unittest.TestCase):
+    """Admission under memory_share saturation: 16 GiB (85% = 13926.4 MB), 4 slots."""
 
-    def test_over_the_share_says_why(self) -> None:
-        self.assertEqual("expected memory 14000 MB exceeds 13926 MB (85% of 16384 MB)",
-                         sf_schedule.budget_wait(9500.0, 4500.0, 16384.0, 0.85))
-        self.assertIsNone(sf_schedule.budget_wait(9500.0, 4426.4, 16384.0, 0.85), "at the budget it still fits")
+    def adm(
+        self,
+        waiters: list[dict[str, Any]],
+        held: list[dict[str, Any]],
+        *,
+        peaks: dict[str, float] | None = None,
+        ram_mb: float | None = 16384.0,
+        memory: tuple[str, str | None] = ("normal", None),
+        **settings: float,
+    ) -> sf_schedule.Admission:
+        table = peaks or {}
+        mem_est: sf_schedule.Estimate | None = (lambda e: table.get(str(e.get("label", "")))) if peaks is not None else None
+        return sf_schedule.Admission(
+            waiters,
+            held,
+            4,
+            M,
+            settings={**DEFAULTS, **settings},
+            host=sf_schedule.Host(memory=memory, ram_mb=ram_mb),
+            memory_estimate=mem_est,
+        )
+
+    def test_over_the_share_holds_and_says_why(self) -> None:
+        waiter = {"count": 1, "label": "b", "since": SINCE, "state": "waiting"}
+        over = self.adm([waiter], HELD, peaks={"running": 9500.0, "b": 4500.0}).plan_grants()
+        expected = "expected memory 14000 MB exceeds 13926 MB (85% of 16384 MB)"
+        self.assertEqual([], over.started)
+        self.assertEqual([(waiter, sf_schedule.GateBlock("budget", expected))], over.gated)
+        self.assertEqual(expected, over.reason)
+
+        at_limit = self.adm([waiter], HELD, peaks={"running": 9500.0, "b": 4426.4}).plan_grants()
+        self.assertEqual([waiter], [s.entry for s in at_limit.started])
+        self.assertEqual([], at_limit.gated)
 
     def test_unknown_memory_or_no_share_has_no_budget(self) -> None:
+        waiter = {"count": 1, "label": "b", "since": SINCE, "state": "waiting"}
         for ram_mb, share in ((None, 0.85), (0.0, 0.85), (16384.0, 0.0)):
             with self.subTest(ram_mb=ram_mb, share=share):
-                self.assertIsNone(sf_schedule.budget_wait(1e9, 1e9, ram_mb, share))
+                adm = self.adm([waiter], HELD, peaks={"running": 1e9, "b": 1e9}, ram_mb=ram_mb, memory_share=share)
+                outcome = adm.plan_grants()
+                self.assertEqual([waiter], [s.entry for s in outcome.started])
+                self.assertEqual(2, adm.dashboard_room().admission)
+                self.assertEqual(3, self.adm([], HELD, peaks={"running": 1e9}, ram_mb=ram_mb,
+                                             memory_share=share).dashboard_room().admission)
+                self.assertIsNone(adm.dashboard_room().memory_budget_block)
 
-    def test_memory_gate_gives_the_same_reason(self) -> None:
-        gated = sf_schedule.memory_gate([{"count": 1, "label": "b"}], [{"count": 1, "label": "a"}], 1,
-                                        ("normal", None), {**DEFAULTS, "memory_share": 0.85},
-                                        memory_estimate=lambda entry: 9500.0 if entry["label"] == "a" else 4500.0,
-                                        ram_mb=16384.0)
-        self.assertEqual([sf_schedule.budget_wait(9500.0, 4500.0, 16384.0, 0.85)], [why for _, why in gated])
+    def test_two_waiters_on_an_idle_host_exceeding_memory_share_admit_only_the_first(self) -> None:
+        """fathers#214: _gate checks memory_share on the 2nd+ grant of an initially idle host."""
+        first = {"count": 1, "label": "first", "since": SINCE, "state": "waiting"}
+        second = {"count": 1, "label": "second", "since": SINCE, "state": "waiting"}
+        adm = self.adm([first, second], [], peaks={"first": 9000.0, "second": 9000.0}, ram_mb=16384.0)
+        outcome = adm.plan_grants()
+        expected = "expected memory 18000 MB exceeds 13926 MB (85% of 16384 MB)"
+        self.assertEqual([first], [s.entry for s in outcome.started])
+        self.assertEqual([(second, sf_schedule.GateBlock("budget", expected))], outcome.gated)
+        self.assertEqual(expected, outcome.reason)
+        # Dashboard room also sees that a generic probe behind `first` exceeds memory_share on the idle host.
+        probe_adm = self.adm([first], [], peaks={"first": 9000.0, "": 9000.0}, ram_mb=16384.0)
+        self.assertEqual(0, probe_adm.dashboard_room().admission)
 
-
-class DashboardAdmissionTests(unittest.TestCase):
-    """dashboard_admission() under memory_share saturation, on 4 slots."""
-
-    def admission(self, held: list[dict[str, Any]], expected_mb: float, need_mb: float | None = None,
-                  ram_mb: float | None = 16384.0, **settings: float) -> int:
-        return sf_board.dashboard_admission([], held, 4, 0, None, None, {**DEFAULTS, **settings}, "normal", None,
-                                            memory_expected_mb=expected_mb, memory_need_mb=need_mb, ram_mb=ram_mb)
-
-    def test_held_leases_that_fill_the_share_close_admission(self) -> None:
-        self.assertEqual(0, self.admission(HELD, 12000.0, 2048.0), "12000 + 2048 > 13926")
-        self.assertEqual(3, self.admission(HELD, 11000.0, 2048.0), "11000 + 2048 fits: the free slots")
+    def test_held_leases_that_fill_the_share_close_dashboard_admission(self) -> None:
+        over = self.adm([], HELD, peaks={"running": 12000.0, "": 2048.0})
+        self.assertEqual(0, over.dashboard_room().admission)
+        self.assertIn("expected memory 14048 MB exceeds 13926 MB", over.dashboard_room().memory_budget_block or "")
+        fits = self.adm([], HELD, peaks={"running": 11000.0, "": 2048.0})
+        self.assertEqual(3, fits.dashboard_room().admission)
+        self.assertIsNone(fits.dashboard_room().memory_budget_block)
 
     def test_the_default_estimate_counts_for_a_request_of_unknown_peak(self) -> None:
-        self.assertEqual(3, self.admission(HELD, 11000.0))
-        self.assertEqual(0, self.admission(HELD, 11000.0, memory_default_mb=4000.0))
+        self.assertEqual(3, self.adm([], HELD, peaks={"running": 11000.0}).dashboard_room().admission)
+        self.assertEqual(
+            0, self.adm([], HELD, peaks={"running": 11000.0}, memory_default_mb=4000.0).dashboard_room().admission
+        )
 
     def test_an_idle_machine_starts_its_first_request(self) -> None:
-        self.assertEqual(4, self.admission([], 0.0, 99999.0), "grant()'s gate applies beside running leases only")
-
-    def test_unknown_memory_a_share_of_0_and_older_callers_keep_the_slots(self) -> None:
-        self.assertEqual(3, self.admission(HELD, 99999.0, ram_mb=None))
-        self.assertEqual(3, self.admission(HELD, 99999.0, memory_share=0.0))
-        self.assertEqual(3, sf_board.dashboard_admission([], HELD, 4, 0, None, None, DEFAULTS, "normal", None),
-                         "without the budget's facts it admits by the other rules")
+        room = self.adm([], [], peaks={"": 99999.0}).dashboard_room()
+        self.assertEqual((4, None), (room.admission, room.memory_budget_block))
 
     def test_the_budget_also_closes_the_one_slot_a_warning_admits(self) -> None:
-        found = sf_board.dashboard_admission([], HELD, 4, 0, sf_schedule.WARNING_WAIT, None, DEFAULTS, "warning",
-                                             memory_expected_mb=12000.0, memory_need_mb=2048.0, ram_mb=16384.0)
-        self.assertEqual(0, found)
-        self.assertEqual(1, sf_board.dashboard_admission([], HELD, 4, 0, sf_schedule.WARNING_WAIT, None, DEFAULTS,
-                                                         "warning", memory_expected_mb=1000.0, ram_mb=16384.0))
+        warn = ("warning", "level 2")
+        self.assertEqual(
+            0, self.adm([], HELD, peaks={"running": 12000.0, "": 2048.0}, memory=warn).dashboard_room().admission
+        )
+        self.assertEqual(
+            1, self.adm([], HELD, peaks={"running": 1000.0}, memory=warn).dashboard_room().admission
+        )
 
 
 class ReaderTests(SlotCase):
@@ -118,6 +159,16 @@ class ReaderTests(SlotCase):
         self.assertEqual(reason, advice["memory_budget_block"])
         self.assertEqual(reason, why, "grant() holds the waiter for the same reason")
         self.assertEqual("waiting", json.loads(waiter.read_text())["state"])
+
+    def test_two_waiters_on_an_idle_host_exceeding_memory_share_admit_only_the_first(self) -> None:
+        first = self.entry("first", 1)
+        second = self.entry("second", 1)
+        reason = "expected memory 60000 MB exceeds 55706 MB (85% of 65536 MB)"
+        with mock.patch.dict(os.environ, {**self.env, "SLOTFATHER_MEMORY_DEFAULT_MB": "30000"}, clear=True):
+            why = sf_leases.grant(self.state, sf_process.processes())
+        self.assertEqual(reason, why)
+        self.assertEqual(("held", "waiting"),
+                         (json.loads(first.read_text())["state"], json.loads(second.read_text())["state"]))
 
     def test_room_in_the_budget_leaves_admission_and_the_fields_open(self) -> None:
         self.entry("running", 1, "held")

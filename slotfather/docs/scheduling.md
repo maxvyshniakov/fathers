@@ -57,7 +57,7 @@ Eight slots; seven held by lane checks expected to end between 18:05 and 18:20, 
 
 ### Memory admission
 
-`grant()` lets the requests `plan()` starts through a memory gate (`schedule.memory_gate()`, read from `platform.memory_level()`), one look at a time:
+`grant()` lets the requests `plan()` starts through the resource gate inside `schedule.Admission` (`Admission.plan_grants()`, reading `platform.memory_level()` lazily via `schedule.Host`), one look at a time:
 
 - **normal**: every request the order starts, starts.
 - **warning** (macOS `kern.memorystatus_vm_pressure_level` 2; Linux PSI `some avg10` at `SLOTFATHER_MAX_PSI_SOME`, default 10%): beside running leases only a 1-slot request starts, and only one lease at a time: a request starts when no running lease was granted while memory was not normal (its entry carries `pressed`). A second 1-slot request waits until that lease releases, or until the level is normal again. Requests of 2 or more slots and `-n all` wait; a 1-slot request behind one of them may start first.
@@ -68,8 +68,7 @@ Eight slots; seven held by lane checks expected to end between 18:05 and 18:20, 
 
 ### CPU load admission
 
-`grant()` also holds requests back under sustained CPU load (fathers#184; `schedule.load_wait()`, applied in
-`schedule.memory_gate()`), whatever the free slots. The load is `min(load1, load5)`, so a short burst does not count,
+`grant()` also holds requests back under sustained CPU load (fathers#184; enforced inside `schedule.Admission`), whatever the free slots. The load is `min(load1, load5)`, so a short burst does not count,
 and the unleased load is that less the held slots' share of the cores (`held × cores / slots`), as `advise` counts
 it. With `load_gate` *G* (default 1):
 

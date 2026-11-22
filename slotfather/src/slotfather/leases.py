@@ -145,15 +145,20 @@ def ask_yield(pid: int, start: str, directory: Path | None = None) -> tuple[dict
         ranked = _schedule.ranked([e for _, e in waiters], settings, moment)
         paths = {id(e): p for p, e in waiters}
         held = [e for p, e in live if _entry.is_held(e) and p != path]
+        estimate = _queue.estimator(directory)
+        p90 = _queue.estimator(directory, p90=True)
+        other = _queue.used_elsewhere(directory, table)
+        slots = _settings.total()
+        window = _config.overtake_window()
         chosen = None
         for waiter in ranked:
             if CLASS_RANK[_schedule.effective_priority(waiter, settings, moment)] <= own:
                 continue
             behind = _schedule.rank_time(waiter, settings, moment) + _config.YIELD_BEHIND
             trial = _schedule.plan([*(e for e in ranked), _entry.trial_yielded(entry, behind)], held,
-                                   _settings.total(), moment, estimate=_queue.estimator(directory),
-                                   other=_queue.used_elsewhere(directory, table), settings=settings,
-                                   window=_config.overtake_window())
+                                   slots, moment, estimate=estimate,
+                                   other=other, settings=settings,
+                                   window=window, p90=p90)
             if any(g is waiter for g in trial.grants):
                 chosen = waiter
                 break
@@ -198,7 +203,8 @@ def yield_lease(path: Path) -> tuple[dict[str, Any], dict[str, Any]] | None:
             held = [e for other, e in live if _entry.is_held(e) and other != path]
             waiters = [e for _, e in live if _entry.is_waiting(e)] + [_entry.trial_yielded(entry, behind)]
             trial = _schedule.plan(waiters, held, _settings.total(), time.time(), estimate=_queue.estimator(directory),
-                         other=_queue.used_elsewhere(directory, table), settings=effective, window=_config.overtake_window())
+                         other=_queue.used_elsewhere(directory, table), settings=effective,
+                         window=_config.overtake_window(), p90=_queue.estimator(directory, p90=True))
             if not any(e is asker for e in trial.grants):
                 asker = None
         if asker is None:  # it started, left or would still not start; the next look would withdraw the request
@@ -369,9 +375,8 @@ def grant_now(directory: Path) -> None:
 
 
 def grant(directory: Path, table: _queue.Table) -> str | None:
-    """Grant the waiters plan() starts, in their order, that memory and CPU load let start (schedule.memory_gate(),
-    schedule.load_wait()); then ask yieldable holders to yield for
-    interactive waiters that still wait (yield_asks()). Returns why the first that does not start still waits."""
+    """Grant the waiters schedule.Admission.plan_grants() starts, in their order; then ask yieldable holders to yield
+    for interactive waiters that still wait (yield_asks()). Returns why the first that does not start still waits."""
     live = _queue.reap(directory, table)
     for path, entry in live:
         if not _entry.is_held(entry) or not isinstance(entry.get("session"), dict):
@@ -386,34 +391,21 @@ def grant(directory: Path, table: _queue.Table) -> str | None:
     slots = _settings.total()
     moment = time.time()
     settings = _settings.order_settings(directory)
+    shared = _settings.order_settings(directory, environment=False)
     window = _config.overtake_window()
-    p90 = _queue.estimator(directory, p90=True)
-    found = _schedule.plan(_schedule.fit(waiters, slots), held, slots, moment, estimate=estimate, other=other,
-                 settings=settings, window=window, p90=p90)
-    # The head's reservation, kept on its entry so that the next look promises no later start; others hold none.
-    # Every client keeps it by the shared settings, whatever its environment (shared_plan()).
-    keeper = _schedule.shared_plan(found, waiters, held, slots, moment, estimate, other, settings,
-                                   _settings.order_settings(directory, environment=False), window, p90)
-    used = sum(_entry.holds(e, slots) for e in held) + other
-    memory = _platform.memory_level() if found.grants else ("normal", None)
-    ram_gib = _platform.memory_gib() if (found.grants and used) else None
-    ram_mb = None if ram_gib is None else ram_gib * 1024.0
-    # fathers#184: sustained CPU load holds grants beside running leases; an idle machine still starts its first.
-    load = _schedule.load_wait(_platform.load_averages(), _config.cores(), slots, used, settings) \
-        if found.grants else None
-    gated = _schedule.memory_gate(found.grants, held, used, memory, settings,
-                                  memory_estimate=_queue.memory_estimator(directory) if ram_mb is not None else None,
-                                  ram_mb=ram_mb, granted_counts=found.granted_counts, load=load)
-    starting = [entry for entry, why in gated if not why]
-    for entry in _schedule.reservations(waiters, keeper):
-        if not any(entry is g for g in starting):  # a grant is written below; one memory holds back keeps its own
+    _schedule.fit(waiters, slots)
+    outcome = _queue.admission(directory, waiters, held, slots, other, moment=moment, settings=settings,
+                               shared_settings=shared, estimate=estimate).plan_grants()
+    starting = [item.entry for item in outcome.started]
+    for entry in _schedule.reservations(waiters, outcome.keeper):
+        if not any(entry is g for g in starting):  # a grant is written below; one gated keeps its own
             _state.write(paths[id(entry)], entry)
-    gave_way, marked = _schedule.head_drops(waiters, keeper, moment)
+    gave_way, marked = _schedule.head_drops(waiters, outcome.keeper, moment)
     for entry in marked:
         if not any(entry is g for g in starting):
             _state.write(paths[id(entry)], entry)
     for entry in gave_way:  # its client hears it in its waiting reason; EVENTS and queue.log name the leases
-        blockers = next(b for e, b in keeper.dropped if e is entry)
+        blockers = next(b for e, b in outcome.keeper.dropped if e is entry)
         names = ", ".join(f"{b.get('label')} (pid {b.get('pid')})" for b in blockers)
         late = round(moment - (_entry.reservation(entry) or moment))
         _events.record(directory, f"{entry.get('label')} (pid {entry.get('pid')}) gave way as the head: its reserved "
@@ -424,28 +416,22 @@ def grant(directory: Path, table: _queue.Table) -> str | None:
                         "blocked_by": [{"id": paths[id(b)].stem if id(b) in paths else None, "label": b.get("label"),
                                         "pid": b.get("pid")} for b in blockers]},
                        _events.actor(kind="tool"), level="warn")
-    short = None
-    for entry, why in gated:
-        if why:
-            short = short or why
-            continue
-        served = _schedule.effective_priority(entry, settings, moment)
+    for item in outcome.started:
+        entry = item.entry
         back = _entry.epoch(entry.get("yielded_at"))  # a yielded lease waited from when it went back
         waited_from = back if back is not None else _config.seconds(entry.get("since"))
         granted = _config.now()
         began = _config.seconds(granted) or time.time()  # resume() puts a yielded lease's first grant back
-        take = found.granted_count(entry)
-        _entry.to_held(entry, granted, time.time(), pressed=memory[0] != "normal", served=served, count=take)
+        _entry.to_held(entry, granted, time.time(), pressed=item.pressed, served=item.served, count=item.count)
         _state.write(paths[id(entry)], entry)
-        used += entry["count"]
         details: _events.Granted = {"count": entry["count"], "priority": _entry.priority_of(entry),
                                     "waited": None if waited_from is None else
                                     round(max(0.0, began - waited_from))}
         if type(entry.get("max_count")) is int:
             details["min_count"] = int(entry.get("min_count", entry["count"]))
             details["max_count"] = int(entry["max_count"])
-        if served != _entry.priority_of(entry):
-            details["served"] = served
+        if item.served != _entry.priority_of(entry):
+            details["served"] = item.served
         if back is not None:
             details["resumed"] = True
         meta = _entry.meta_of(entry)
@@ -455,13 +441,13 @@ def grant(directory: Path, table: _queue.Table) -> str | None:
             details["session"] = entry["session"].get("name")
         _events.record(directory, f"granted {entry['count']} to {entry.get('label')} (pid {entry['pid']})",
                        "lease.granted", _events.request(entry, paths[id(entry)]), details, _events.holder(entry))
-    if short:  # memory or CPU load holds a request back: no yield is asked, since the slots it frees might not start it
-        return short
-    rest = [e for e in waiters if not any(e is g for g in found.grants)]
+    if outcome.gated:  # memory or CPU load holds a request back: no yield is asked, since the slots it frees might not start it
+        return outcome.reason
+    rest = [e for e in waiters if not any(e is g for g in starting)]
     with contextlib.suppress(OSError, _config.SlotError):
-        ask(directory, live, held + found.grants, rest, estimate, other, _settings.order_settings(directory, environment=False),
+        ask(directory, live, held + starting, rest, estimate, other, shared,
             _settings.total(), time.time(), window)
-    return found.reason
+    return outcome.reason
 
 
 def next_sequence(directory: Path) -> int:
