@@ -29,6 +29,8 @@ from . import (
     postmerge,
     receipts,
     review,
+    review_gate,
+    review_record,
     state,
     tickets,
     verify,
@@ -190,14 +192,14 @@ def complete(store: state.Store, record: dict[str, Any], merge: str, integration
     tickets.after_land(store, record, merge, integration, onto, receipt, status, smoke)
     if status != "green":
         return
-    reviewed, words = review.review_state(lane_id, store)
+    reviewed, words = review_record.ReviewRecord.load(store, lane_id).summary(prog=store.project.command)
     if reviewed or keep:
         lifecycle.finish_landed(store, lane_id, keep)
     else:
         # The fix round runs in the lane's worktree, where a resumed agent keeps its context (#570).
         print(f"Lane {lane_id} kept for its review ({words}): it does not count toward the lane cap; "
               "marking its last finding "
-              f"finishes it (" + review.mark_help(lane_id, store.project.command) + ")")
+              f"finishes it (" + review_record.mark_help(lane_id, store.project.command) + ")")
 
 
 def recheck(args: Any) -> int:
@@ -276,11 +278,11 @@ def check_other_reviews(record: state.Record, force_reason: str | None,
     store = store or state.Store(config.current())
     held, reported = review.landing_findings(record, store)
     for lane, finding in reported:
-        print(f"lane: reported ({finding['severity']}, does not block): {review.finding_line(lane, finding)}",
+        print(f"lane: reported ({finding['severity']}, does not block): {review_gate.finding_line(lane, finding)}",
               file=sys.stderr)
     if not held:
         return None
-    refusals = [review.finding_line(lane, finding) for lane, finding in held]
+    refusals = [review_gate.finding_line(lane, finding) for lane, finding in held]
     if not force_reason:
         lines = [f"- {text}" for text in refusals]
         blocking_lanes = {lane["id"]: lane for lane, _ in held}
@@ -381,7 +383,7 @@ def merge(
             raise LaneError(f"land refused: {integration} has uncommitted changes or a merge in progress")
         if onto in store.project.promoted:
             # promote waits only for lanes not yet promoted (#570): landing on a promoted branch needs review first.
-            reviewed, words = review.review_state(lane_id, store)
+            reviewed, words = review_record.ReviewRecord.load(store, lane_id).summary(prog=prog)
             if not reviewed and not review.review_exemption(record):
                 if not force_reason:
                     raise LaneError(f"land refused: {integration} is on {onto}, which promote would not hold for "

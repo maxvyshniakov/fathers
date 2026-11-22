@@ -1,27 +1,24 @@
 """Lane, gate and perf receipts, their verdicts, and the one lane view (fathers#71).
 
-Every lane receipt kind (`check`/`receipt`, `first`, `post-merge`, `recheck`, `review`), batch-gate receipt (`gate`)
+Every lane receipt kind (`check`/`receipt`, `first`, `post-merge`, `recheck`), batch-gate receipt (`gate`)
 and perf receipt (`perf`) is read and written here against an explicit `state.Store` — never `config.current()`.
+Review receipt transitions and verdicts live in `review_record.py`; `receipts.write` refuses `kind == "review"`.
 `results.py` keeps the tree/plan results store and platform resolution; `receipts` calls it for the environment rule.
 
 - `check_verdict(record, receipt, tip_tree, toolchain)` -> `NoReceipt | Green | Red | StaleTree | StaleToolchain`
-- `review_verdict(record, receipt)` -> `Absent | Running | Died | Failed | Exempt | Unmarked | Complete`
 - `lane_view(store, record)` -> `LaneView`, rendered by `list`, `show` and `status`
 """
 from __future__ import annotations
 
-from collections.abc import Iterable, Iterator
 import contextlib
 from dataclasses import dataclass
-import os
 from pathlib import Path
 import re
 import subprocess
 from typing import Any, Literal, cast
 
-from . import config, lifecycle, state
+from . import lifecycle, review_record, state
 from . import results as result_store
-from .errors import LaneError
 from .gitops import main_checkout
 from .state import Record
 
@@ -63,7 +60,9 @@ def read(store: state.Store, name: str, kind: ReceiptKind = "receipt") -> Receip
 
 
 def write(store: state.Store, name: str, data: Receipt, kind: ReceiptKind = "receipt") -> Path:
-    """Atomically write a receipt in `store` and return its path."""
+    """Atomically write a non-review receipt in `store` and return its path."""
+    if kind == "review":
+        raise ValueError("review receipts must be written through lanefather.review_record")
     store.directory.mkdir(parents=True, exist_ok=True)
     target = path(store, name, kind)
     state.write_json(target, data)
@@ -444,242 +443,6 @@ def smoke_basis(
 
 
 # ---------------------------------------------------------------------------
-# Review verdict (fathers#53 / fathers#60 seam)
-# ---------------------------------------------------------------------------
-
-
-def alive(pid: Any) -> bool:
-    """Whether `pid` names a live local process (bare PID until fathers#60 adds start time)."""
-    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
-        return False
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
-
-
-def extract_findings(receipt: Receipt | None) -> list[dict[str, Any]]:
-    """Normalized finding dictionaries on `receipt`."""
-    if not receipt:
-        return []
-    raw: Any = receipt.get("findings")
-    if not isinstance(raw, list):
-        return []
-    return [cast(dict[str, Any], f) for f in cast(list[Any], raw) if isinstance(f, dict)]
-
-
-def unmarked_findings(receipt: Receipt | None) -> list[dict[str, Any]]:
-    """Findings on `receipt` that carry no mark."""
-    return [finding for finding in extract_findings(receipt) if not finding.get("mark")]
-
-
-def missing_members(receipt: Receipt | None) -> list[str]:
-    """Panel members of a finished review whose run failed."""
-    if not receipt:
-        return []
-    raw_panel: Any = receipt.get("panel")
-    if not isinstance(raw_panel, list):
-        return []
-    return [
-        str(cast(dict[str, Any], entry).get("member"))
-        for entry in cast(list[Any], raw_panel)
-        if isinstance(entry, dict) and cast(dict[str, Any], entry).get("status") == "failed"
-    ]
-
-
-@dataclass(frozen=True)
-class Absent:
-    """No review receipt exists."""
-
-
-@dataclass(frozen=True)
-class Running:
-    """A review process is currently running."""
-    pid: Any = None
-    started: str | None = None
-    log: str | None = None
-
-
-@dataclass(frozen=True)
-class Died:
-    """The review receipt says `running`, but its PID is no longer alive."""
-    pid: Any = None
-    started: str | None = None
-    log: str | None = None
-
-
-@dataclass(frozen=True)
-class Failed:
-    """The review failed, or a required panel member failed."""
-    error: Any = None
-    missing_members: tuple[str, ...] = ()
-    findings: tuple[dict[str, Any], ...] = ()
-    raw_status: str | None = "failed"
-
-
-@dataclass(frozen=True)
-class Exempt:
-    """The lane is exempt from review."""
-    reason: Any = None
-
-
-@dataclass(frozen=True)
-class Unmarked:
-    """The review finished with at least one unmarked finding."""
-    findings: tuple[dict[str, Any], ...] = ()
-    unmarked: tuple[dict[str, Any], ...] = ()
-    reviewer: Any = None
-    missing_members: tuple[str, ...] = ()
-
-
-@dataclass(frozen=True)
-class Complete:
-    """The review finished and every finding (if any) is marked."""
-    findings: tuple[dict[str, Any], ...] = ()
-    reviewer: Any = None
-    missing_members: tuple[str, ...] = ()
-
-
-ReviewVerdict = Absent | Running | Died | Failed | Exempt | Unmarked | Complete
-
-
-def review_verdict(
-    record: Record | None,
-    receipt: Receipt | None,
-    *,
-    panel_required: bool = False,
-) -> ReviewVerdict:
-    """Evaluate a review receipt's state (`record` reserved for fathers#54/#53)."""
-    _ = record
-    if receipt is None:
-        return Absent()
-    raw_status = receipt.get("status")
-    if raw_status == "exempt":
-        return Exempt(reason=receipt.get("exempt"))
-    if raw_status == "running":
-        pid = receipt.get("pid")
-        started = str(receipt["started"]) if receipt.get("started") is not None else None
-        log = str(receipt["log"]) if receipt.get("log") is not None else None
-        if alive(pid):
-            return Running(pid=pid, started=started, log=log)
-        return Died(pid=pid, started=started, log=log)
-    status_str = str(raw_status) if isinstance(raw_status, str) else None
-    if raw_status != "finished":
-        return Failed(error=receipt.get("error"), raw_status=status_str)
-    findings = tuple(extract_findings(receipt))
-    missing = tuple(missing_members(receipt))
-    if missing and panel_required:
-        return Failed(
-            error=receipt.get("error"),
-            missing_members=missing,
-            findings=findings,
-            raw_status="finished",
-        )
-    unmarked = tuple(f for f in findings if not f.get("mark"))
-    if unmarked:
-        return Unmarked(
-            findings=findings,
-            unmarked=unmarked,
-            reviewer=receipt.get("reviewer"),
-            missing_members=missing,
-        )
-    return Complete(
-        findings=findings,
-        reviewer=receipt.get("reviewer"),
-        missing_members=missing,
-    )
-
-
-def has_finished_receipt(verdict: ReviewVerdict) -> bool:
-    """Whether `verdict` comes from a finished review receipt (even when `panel_required` failed it)."""
-    return isinstance(verdict, (Unmarked, Complete)) or (
-        isinstance(verdict, Failed) and bool(verdict.missing_members)
-    )
-
-
-def open_findings_of(verdict: ReviewVerdict) -> tuple[dict[str, Any], ...]:
-    """Unmarked findings on a finished review receipt, including partial required panels."""
-    if isinstance(verdict, Unmarked):
-        return verdict.unmarked
-    if isinstance(verdict, Failed) and verdict.missing_members:
-        return tuple(f for f in verdict.findings if not f.get("mark"))
-    return ()
-
-
-def review_words(label: str, verdict: ReviewVerdict, *, prog: str = "lanefather") -> tuple[bool, str]:
-    """Map `verdict` onto `(lets_promote_move_dev, human_words)`."""
-    if isinstance(verdict, Absent):
-        return False, f"no review: run {prog} review {label}"
-    if isinstance(verdict, Exempt):
-        return True, f"review exempt: {verdict.reason}"
-    if isinstance(verdict, Running):
-        return False, f"review running since {verdict.started} (pid {verdict.pid}, {verdict.log})"
-    if isinstance(verdict, Died):
-        return False, f"review died (pid {verdict.pid}, {verdict.log}): rerun {prog} review {label}"
-    if isinstance(verdict, Failed):
-        if verdict.missing_members:
-            return False, (
-                f"panel member {', '.join(verdict.missing_members)} gave no review ([review] panel_required): "
-                f"{prog} review {label} --force-reason <why> reviews again"
-            )
-        return False, f"review failed: {verdict.error}; rerun {prog} review {label}"
-    if isinstance(verdict, Unmarked):
-        return False, (
-            f"{len(verdict.unmarked)} of {len(verdict.findings)} review findings unmarked "
-            f"({', '.join('#' + str(f['n']) for f in verdict.unmarked)})"
-        )
-    return True, f"reviewed by {verdict.reviewer}: {len(verdict.findings)} findings, all marked"
-
-
-def review_state(
-    store: state.Store,
-    label: str,
-    *,
-    record: Record | None = None,
-    prog: str | None = None,
-) -> tuple[bool, str]:
-    """Whether `label`'s review in `store` is complete or exempt, and its wording."""
-    found = read(store, label, "review")
-    verdict = review_verdict(record, found, panel_required=store.project.review_panel_required)
-    return review_words(label, verdict, prog=prog or store.project.command)
-
-
-def mark_help(lane_id: str = "{id}", prog: str | None = None) -> str:
-    return f"{prog or config.prog()} review {lane_id} --mark <n> fixed:<merge>|rejected:<reason>"
-
-
-def fix_parent_review(lane_id: str, common: str, refusal: str, *,
-                      store: state.Store) -> dict[str, Any]:
-    """A landed lane in this repository with a finished review and an open finding."""
-    parent_record = state.read_json(store.record_path(lane_id))
-    if parent_record is None:
-        raise LaneError(f"{refusal}: no lane by that name")
-    landed: dict[str, Any] = parent_record.get("landed") or {}
-    if not lifecycle.landed(parent_record) or not landed.get("merge"):
-        raise LaneError(f"{refusal}: lane {lane_id} is {parent_record.get('status')}, not landed; a fix lane fixes "
-                        "the review findings of landed lanes")
-    if parent_record.get("common_dir") != common:
-        raise LaneError(f"{refusal}: lane {lane_id} is from another repository")
-    receipt = read(store, lane_id, "review")
-    verdict = review_verdict(parent_record, receipt, panel_required=store.project.review_panel_required)
-    if not open_findings_of(verdict) or receipt is None:
-        raise LaneError(f"{refusal}: lane {lane_id} has no finished review with unmarked findings")
-    return receipt
-
-
-def unmarked_reviews(records: Iterable[Record], store: state.Store) -> Iterator[tuple[Record, list[dict[str, Any]]]]:
-    """Open findings in each finished lane review, in record order."""
-    for record in records:
-        found = read(store, str(record["id"]), "review")
-        verdict = review_verdict(record, found, panel_required=store.project.review_panel_required)
-        if pending := open_findings_of(verdict):
-            yield record, list(pending)
-
-
-# ---------------------------------------------------------------------------
 # The one lane view for `list`, `show` and `status`
 # ---------------------------------------------------------------------------
 
@@ -725,7 +488,7 @@ class LaneView:
     landed_present: bool
     is_active: bool
     is_finished: bool
-    review: ReviewVerdict
+    review: review_record.ReviewVerdict
     review_words: str
     findings_count: int
     open_findings_count: int
@@ -747,26 +510,26 @@ class LaneView:
 
     def _review_status_for_show(self) -> str:
         # Behaviour preserved in Tidy 3 (#71): show reports raw 'running' on a dead review until #60.
-        if isinstance(self.review, Absent):
+        if isinstance(self.review, review_record.Absent):
             return "not started"
-        if isinstance(self.review, (Running, Died)):
+        if isinstance(self.review, (review_record.Running, review_record.Died)):
             return "running"
-        if isinstance(self.review, Exempt):
+        if isinstance(self.review, review_record.Exempt):
             return "exempt"
-        if isinstance(self.review, (Unmarked, Complete)):
+        if isinstance(self.review, (review_record.PartialPanel, review_record.Unmarked, review_record.Complete)):
             return "finished"
         return self.review.raw_status or "not started"
 
     def _review_status_for_status(self) -> str:
-        if isinstance(self.review, Absent):
+        if isinstance(self.review, review_record.Absent):
             return "not started"
-        if isinstance(self.review, Running):
+        if isinstance(self.review, review_record.Running):
             return "running"
-        if isinstance(self.review, Died):
+        if isinstance(self.review, review_record.Died):
             return "stopped"
-        if isinstance(self.review, Exempt):
+        if isinstance(self.review, review_record.Exempt):
             return "exempt"
-        if isinstance(self.review, (Unmarked, Complete)):
+        if isinstance(self.review, (review_record.PartialPanel, review_record.Unmarked, review_record.Complete)):
             return "finished"
         return self.review.raw_status or "not started"
 
@@ -883,11 +646,11 @@ def lane_view(
     check_v = check_verdict(record, check_rec, resolved_tree)
     check_path = str(path(store, lane_id, "receipt")) if check_rec else None
 
-    review_rec = read(store, lane_id, "review")
-    review_v = review_verdict(record, review_rec, panel_required=store.project.review_panel_required)
-    _, words = review_words(lane_id, review_v, prog=prog or store.project.command)
-    findings = extract_findings(review_rec)
-    open_count = sum(1 for f in findings if not f.get("mark"))
+    rev = review_record.ReviewRecord.load(store, lane_id)
+    review_v = rev.verdict
+    _, words = rev.summary(prog=prog or store.project.command)
+    findings = rev.findings
+    open_count = len(rev.open_findings)
 
     raw_post = record.get("post_merge")
     post_dict = cast(dict[str, Any], raw_post) if isinstance(raw_post, dict) else None

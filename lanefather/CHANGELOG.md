@@ -238,6 +238,13 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
 
 ### Fixed
 
+- Single-location `pre_land_fix` storage and stale review worker protection (fathers#216): review receipt
+  transitions now enforce lifecycle phase rules under `<label>.review.json`'s lock, separate partial-panel
+  completion under `[review] panel_required = true` from hard review failures, fence `finish` and `fail` by worker
+  PID so a superseded background review never overwrites a `--force-reason` re-review, and store `pre_land_fix`
+  solely in `<id>.review.json` while keeping a guarded read fallback for legacy lane records that still carry
+  `pre_land_fix`.
+
 - Unified lane-`done` readiness and review `panel_required` / manual-start handling (fathers#213): `done <id>`,
   `done --finished` and post-review auto-done now share one readiness check (`done.done_readiness`), so auto-done
   after `review` or `review --mark` finishes a lane whose red post-merge smoke was cleared by a later green batch

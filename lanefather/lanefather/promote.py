@@ -18,7 +18,21 @@ import subprocess
 import sys
 from typing import Any
 
-from . import config, events, gate, journal, plan, review, review_gate, slots, state, tickets, verify, worktrees
+from . import (
+    config,
+    events,
+    gate,
+    journal,
+    plan,
+    review,
+    review_gate,
+    review_record,
+    slots,
+    state,
+    tickets,
+    verify,
+    worktrees,
+)
 from .errors import LaneError
 from .gate import (
     batch_gate,
@@ -336,7 +350,7 @@ def step_review_refusals(run: PromoteRun) -> None:
     refusals = review_gate.review_refusals(run.cwd, run.common, run.sha)
     if refusals and not run.force_reason:
         raise LaneError("promote refused: dev waits for the review of every lane landed since dev:\n- "
-                        + "\n- ".join(refusals) + "\nMark each finding with " + review.mark_help("<id>")
+                        + "\n- ".join(refusals) + "\nMark each finding with " + review_record.mark_help("<id>")
                         + f", then rerun {prog} promote {run.sha[:10]}; a stamped tree is not gated again. "
                         "--force-reason overrides, logged")
     if refusals:

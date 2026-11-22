@@ -25,6 +25,7 @@ from . import (
     lifecycle,
     queue,
     receipts,
+    review_record,
     slots,
     state,
     tickets,
@@ -122,7 +123,7 @@ def admit(record: Record, force_reason: str | None, repaired: str | None) -> tup
             raise LaneError(f"--after {name}: no lane that is not done by that name")
     for fix_id in state.fix_parents(record):
         prefix = f"--fix-of {fix_id}" if state.batch_fix(record) else "hand-over refused"
-        receipts.fix_parent_review(fix_id, record["common_dir"], prefix, store=state.Store(config.current()))
+        review_record.ReviewRecord.fix_parent(state.Store(config.current()), fix_id, record["common_dir"], prefix)
     parent = fix_parent(record)
     decision = admission.evaluate(config.current(), others, record["common_dir"], cap_exempt=parent is not None,
                                   repaired=repaired)
@@ -329,7 +330,7 @@ def list_lanes(args: Any) -> int:
     if git_ok(os.getcwd(), "rev-parse", "--git-dir"):
         for line in ahead_lines(os.getcwd()):
             print(line)
-    pending = list(receipts.unmarked_reviews(records, store))
+    pending = list(review_record.ReviewRecord.unmarked(store, records))
     label = "review" if len(pending) == 1 else "reviews"
     references = [f"{lane['id']}#{finding['n']}" for lane, findings in pending for finding in findings]
     summary = f"{len(pending)} finished {label} with unmarked findings"

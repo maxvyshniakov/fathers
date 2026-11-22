@@ -22,7 +22,7 @@ import statistics
 from typing import Any
 from xml.etree import ElementTree
 
-from . import config, receipts, state
+from . import config, review_record, state
 from .journal import now, parse_time
 
 VERSION = 1
@@ -171,34 +171,32 @@ def stats(days: float | None = 7, lane: str | None = None) -> dict[str, Any]:
 
 def reviewer_totals(days: float | None = 7, lane: str | None = None) -> list[dict[str, Any]]:
     """Per reviewer (fathers#151), over the finished review receipts of the window (and lane): reviews, failed
-    panel runs, findings by severity and their marks, by review.reviewer_views and review.mark_counts."""
-    from . import review  # review imports checks, which imports this module
-
+    panel runs, findings by severity and their marks, via ReviewRecord.reviewer_views and review_record.mark_counts."""
     cutoff = (datetime.datetime.now(datetime.UTC) - datetime.timedelta(days=days)) if days else None
     table: dict[str, dict[str, Any]] = {}
     store = state.Store(config.current())
-    for _, receipt in receipts.reviews(store):
-        verdict = receipts.review_verdict(None, receipt, panel_required=store.project.review_panel_required)
-        if not receipts.has_finished_receipt(verdict) or (lane is not None and receipt.get("lane") != lane):
+    for rev in review_record.ReviewRecord.all(store):
+        raw = rev.raw or {}
+        if not rev.has_finished_receipt or (lane is not None and raw.get("lane") != lane):
             continue
         try:
-            if cutoff and parse_time(str(receipt.get("finished"))) < cutoff:
+            if cutoff and parse_time(str(raw.get("finished"))) < cutoff:
                 continue
         except ValueError:
             continue
-        for view in review.reviewer_views(receipt):
+        for view in rev.reviewer_views():
             name = view.get("reviewer")
             if not isinstance(name, str) or view.get("status") == "skipped":
                 continue
             row = table.setdefault(name, {"reviewer": name, "models": [], "reviews": 0, "failed": 0,
-                                          **dict.fromkeys(review.mark_counts([]), 0)})
+                                          **dict.fromkeys(review_record.mark_counts(()), 0)})
             if view.get("model") and view["model"] not in row["models"]:
                 row["models"].append(view["model"])
             if view.get("status") != "finished":
                 row["failed"] += 1
                 continue
             row["reviews"] += 1
-            for key, count in review.mark_counts(view["findings"]).items():
+            for key, count in review_record.mark_counts(view["findings"]).items():
                 row[key] += count
     return sorted(table.values(), key=lambda r: r["reviewer"])
 

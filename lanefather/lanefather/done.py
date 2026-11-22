@@ -30,8 +30,8 @@ from . import (
     lifecycle,
     postmerge,
     procs,
-    receipts,
     registry,
+    review_record,
     state,
     tickets,
     worktrees,
@@ -166,21 +166,19 @@ def done_readiness(
         words = f"its post-merge smoke is {smoke or 'not run'}"
         return DoneReadiness(ready=False, reason=words, refusal=words)
 
-    review_rec = receipts.read(store, lane_id, "review")
-    review_v = receipts.review_verdict(
-        record, review_rec, panel_required=store.project.review_panel_required
-    )
+    rev = review_record.ReviewRecord.load(store, lane_id)
+    review_v = rev.verdict
     allowed_verdicts: tuple[type[Any], ...] = (
-        (receipts.Absent, receipts.Exempt, receipts.Complete)
+        (review_record.Absent, review_record.Exempt, review_record.Complete)
         if allow_absent_review
-        else (receipts.Exempt, receipts.Complete)
+        else (review_record.Exempt, review_record.Complete)
     )
     if not isinstance(review_v, allowed_verdicts):
-        _, words = receipts.review_words(lane_id, review_v, prog=prog)
+        _, words = rev.summary(prog=prog)
         refusal = (
             words
-            if isinstance(review_v, receipts.Absent)
-            else f"its {words}: mark each finding with {receipts.mark_help(lane_id, prog)}"
+            if isinstance(review_v, review_record.Absent)
+            else f"its {words}: mark each finding with {review_record.mark_help(lane_id, prog)}"
         )
         return DoneReadiness(ready=False, reason=words, refusal=refusal, cleared=cleared)
 

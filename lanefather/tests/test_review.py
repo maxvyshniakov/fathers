@@ -630,11 +630,10 @@ class ReviewFixRoundTests(ReviewGateCase):
         output = self.lane("review", "a", "--fix-lane")
         self.assertIn(f"Pre-land fix round opened for active lane a in {worktree}", output)
         self.assertIn(reviewed_sha[:10], output)
-        # Lane remains active (no fake landed state, no second lane created).
+        # Lane remains active (no fake landed state, no second lane created, and pre_land_fix lives only on .review.json).
         record = self.record("a")
         self.assertEqual(record["status"], "active")
-        self.assertEqual(record["pre_land_fix"]["reviewed_sha"], reviewed_sha)
-        self.assertEqual(record["pre_land_fix"]["findings"], [1, 2])
+        self.assertNotIn("pre_land_fix", record)
         self.assertFalse((self.state / "a-review-fixes.json").exists())
         receipt = self.review("a")
         self.assertEqual(receipt["pre_land_fix"]["reviewed_sha"], reviewed_sha)
@@ -680,9 +679,15 @@ class ReviewFixRoundTests(ReviewGateCase):
         self.lane("check", "a")
         self.lane("review", "a")
         self.lane("review", "a", "--fix-lane")
-        self.assertIn("pre_land_fix", self.record("a"))
+        self.assertNotIn("pre_land_fix", self.record("a"))
+        self.assertIn("pre_land_fix", self.review("a"))
+        # Legacy lane records written before #216 also have their pre_land_fix scrubbed on forced re-review.
+        legacy = self.record("a")
+        legacy["pre_land_fix"] = dict(self.review("a")["pre_land_fix"])
+        (self.state / "a.json").write_text(json.dumps(legacy))
         self.lane("review", "a", "--force-reason", "re-review after scope change")
         self.assertNotIn("pre_land_fix", self.record("a"))
+        self.assertNotIn("pre_land_fix", self.review("a"))
 
     def test_hand_over_refusal_distinguishes_unsupported_status_from_missing_worktree(self):
         # fathers#197: unsupported status (planned, done) must not claim "has no worktree to hand over",

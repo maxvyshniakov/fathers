@@ -1,5 +1,6 @@
-"""Focused unit tests for Tidy 6 seams (fathers#74): github.py, review_gate.py, receipt_transition, lock-free gh in
-done, and acyclic top-level imports among lanes, review, done, tickets and checks."""
+"""Focused unit tests for Tidy 6 seams (fathers#74, fathers#216): github.py, review_gate.py, review_record._transition,
+lock-free gh in done, and acyclic top-level imports among lanes, review, done, tickets, checks, history and
+review_record."""
 from __future__ import annotations
 
 import ast
@@ -12,11 +13,10 @@ import unittest
 
 from support import LaneCase, close_process
 
-from lanefather import config, github, review, state
-from lanefather.errors import LaneError
+from lanefather import config, github
 
 PKG_DIR = Path(__file__).resolve().parent.parent / "lanefather"
-CORE_MODULES = {"lanes", "review", "done", "tickets", "checks"}
+CORE_MODULES = {"lanes", "review", "done", "tickets", "checks", "history", "review_record"}
 
 
 def _imported_internal_modules(path: Path) -> tuple[set[str], set[str]]:
@@ -71,31 +71,35 @@ class Tidy6ArchitectureTests(LaneCase):
         for mod in sorted(CORE_MODULES):
             dfs(mod, [mod])
 
-    def test_review_receipts_written_only_by_receipt_transition(self):
+        history_top, history_local = _imported_internal_modules(PKG_DIR / "history.py")
+        self.assertEqual(history_local, set(), f"history.py has local imports: {history_local}")
+        self.assertNotIn("review", history_top | history_local)
+        self.assertIn("review_record", history_top)
+
+    def test_review_receipts_written_only_by_review_record_transition(self):
+        writers: list[tuple[str, str]] = []
         for py_file in sorted(PKG_DIR.glob("*.py")):
             tree = ast.parse(py_file.read_text(), filename=str(py_file))
             for node in ast.walk(tree):
                 if isinstance(node, ast.FunctionDef):
                     for inner in ast.walk(node):
-                        if (isinstance(inner, ast.Call) and isinstance(inner.func, ast.Attribute)
-                                and inner.func.attr == "write"
+                        if not isinstance(inner, ast.Call) or not isinstance(inner.func, ast.Attribute):
+                            continue
+                        if (inner.func.attr == "write"
                                 and isinstance(inner.func.value, ast.Name)
-                                and inner.func.value.id == "receipts"
-                                and len(inner.args) >= 4
-                                and isinstance(inner.args[3], ast.Constant)
-                                and inner.args[3].value == "review"):
-                            self.assertEqual(
-                                (py_file.name, node.name),
-                                ("review.py", "receipt_transition"),
-                                f"review receipt written outside receipt_transition in {py_file.name}:{node.name}",
-                            )
-
-    def test_receipt_transition_rejects_unknown_event(self):
-        config.use(config.load(config.find(self.repo)))
-        self.addCleanup(config.use, None)
-        store = state.Store(config.current())
-        with self.assertRaises(LaneError):
-            review.receipt_transition(store, "a", "bogus", lambda _c: {})
+                                and inner.func.value.id == "receipts"):
+                            kinds = [
+                                *(inner.args[3:4]),
+                                *(kw.value for kw in inner.keywords if kw.arg == "kind"),
+                            ]
+                            for kind_arg in kinds:
+                                if isinstance(kind_arg, ast.Constant) and kind_arg.value == "review":
+                                    self.fail(f"{py_file.name}:{node.name} calls receipts.write(..., 'review')")
+                        if inner.func.attr == "write_json":
+                            target_src = ast.unparse(inner.args[0]) if inner.args else ""
+                            if py_file.name == "review_record.py" or '"review"' in target_src or "'review'" in target_src:
+                                writers.append((py_file.name, node.name))
+        self.assertEqual(writers, [("review_record.py", "_transition")])
 
     def test_github_adapter_origin_repo_and_gh_command(self):
         config.use(config.load(config.find(self.repo)))

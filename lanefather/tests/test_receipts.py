@@ -57,17 +57,18 @@ class ReceiptGuardTests(unittest.TestCase):
     """Static architecture guards for fathers#71."""
 
     def test_receipts_module_never_uses_ambient_config_or_state_dir(self) -> None:
-        tree = ast.parse((PKG / "receipts.py").read_text(encoding="utf-8"), filename="receipts.py")
         violations: list[str] = []
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Attribute) and node.attr in ("current", "state_dir"):
-                violations.append(f"receipts.py:{node.lineno}: ambient .{node.attr}() call")
+        for mod_name in ("receipts.py", "review_record.py"):
+            tree = ast.parse((PKG / mod_name).read_text(encoding="utf-8"), filename=mod_name)
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Attribute) and node.attr in ("current", "state_dir"):
+                    violations.append(f"{mod_name}:{node.lineno}: ambient .{node.attr}() call")
         self.assertEqual(violations, [], "\n".join(violations))
 
     def test_no_receipt_file_access_outside_receipts_and_state(self) -> None:
         violations: list[str] = []
         for path in sorted(PKG.glob("*.py")):
-            if path.name in ("receipts.py", "state.py"):
+            if path.name in ("receipts.py", "review_record.py", "state.py"):
                 continue
             source = path.read_text(encoding="utf-8")
             tree = ast.parse(source, filename=str(path))
@@ -107,7 +108,7 @@ class ReceiptGuardTests(unittest.TestCase):
             return None
 
         for path in sorted(PKG.glob("*.py")):
-            if path.name == "receipts.py":
+            if path.name in ("receipts.py", "review_record.py"):
                 continue
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
             # Track Assign targets so `x["status"] = ...` is distinguished from reads.
@@ -153,7 +154,7 @@ class ReceiptStoreAndVerdictUnitTests(unittest.TestCase):
         self.store_b = state.Store(config.Config(project="Beta"), directory=self.dir_b)
 
     def test_reads_and_writes_every_receipt_kind_against_explicit_store(self) -> None:
-        from lanefather import receipts
+        from lanefather import receipts, review_record
 
         # Reading from a missing store directory never creates it.
         for kind in ("check", "receipt", "first", "post-merge", "recheck", "review", "gate", "perf"):
@@ -167,7 +168,6 @@ class ReceiptStoreAndVerdictUnitTests(unittest.TestCase):
             ("first", "lane1", "lane1.first.json"),
             ("post-merge", "lane1", "lane1.post-merge.json"),
             ("recheck", "lane1", "lane1.recheck.json"),
-            ("review", "lane1", "lane1.review.json"),
             ("gate", sha, f"promote-{sha[:10]}.gate.json"),
             ("perf", sha, f"perf-{sha[:10]}.perf.json"),
         ]
@@ -180,6 +180,10 @@ class ReceiptStoreAndVerdictUnitTests(unittest.TestCase):
                 # Explicit Store isolation: store_b remains untouched and uncreated.
                 self.assertIsNone(receipts.read(self.store_b, target, kind))
                 self.assertFalse(self.dir_b.exists())
+
+        with self.assertRaises(ValueError):
+            receipts.write(self.store_a, "lane1", {"status": "exempt"}, "review")
+        review_record.ReviewRecord.exempt(self.store_a, "lane1", "docs only")
 
         self.assertEqual(len(receipts.gates(self.store_a)), 1)
         self.assertEqual(len(receipts.reviews(self.store_a)), 1)
@@ -278,53 +282,6 @@ class ReceiptStoreAndVerdictUnitTests(unittest.TestCase):
                 status="red",
             ),
         )
-
-    def test_review_verdict_table(self) -> None:
-        from lanefather import receipts
-
-        rec = {"id": "a", "status": "landed"}
-        self.assertEqual(receipts.review_verdict(rec, None), receipts.Absent())
-        self.assertEqual(
-            receipts.review_verdict(rec, {"status": "exempt", "exempt": "docs only"}),
-            receipts.Exempt(reason="docs only"),
-        )
-        self.assertEqual(
-            receipts.review_verdict(rec, {"status": "running", "pid": os.getpid(), "started": "t0", "log": "/l"}),
-            receipts.Running(pid=os.getpid(), started="t0", log="/l"),
-        )
-        self.assertEqual(
-            receipts.review_verdict(rec, {"status": "running", "pid": 999_999_999, "started": "t0", "log": "/l"}),
-            receipts.Died(pid=999_999_999, started="t0", log="/l"),
-        )
-        self.assertEqual(
-            receipts.review_verdict(rec, {"status": "failed", "error": "boom"}),
-            receipts.Failed(error="boom", raw_status="failed"),
-        )
-        f_open = {"n": 1, "severity": "P2", "mark": None}
-        f_marked = {"n": 2, "severity": "P1", "mark": {"kind": "rejected", "reason": "ok"}}
-        self.assertEqual(
-            receipts.review_verdict(rec, {"status": "finished", "reviewer": "sol", "findings": [f_open, f_marked]}),
-            receipts.Unmarked(findings=(f_open, f_marked), unmarked=(f_open,), reviewer="sol"),
-        )
-        self.assertEqual(
-            receipts.review_verdict(rec, {"status": "finished", "reviewer": "sol", "findings": [f_marked]}),
-            receipts.Complete(findings=(f_marked,), reviewer="sol"),
-        )
-        # Required panel with a failed member maps to Failed when panel_required=True, Complete otherwise.
-        panel_rec = {
-            "status": "finished",
-            "reviewer": "sol",
-            "findings": [],
-            "panel": [{"member": "sol", "status": "finished"}, {"member": "opus", "status": "failed"}],
-        }
-        self.assertIsInstance(receipts.review_verdict(rec, panel_rec, panel_required=False), receipts.Complete)
-        panel_v = receipts.review_verdict(rec, panel_rec, panel_required=True)
-        self.assertEqual(
-            panel_v,
-            receipts.Failed(error=None, missing_members=("opus",), findings=(), raw_status="finished"),
-        )
-        self.assertTrue(receipts.has_finished_receipt(panel_v))
-        self.assertFalse(receipts.has_finished_receipt(receipts.Failed(error="boom", raw_status="failed")))
 
     def test_check_status_word_covers_all_verdicts_and_defaults(self) -> None:
         from dataclasses import replace
@@ -583,6 +540,12 @@ class ReceiptReadersTableTests(LaneCase):
     def test_review_receipt_fixtures_across_list_show_status_done_and_gate(self) -> None:
         from lanefather import state
 
+        cfg_file = self.integration / ".lanefather.toml"
+        self.commit(
+            self.integration,
+            {".lanefather.toml": cfg_file.read_text() + '\n[review]\npanel = ["sol", "opus"]\npanel_required = true\n'},
+            "enable required review panel",
+        )
         self.git(self.repo, "branch", "dev")
         wt = pathlib.Path(self.created("rv", "lib/**"))
         self.commit(wt, {"lib/api.txt": "foo\nrv\n"})
@@ -636,6 +599,28 @@ class ReceiptReadersTableTests(LaneCase):
                     "list_tail": "review failed: timeout; rerun lanefather review rv",
                     "show_review": {"status": "failed", "findings": 0, "unresolved": 0},
                     "status_review": {"status": "failed", "open": 0, "findings": 0},
+                    "gate_held": True,
+                },
+            ),
+            (
+                "partial_panel",
+                {
+                    "version": 1, "label": "rv", "status": "finished", "reviewer": "sol+opus",
+                    "findings": [
+                        {"n": 1, "severity": "P3", "title": "nit", "file": "lib/api.txt", "line": 1, "mark": None},
+                    ],
+                    "panel": [
+                        {"member": "sol", "status": "finished", "numbers": [1]},
+                        {"member": "opus", "status": "failed", "error": "timeout"},
+                    ],
+                },
+                {
+                    "list_tail": (
+                        "panel member opus gave no review ([review] panel_required): "
+                        "lanefather review rv --force-reason <why> reviews again"
+                    ),
+                    "show_review": {"status": "finished", "findings": 1, "unresolved": 1},
+                    "status_review": {"status": "finished", "open": 1, "findings": 1},
                     "gate_held": True,
                 },
             ),

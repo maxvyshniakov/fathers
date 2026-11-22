@@ -5,7 +5,7 @@ import json
 import os
 from typing import Any
 
-from . import config, journal, receipts, state
+from . import config, journal, review_record, state
 from .errors import LaneError
 from .gitops import common_dir, git, git_ok
 from .state import Record
@@ -52,20 +52,21 @@ def gate_report(cwd: str, common: str, sha: str, since: str | None = None) -> di
         if base and git_ok(cwd, "merge-base", "--is-ancestor", merge, base):
             continue
         known += 1
-        receipt = receipts.read(store, record["id"], "review")
-        verdict = receipts.review_verdict(record, receipt, panel_required=store.project.review_panel_required)
-        _, words = receipts.review_words(record["id"], verdict, prog=config.prog())
-        if isinstance(verdict, receipts.Exempt):
+        rev = review_record.ReviewRecord.load(store, record["id"])
+        verdict = rev.verdict
+        _, words = rev.summary(prog=config.prog())
+        if isinstance(verdict, review_record.Exempt):
             continue
-        if isinstance(verdict, (receipts.Absent, receipts.Running, receipts.Died)):
+        if isinstance(
+            verdict,
+            (review_record.Absent, review_record.Running, review_record.Died, review_record.Failed),
+        ):
             report["unfinished"].append({"lane": record["id"], "ticket": record["ticket"],
                                          "text": f"lane {record['id']} (#{record['ticket']}): {words}"})
             continue
-        if isinstance(verdict, receipts.Failed):
+        if isinstance(verdict, review_record.PartialPanel):
             report["unfinished"].append({"lane": record["id"], "ticket": record["ticket"],
                                          "text": f"lane {record['id']} (#{record['ticket']}): {words}"})
-            if not verdict.missing_members:
-                continue
         for finding in verdict.findings:
             mark: dict[str, Any] = finding.get("mark") or {}
             entry = {"lane": record["id"], "ticket": record["ticket"], "n": finding.get("n"),
