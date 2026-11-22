@@ -71,6 +71,13 @@ def loads() -> tuple[float, float, float]:
     return os.getloadavg()
 
 
+def load_averages() -> tuple[float, float, float] | None:
+    """loads(), or None where the host gives none (os.getloadavg() raises OSError): no load, no load gate."""
+    with contextlib.suppress(OSError):
+        return loads()
+    return None
+
+
 def c_locale() -> dict[str, str]:
     """This process's environment in the C locale, for a command whose output is parsed."""
     return {**os.environ, "LC_ALL": "C"}

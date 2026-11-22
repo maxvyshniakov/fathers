@@ -107,6 +107,7 @@ class _StatusEntryBase(TypedDict):
     waited: Optional[int]
     long_wait: bool
     memory_wait: Optional[str]
+    load_wait: Optional[str]
 
 
 class StatusEntry(_StatusEntryBase, total=False):
@@ -224,6 +225,7 @@ class DashboardBlock(TypedDict):
     used: int
     free: int
     memory_block: Optional[str]
+    load_block: Optional[str]
     memory_budget_mb: Optional[float]
     memory_expected_mb: float
     admission: int

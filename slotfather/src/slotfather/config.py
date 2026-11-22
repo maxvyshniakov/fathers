@@ -69,7 +69,8 @@ QUEUE_ORDERS = ("backfill", "window")  # `slotfather order`; the first is the de
 ORDER_DEFAULTS = {"order": "backfill", "safety": 3.0, "limit": 0.0, "fallback": 3600.0, "overrun": 0.5,
                   "interactive": 1800.0, "batch": 1800.0, "yield_after": 120.0, "idle_cpu": 0.1, "idle_after": 300.0,
                   "aging_batch": 1800.0, "aging_normal": 3600.0, "warn_wait": 1800.0, "warning_admits": 1.0,
-                  "reservation_timeout": 1800.0, "memory_share": 0.85, "memory_default_mb": 2048.0}
+                  "reservation_timeout": 1800.0, "memory_share": 0.85, "memory_default_mb": 2048.0,
+                  "load_gate": 1.0}
 
 
 ORDER_KNOBS = {"safety": ("BACKFILL_SAFETY", 1.0, "up"), "limit": ("BACKFILL_LIMIT", 0.0, "limit"),
@@ -96,7 +97,11 @@ ORDER_KNOBS = {"safety": ("BACKFILL_SAFETY", 1.0, "up"), "limit": ("BACKFILL_LIM
                # fathers#9: expected-peak memory admission budget as a share of RAM (0 disables; <= 1.0) and the
                # default peak MB assumed for families without history.
                "memory_share": ("MEMORY_SHARE", 0.0, "down"),
-               "memory_default_mb": ("MEMORY_DEFAULT_MB", 0.0, "up")}
+               "memory_default_mb": ("MEMORY_DEFAULT_MB", 0.0, "up"),
+               # fathers#184: beside running leases, sustained CPU load holds further grants at this multiple of the
+               # cores (schedule.load_wait()); 0 disables. A client's environment can only lower it (hold sooner),
+               # never turn it off.
+               "load_gate": ("LOAD_GATE", 0.0, "limit")}
 
 
 DURATION_KNOBS = ("limit", "fallback", "interactive", "batch", "yield_after", "idle_after", "aging_batch",

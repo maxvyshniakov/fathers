@@ -101,7 +101,7 @@ class Queue:
         env = {k: v for k, v in os.environ.items() if not k.startswith(("SLOTFATHER", "STRAYLIGHT_SLOT"))}
         env.update(SLOTFATHER_DIR=str(self.directory), SLOTFATHER_LEGACY_DIRS="", SLOTFATHER_OVERTAKE_WINDOW="0",
                    SLOTFATHER_CORES="12", SLOTFATHER_MEMORY_FILE=str(self.memory), SLOTFATHER_GIT_FACTS="0",
-                   SLOTFATHER_POLL="0.01", TZ="UTC", GODFATHER_ACTOR="")
+                   SLOTFATHER_POLL="0.01", SLOTFATHER_LOADAVG="0", TZ="UTC", GODFATHER_ACTOR="")
         with contextlib.ExitStack() as stack:
             stack.enter_context(mock.patch.dict(os.environ, env, clear=True))
             time.tzset()

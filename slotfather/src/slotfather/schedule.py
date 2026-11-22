@@ -592,17 +592,43 @@ def idle_asks(waiters: list[Entry], held: list[Entry], idle: list[Entry], slots:
 
 
 WARNING_WAIT = "memory pressure warning: one 1-slot lease at a time"
+LOAD_PEAK = 1.5  # fathers#184: min(load1, load5) at this multiple of the gate's cores holds grants too
+
+
+def load_wait(averages: tuple[float, float, float] | None, cores: int, slots: int, held: int,
+              settings: dict[str, Any]) -> str | None:
+    """Why sustained CPU load holds back grants beside running leases (fathers#184), or None. With `load_gate` G
+    (an order setting; 0 disables) and `held` slots of `slots` held on `cores` cores, under load `averages` (1, 5
+    and 15 minutes; None: unknown, no gate): the load is min(load1, load5), so a short burst does not count; the
+    unleased load is that less the held slots' share of the cores, as `advise` counts it (query.size()). It holds
+    at an unleased load of G x cores, or at a load of LOAD_PEAK x G x cores, whatever the leases themselves run.
+    memory_gate() applies it beside running leases only: an idle machine always starts its first request."""
+    gate = float(settings.get("load_gate", _config.ORDER_DEFAULTS["load_gate"]))
+    if averages is None or not gate > 0 or cores < 1 or slots < 1:
+        return None
+    load = min(averages[0], averages[1])
+    if not math.isfinite(load):
+        return None
+    unleased = max(0.0, load - min(max(0, held), slots) * cores / slots)
+    if unleased >= gate * cores:
+        return f"CPU load {load:.1f}: {unleased:.1f} unleased is at or above {gate * cores:g} cores"
+    if load >= LOAD_PEAK * gate * cores:
+        return f"CPU load {load:.1f} is at or above {LOAD_PEAK * gate * cores:g} ({LOAD_PEAK * gate:g} x {cores} cores)"
+    return None
+
 
 def memory_gate(grants: list[Entry], held: list[Entry], used: int, memory: tuple[str, str | None],
                 settings: dict[str, Any], *, memory_estimate: Estimate | None = None,
                 ram_mb: float | None = None,
-                granted_counts: dict[int, int] | None = None) -> list[tuple[Entry, str | None]]:
-    """Which of plan()'s `grants` memory lets start now beside `held` (`used` slots held in all), in their order:
-    (entry, None) starts, (entry, why) waits. Normal memory starts them all unless expected peak memory exceeds
-    `memory_share` of `ram_mb` (fathers#9). While memory is short nothing starts beside a running lease. Under
-    warning, with `warning_admits` on, a 1-slot request starts when no running lease was granted while memory was
-    not normal (entry.PRESSED), so one such lease runs at a time; others wait. An idle machine (nothing used) always
-    starts its first request."""
+                granted_counts: dict[int, int] | None = None,
+                load: str | None = None) -> list[tuple[Entry, str | None]]:
+    """Which of plan()'s `grants` memory and CPU load let start now beside `held` (`used` slots held in all), in
+    their order: (entry, None) starts, (entry, why) waits. Normal memory starts them all unless expected peak memory
+    exceeds `memory_share` of `ram_mb` (fathers#9). While memory is short nothing starts beside a running lease.
+    Under warning, with `warning_admits` on, a 1-slot request starts when no running lease was granted while memory
+    was not normal (entry.PRESSED), so one such lease runs at a time; others wait. While `load` says why sustained
+    CPU load holds grants (load_wait(), fathers#184) nothing starts beside a running lease either. An idle machine
+    (nothing used) always starts its first request."""
     kind, why = memory
     allowance = kind == "warning" and float(settings.get("warning_admits", 1)) >= 1
     pressed = any(e.get(_entry.PRESSED) for e in held)
@@ -631,6 +657,8 @@ def memory_gate(grants: list[Entry], held: list[Entry], used: int, memory: tuple
             if held_mb + need_mb > budget_mb:
                 reason = (f"expected memory {held_mb + need_mb:.0f} MB exceeds "
                           f"{budget_mb:.0f} MB ({share * 100:.0f}% of {ram_mb:.0f} MB)")
+        if reason is None and used and load:
+            reason = load
         if reason is None:
             used += max(1, grant_count)
             if budget_mb is not None:

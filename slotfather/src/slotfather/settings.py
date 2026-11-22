@@ -161,7 +161,8 @@ def order_compatibility(keys: list[str], *, historical: bool = False) -> str:
     if historical:
         warning += (" Releases 3e3a621 and earlier know no classes. Releases before ageing know no aging or warn "
                     "settings. Releases before the memory warning allowance know no warning_admits. Releases before "
-                    "fathers#160 know no reservation_timeout. An unknown key makes their looks use the window order.")
+                    "fathers#160 know no reservation_timeout. Releases before "
+                    "fathers#184 know no load_gate. An unknown key makes their looks use the window order.")
     return warning
 
 

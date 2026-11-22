@@ -66,6 +66,29 @@ Eight slots; seven held by lane checks expected to end between 18:05 and 18:20, 
 
 `slotfather order --warning-admits 0` saves the rule before it: a warning stops like critical. The default is 1; it is written to `order.json` only when 0 (older clients refuse keys they do not know), and `SLOTFATHER_WARNING_ADMITS=0` turns it off for one client's looks. `pressed` stays on a lease until it releases: a lease granted under one warning still counts if the level goes back to warning while it runs; a lease granted while memory is normal never counts. A request memory holds back says why on its client's stderr (`slot: LABEL waits for 1 slot(s): memory pressure warning: one 1-slot lease at a time`), in `status` (`memory-wait="..."`), `status --json` (`memory_wait`, else `null`) and its long-wait line; its expected start is `?` (`null`), since no forecast knows when memory recovers. While memory holds a request back no yield is asked. A lease that yields drops `pressed`; its next grant decides again. A request the gate holds back keeps the head's reservation if it is the head. The dashboard's admission follows the rule (one slot under warning, none beside a pressed lease). A slotfather before this rule reads past `pressed` and stops at a warning, so until every client is updated a warning admits what the newer looks allow; an older client's grant on an idle machine under warning writes no `pressed`, so a newer look may start one more 1-slot lease beside it.
 
+### CPU load admission
+
+`grant()` also holds requests back under sustained CPU load (fathers#184; `schedule.load_wait()`, applied in
+`schedule.memory_gate()`), whatever the free slots. The load is `min(load1, load5)`, so a short burst does not count,
+and the unleased load is that less the held slots' share of the cores (`held × cores / slots`), as `advise` counts
+it. With `load_gate` *G* (default 1):
+
+- an idle machine (no slot held) starts its first request whatever the load, so work always makes progress;
+- beside running leases nothing more starts while the unleased load is at least *G* × cores, or the load itself is
+  at least 1.5 × *G* × cores (leases that run more threads than their slots saturate the machine too). Requests
+  start again on the first look after the load drops under both.
+
+On the 12-core Mac's telemetry (fathers#184: 30,512 intervals over 15 days) an unleased load of at least the cores
+came with a median real CPU use of 98.9%, and under 50% in 1.1% of the samples. `slotfather order --load-gate X`
+saves another multiple (`0` turns the gate off); it is written to `order.json` only when not 1, and
+`SLOTFATHER_LOAD_GATE` lowers it for one client's looks. A request the load holds back says why on its client's
+stderr (`slot: LABEL waits for 1 slot(s): CPU load 25.0: 22.0 unleased is at or above 12 cores`), in `status`
+(`load-wait="..."`), `status --json` (`load_wait`, else `null`) and its long-wait line; its expected start is `?`
+(`null`), and no yield is asked. The dashboard's admission is 0 beside running leases while the gate holds, and its
+block says why (`load_block`); `advise` reports the same reason as `load_block` without shrinking its job count.
+`SLOTFATHER_LOADAVG` replaces the host's load averages for tests. A Slotfather before this rule grants regardless
+of the load, so until every client is updated an older client's look may start a request the newer ones hold back.
+
 ### Idle leases
 
 A running lease is **idle** (#12) when its command's process tree has used less than `idle_cpu` cores (0.1 by default) for `idle_after` seconds (300) or more, with no process starting or ending in between: a build that spawns short compiler processes is never idle, and neither is a short pause for the network, a disk or a browser. The holder measures its own tree each time it samples it (the same samples as the history's usage), counting each process's own CPU and that of the children it reaped, so workers started and gone between two samples count, and records since when it has been low in `<entry>.idle` beside its queue entry, with an expiry by its own sampling interval; a lower `idle_cpu` than a run was built under starts that run again; every reader applies `idle_after` to that record, so the dashboard, `status` (`idle=23m`), `status --json` (`idle_since`) and the yield ask share one definition. A record past its expiry (three of its holder's longest sampling intervals, at least 30 s) says nothing, and older holders write none: their leases are never idle. While a request waits that the slots of an idle lease would start, a look asks that lease to yield through the same yield request as polite preemption, when it is `yieldable` and was asked fewer than YIELDS_MAX times; a lease that cannot yield is only marked. The scheduler never stops or kills an owner. Holders and readers decide idle by the saved settings alone, as every look decides yield requests, so that clients agree; `SLOTFATHER_IDLE_CPU` (lower) and `SLOTFATHER_IDLE_AFTER` (higher) only change what this client's `slotfather order` and Settings report as effective. Like the class knobs, they are written to `order.json` only when they differ from their defaults.

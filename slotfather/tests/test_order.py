@@ -534,7 +534,8 @@ class OrderTests(SlotCase):
     def test_the_order_is_saved_for_every_client_and_reset(self):
         classes = ("interactive 1800 s ahead, batch 1800 s behind, yield after 120 s; idle below 0.1 cores for 300 s; "
                    "batch ages after 1800 s, normal after 3600 s; warn after 1800 s waiting; a blocked head gives way "
-                   "after 1800 s past its reserved start; memory pressure warning admits one 1-slot lease at a time")
+                   "after 1800 s past its reserved start; memory pressure warning admits one 1-slot lease at a time; "
+                   "CPU load holds grants beside running leases at 1x the cores unleased or 1.5x in all")
         self.assertEqual(f"backfill: safety 3, limit 0 s, fallback 3600 s, overrun 0.5; {classes} (default)",
                          self.tool("order").stdout.strip())
         self.assertEqual(f"window: safety 3, limit 0 s, fallback 3600 s, overrun 0.5; {classes} (saved)",

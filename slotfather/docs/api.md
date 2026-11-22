@@ -66,7 +66,7 @@ Per-entry fields:
 - `priority`, `ticket`, `effective_priority`, `aged`, `reprioritized`: requested class and ticket, served class, whether ageing promoted it, and original class before `reprioritize` (`null` if unchanged).
 - `yieldable`, `yields`, `yield_asked`, `position`, `lock`: cooperative-yield settings, yield count, standing yield request, queue position, and lock path while waiting on `slotfather lock` (only when waiting on a lock).
 - `idle_since`: epoch seconds since a held lease became idle, or `null` (see Idle leases in scheduling).
-- `est_start`, `head`, `reserved`, `waited`, `long_wait`, `memory_wait`: waiter's expected start, head flag, reserved start (UTC or `null`), wait duration in seconds, whether it passed `warn_wait`, and why memory holds admission back (`null` otherwise).
+- `est_start`, `head`, `reserved`, `waited`, `long_wait`, `memory_wait`, `load_wait`: waiter's expected start, head flag, reserved start (UTC or `null`), wait duration in seconds, whether it passed `warn_wait`, why memory holds admission back, and why sustained CPU load holds it back beside running leases (fathers#184; each `null` otherwise).
 - `est_memory_mb`, `est_memory_source`, `expected`, `overrun` (omitted with `--pid`): expected peak RSS in MB and its source (`"history"` or `"default"`), expected run-type duration summary (see Run types below), and whether a held lease passed its `p90` (`overrun` only on held entries with `p90`).
 - `session` (measurement sessions only): active [session](sessions.md) summary (`name`, `idle`, `expect`, `stopping`, `runs`, `busy`, `last_use`, `active`).
 - `blocked_by`, `idle_slots`, `gave_way` (only when applicable, fathers#160): leases with no end estimate blocking a head past its reserved start (`[{"label", "pid"}]`), idle slot count, and the blocking list recorded when a head gave way.
@@ -119,7 +119,8 @@ nothing else. The block:
 - `v` (1), `directory`, `slots`, `cores`, `saved`, `basis` (the capacity basis as `slotfather slots` reads it),
   `averages` (`[l1, l5, l15]`), `draining`, `advice` (as `slotfather advise` computes it), `holders` and `waiters`
   (rows, in the order the dashboard shows them), `used`, `free`, `memory_block` (why new leases wait for memory,
-  or `null`), `memory_budget_mb` and `memory_expected_mb` (expected-peak memory budget and held leases' expected
+  or `null`), `load_block` (why new leases beside running ones wait for sustained CPU load, or `null`; fathers#184),
+  `memory_budget_mb` and `memory_expected_mb` (expected-peak memory budget and held leases' expected
   peak RSS in MB, fathers#9), `admission`, `order`, `start` and `reserved` (the head's expected and reserved start),
   `limit`,
   `memory` (the memory facts, plus `low`: `true`/`false`, `null` when unknown; `swap_low`: free swap under

@@ -50,6 +50,8 @@ class SlotCase(unittest.TestCase):
         self.env.update(SLOTFATHER_DIR=str(self.state), SLOTFATHER_LEGACY_DIRS="", SLOTFATHER_POLL="0.05", SLOTFATHER_POLL_MAX="0.5",
                         SLOTFATHER_OVERTAKE_WINDOW="0", SLOTFATHER_AUTO_TAGS="0",
                         SLOTFATHER_CORES="12", SLOTFATHER_MEMORY_GIB="64", SLOTFATHER_MEMORY_FILE=str(self.memory),
+                        # the host's own load must not hold grants (fathers#184): tests that want it set it
+                        SLOTFATHER_LOADAVG="0",
                         LOG=str(self.log),
                         RELEASE=str(self.release_dir))
         self.processes: list[subprocess.Popen[Any]] = []

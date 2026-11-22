@@ -409,7 +409,8 @@ class CommandTests(SlotCase):
         self.assertEqual(0, saved.returncode, saved.stderr)
         self.assertIn("batch ages after 600 s, normal after 3600 s; warn after 2700 s waiting; a blocked head gives way after "
                       "1800 s past its reserved start; memory pressure warning admits one "
-                      "1-slot lease at a time (saved)", saved.stdout)
+                      "1-slot lease at a time; CPU load holds grants beside running leases at 1x the cores unleased "
+                      "or 1.5x in all (saved)", saved.stdout)
         self.assertEqual({"aging_batch": 600.0, "warn_wait": 2700.0},
                          {k: v for k, v in json.loads((self.state / "order.json").read_text()).items()
                           if k in ("aging_batch", "aging_normal", "warn_wait")},

@@ -364,7 +364,8 @@ def grant_now(directory: Path) -> None:
 
 
 def grant(directory: Path, table: _queue.Table) -> str | None:
-    """Grant the waiters plan() starts, in their order, that memory lets start (schedule.memory_gate()); then ask yieldable holders to yield for
+    """Grant the waiters plan() starts, in their order, that memory and CPU load let start (schedule.memory_gate(),
+    schedule.load_wait()); then ask yieldable holders to yield for
     interactive waiters that still wait (yield_asks()). Returns why the first that does not start still waits."""
     live = _queue.reap(directory, table)
     for path, entry in live:
@@ -392,9 +393,12 @@ def grant(directory: Path, table: _queue.Table) -> str | None:
     memory = _platform.memory_level() if found.grants else ("normal", None)
     ram_gib = _platform.memory_gib() if (found.grants and used) else None
     ram_mb = None if ram_gib is None else ram_gib * 1024.0
+    # fathers#184: sustained CPU load holds grants beside running leases; an idle machine still starts its first.
+    load = _schedule.load_wait(_platform.load_averages(), _config.cores(), slots, used, settings) \
+        if found.grants else None
     gated = _schedule.memory_gate(found.grants, held, used, memory, settings,
                                   memory_estimate=_queue.memory_estimator(directory) if ram_mb is not None else None,
-                                  ram_mb=ram_mb, granted_counts=found.granted_counts)
+                                  ram_mb=ram_mb, granted_counts=found.granted_counts, load=load)
     starting = [entry for entry, why in gated if not why]
     for entry in _schedule.reservations(waiters, keeper):
         if not any(entry is g for g in starting):  # a grant is written below; one memory holds back keeps its own
@@ -446,7 +450,7 @@ def grant(directory: Path, table: _queue.Table) -> str | None:
             details["session"] = entry["session"].get("name")
         _events.record(directory, f"granted {entry['count']} to {entry.get('label')} (pid {entry['pid']})",
                        "lease.granted", _events.request(entry, paths[id(entry)]), details, _events.holder(entry))
-    if short:  # memory holds a request back: no yield is asked, since the slots it frees might not start it
+    if short:  # memory or CPU load holds a request back: no yield is asked, since the slots it frees might not start it
         return short
     rest = [e for e in waiters if not any(e is g for g in found.grants)]
     with contextlib.suppress(OSError, _config.SlotError):

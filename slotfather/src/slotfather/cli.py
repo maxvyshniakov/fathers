@@ -65,6 +65,9 @@ def _order_options() -> tuple[OptionSpec, ...]:
             opts.append(OptionSpec((flag,), metavar="S", help="duration in seconds or e.g. 30m, 1.5h"))
         elif knob == "warning_admits":
             opts.append(OptionSpec((flag,), metavar="1|0", help="admit one 1-slot lease (1) or none (0) under memory warning"))
+        elif knob == "load_gate":
+            opts.append(OptionSpec((flag,), metavar="X", help="hold grants beside running leases at X times the "
+                                                              "cores of sustained unleased load (0: off)"))
         else:
             opts.append(OptionSpec((flag,), metavar="N", help=f"set {knob.replace('_', ' ')}"))
     return tuple(opts)
@@ -783,8 +786,18 @@ def order_line(found: dict[str, Any]) -> str:
             f"{found['idle_cpu']:g} cores for {found['idle_after']:g} s; batch ages {ages('aging_batch')}, normal "
             f"{ages('aging_normal')}; warn after {found['warn_wait']:g} s waiting; a blocked head gives way "
             f"{ages('reservation_timeout')} past its reserved start; memory pressure warning admits "
-            f"{'one 1-slot lease at a time' if found['warning_admits'] >= 1 else 'nothing'} "
+            f"{'one 1-slot lease at a time' if found['warning_admits'] >= 1 else 'nothing'}; CPU load holds grants "
+            f"beside running leases {load_gate(found)} "
             f"({'saved' if found['saved'] else 'default'})")
+
+
+def load_gate(found: dict[str, Any]) -> str:
+    """order_line()'s words for the CPU load gate (fathers#184)."""
+    from .schedule import LOAD_PEAK
+    gate = float(found.get("load_gate", _config.ORDER_DEFAULTS["load_gate"]))
+    if not gate:
+        return "never"
+    return f"at {gate:g}x the cores unleased or {gate * LOAD_PEAK:g}x in all"
 
 
 def order_command(values: dict[str, Any], positionals: list[str], after_dash: list[str]) -> int:

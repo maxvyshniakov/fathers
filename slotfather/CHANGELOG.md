@@ -6,6 +6,13 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 
 ### Added
 
+- Sustained CPU load holds further grants beside running leases: when `min(load1, load5)` less the held slots'
+  share of the cores is at least the cores, or the load itself is at least 1.5 times the cores, a request waits
+  until the load drops, while an idle machine still starts its first request. `slotfather order --load-gate X`
+  sets the multiple (`0` turns it off) and `SLOTFATHER_LOAD_GATE` lowers it for one client. `status` says why
+  (`load-wait=`), `status --json` adds `load_wait`, the dashboard block adds `load_block` and its `admission`
+  follows the gate, and `advise` adds `load_block` (fathers#184).
+
 - `slotfather.contract` defines `TypedDict` contracts for `status --json` (`StatusSnapshot`, `StatusEntry`),
   `status --json --full` (`FullSnapshot`, `DashboardBlock`, `DashboardRow`, `DashboardUnknown`, `DashboardEvent`), and
   `events.jsonl` (`Event`, `Subject`, `Actor`, `KINDS`), checked against `docs/api.md`, with strict Pyright typing
