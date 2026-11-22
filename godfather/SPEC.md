@@ -259,14 +259,15 @@ Godfather is one Python package, standard library only, Python 3.11+, installed 
   and hint dropping, key reading with the kitty keyboard protocol and layout table, mouse (SGR 1000/1006), full-screen
   setup and restore, the background loader. It knows nothing about any tool.
 - **Layers** (fathers#141): data (keys, theme, version, eventcheck, sources, events, news, entries, adapters, text,
-  actions, model) → layout (layout, overlay_text, settings_model, state, reducer) → views (tui, widgets,
-  views) → app. A
+  actions, model, settings_schema) → layout (layout, overlay_text, settings_model, settings_layout, state, reducer) →
+  views (tui, widgets, views) → app. A
   module imports only its own layer or one below, so the reducer reads no view and no canvas: what EVENTS shows
   (`events.Filter`), the entries' identity (`entries`), the overlays' text and geometry (`overlay_text`), Settings
-  (`settings_model`) and the text measures (`text`: widths, durations, which hint a click presses) are below the
-  views that draw them. `reducer.reduce` dispatches keys and the mouse through the mode table (`reducer.MODES`,
-  `reducer.mode_of`), so `state` and `reducer` have no circular imports. One scroll clamp (`layout.clamp_scroll`, the
-  bottom `layout.last_offset`), one hint lookup (`text.hint_at`); tests/test_imports.py pins the layers.
+  (`settings_schema`, `settings_model`, `settings_layout`) and the text measures (`text`: widths, durations, which hint
+  a click presses) are below the views that draw them. `reducer.reduce` dispatches keys and the mouse through the mode
+  table (`reducer.MODES`, `reducer.mode_of`), so `state` and `reducer` have no circular imports. One scroll clamp
+  (`layout.clamp_scroll`, the bottom `layout.last_offset`), one hint lookup (`text.hint_at`); tests/test_imports.py
+  pins the layers.
 - **theme**: Slotfather's theme module moved whole: tokens, terminal colour queries (OSC 10/11/4, mode 2031), muted
   and surface mixing, holder fills and inks, the chart ramp, the three modes. Source colours for the EVENTS tag are
   new tokens chosen by the same rules as holder fills.
@@ -299,7 +300,9 @@ Every module under `src/godfather/`, as built (`tests/test_spec.py` holds this t
 | `news` | What's new: every tool's `changelog --json`, and what was read. |
 | `overlay_text` | Help and what's new laid out at a width, and where an overlay goes. |
 | `reducer` | The one reducer, page navigation, and the 14-mode key and mouse dispatch table (fathers#225). |
-| `settings_model` | Settings as a value: sections, rows, pending values and their transitions. |
+| `settings_layout` | Settings laid out as lines, its viewport geometry, scroll and footer hints. |
+| `settings_model` | Settings as a value: editor, pending changes, serialized writes and transitions. |
+| `settings_schema` | Settings schema, rows, value formatting, parsing and stepping. |
 | `sources` | All tool I/O: discovery, the CLIs run with an argv and a timeout, fixture mode. |
 | `state` | The app state and consolidated UI state (`UiState`), its events, effects and transitions. |
 | `text` | Cell widths, cutting, durations and the hint lookup, with no terminal. |

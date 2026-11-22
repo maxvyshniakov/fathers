@@ -20,6 +20,7 @@ from . import events as _events_view
 from . import layout as _layout
 from . import news as _news
 from . import overlay_text as _overlays
+from . import settings_layout as _settings_layout
 from . import settings_model as _settings
 from .adapters import junkfather as _junkfather
 from .adapters import lanefather as _lanefather
@@ -924,7 +925,7 @@ def settings_result(state: AppState, panel: _settings.Panel, context: _settings.
             effects.append(QUIT)
     if modal is not None:
         panel, checks = _settings.wanted_checks(_settings.settle_focus(panel, context), context)
-        modal = _settings.place(panel, context)
+        modal = _settings_layout.place(panel, context)
         effects += [Effect("settings", item=request) for request in checks]
     return with_modal(state, modal), effects
 

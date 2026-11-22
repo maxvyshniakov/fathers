@@ -10,6 +10,7 @@ from . import events as _events_view
 from . import keys as _keys
 from . import layout as _layout
 from . import overlay_text as _overlays
+from . import settings_layout as _settings_layout
 from . import settings_model as _settings
 from .state import (
     FILTER_MAX,
@@ -96,7 +97,7 @@ def mode_of(state: AppState) -> Mode:
     being typed), else the active screen by its focus."""
     modal = state.ui.modal
     if isinstance(modal, SettingsPanel):
-        if _settings.small(modal, settings_context(state)):
+        if _settings_layout.small(modal, settings_context(state)):
             return Mode.SETTINGS_SMALL
         return Mode.SETTINGS_EDIT if modal.editing else Mode.SETTINGS
     if isinstance(modal, FilterEdit):
@@ -590,9 +591,7 @@ def settings_digit(panel: _settings.Panel, context: _settings.Context, key: str,
 
 def settings_reset_all(panel: _settings.Panel, context: _settings.Context, _: str, now: float) -> _settings.Result:
     """D: once, it asks; again within the flash, the selected row's section is reset."""
-    if panel.armed is not None and panel.armed_tool == panel.focus[0] and now - panel.armed < _settings.FLASH_SECONDS:
-        return _settings.reset_section(panel, context, now)
-    return _settings.arm(panel, now), context, []
+    return _settings.arm_or_reset(panel, context, now)
 
 
 def settings_step(direction: int) -> Transition:
@@ -608,33 +607,20 @@ def settings_edge(last: bool) -> Transition:
 
 
 def settings_page(direction: int) -> Transition:
-    return keep(lambda panel, context, _, __: _settings.page(panel, context, direction))
+    return keep(lambda panel, context, _, __: _settings_layout.page(panel, context, direction))
 
 
 def edit_cancel(panel: _settings.Panel, context: _settings.Context, _: str, now: float) -> _settings.Result:
-    return _settings.say(_settings.replace(panel, editing=False), "Edit cancelled · nothing was saved", "dim",
-                         now), context, []
+    return _settings.edit_cancel(panel, now), context, []
 
 
 def edit_commit(panel: _settings.Panel, context: _settings.Context, key: str, now: float) -> _settings.Result:
     """Enter saves the typed value; Tab saves it and moves on. One refused stays in the field."""
-    panel, context, requests, saved = _settings.commit_typed(panel, context, now)
-    if saved and key == "\t":
-        panel, context, more = _settings.move(panel, context, 1, now)
-        requests += more
-    return panel, context, requests
+    return _settings.commit_typed(panel, context, now, move_next=key == "\t")
 
 
 def edit_type(panel: _settings.Panel, _: _settings.Context, key: str, __: float) -> _settings.Panel:
-    if key in ("\x7f", "\b"):
-        text = "" if panel.replace else panel.buffer[:-1]
-    elif key == "\x15":  # Ctrl-U clears the field
-        text = ""
-    elif len(panel.buffer) < 16 or panel.replace:
-        text = key if panel.replace else panel.buffer + key
-    else:
-        return panel
-    return _settings.replace(panel, buffer=text, replace=False)
+    return _settings.edit_key(panel, key)
 
 
 # The 14-mode table (fathers#22, fathers#225)
@@ -768,10 +754,8 @@ def press(state: AppState, key: str, now: float) -> Result:
     current = mode_of(state)
     if current not in RAW_MODES:
         key = _keys.hotkey(key)
-    if current == Mode.SETTINGS:
-        panel = cast(SettingsPanel, state.ui.modal)
-        if panel.armed is not None and key != "D":
-            state = with_modal(state, _settings.replace(panel, armed=None, armed_tool="", flash=None))
+    if current == Mode.SETTINGS and key != "D":
+        state = with_modal(state, _settings.disarm(cast(SettingsPanel, state.ui.modal)))
     handler = MODES[current].get(key)
     if handler is not None:
         return handler(state, key, now)
@@ -789,7 +773,7 @@ def settings_click(state: AppState, event: Mouse, now: float) -> Result:
     presses its key, and a click outside closes (as Esc does) unless a value is typed or pending; the wheel scrolls."""
     panel = cast(SettingsPanel, state.ui.modal)
     context = settings_context(state)
-    view = _settings.geometry(panel, context)
+    view = _settings_layout.geometry(panel, context)
     y, x, height, width = view.rect
     code = event.button & ~28
     if not (x <= event.x < x + width and y <= event.y < y + height):
@@ -800,11 +784,11 @@ def settings_click(state: AppState, event: Mouse, now: float) -> Result:
         hint = state.frame.hint_at(event.x, event.y)
         if hint is not None:
             return press(state, hint, now)
-    if _settings.small(panel, context) or not event.pressed or not (x < event.x < x + width - 1
-                                                             and y < event.y < y + height - 1):
+    if _settings_layout.small(panel, context) or not event.pressed or not (x < event.x < x + width - 1
+                                                                           and y < event.y < y + height - 1):
         return state, []
     if code in (WHEEL_UP, WHEEL_DOWN):
-        panel = _settings.scroll(panel, context, WHEEL if code == WHEEL_DOWN else -WHEEL)
+        panel = _settings_layout.scroll(panel, context, WHEEL if code == WHEEL_DOWN else -WHEEL)
         return settings_result(state, panel, context, [])
     if code != LEFT:
         return state, []
@@ -990,7 +974,7 @@ def reduce(state: AppState, event: Event, now: float) -> Result:
             ui=dataclasses.replace(state.ui, screen=next_screen, modal=modal),
         )
         if isinstance(state.ui.modal, SettingsPanel):  # another size: the focused row kept in view
-            state = with_modal(state, _settings.place(state.ui.modal, settings_context(state)))
+            state = with_modal(state, _settings_layout.place(state.ui.modal, settings_context(state)))
     else:
         second = event.moment.replace(microsecond=0) if event.moment is not None else state.moment
         if second != state.moment:

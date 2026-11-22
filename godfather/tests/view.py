@@ -18,7 +18,8 @@ NAMES = ("godfather.views.overview", "godfather.views.queue", "godfather.views.d
          "godfather.views.settings", "godfather.widgets",
          "godfather.layout", "godfather.state", "godfather.reducer", "godfather.tui", "godfather.app",
          "godfather.sources", "godfather.version", "godfather.news", "godfather.adapters.slotfather",
-         "godfather.settings_model", "godfather.entries", "godfather.events", "godfather.text")
+         "godfather.settings_model", "godfather.settings_layout", "godfather.settings_schema",
+         "godfather.entries", "godfather.events", "godfather.text")
 
 
 class View:
@@ -60,7 +61,8 @@ def fresh() -> Any:
     modules: list[ModuleType] = []
     for name in ("godfather.theme", "godfather.keys", "godfather.tui", "godfather.layout", "godfather.widgets",
                  "godfather.news", "godfather.views.common", "godfather.views.queue", "godfather.views.events", "godfather.views.details",
-                 "godfather.views.machine", "godfather.overlay_text", "godfather.views.overlays", "godfather.settings_model",
+                 "godfather.views.machine", "godfather.overlay_text", "godfather.views.overlays", "godfather.settings_schema",
+                 "godfather.settings_model", "godfather.settings_layout",
                  "godfather.views.settings", "godfather.views.overview", "godfather.state", "godfather.reducer",
                  "godfather.app"):
         importlib.reload(importlib.import_module(name))

@@ -18,7 +18,7 @@ from unittest import mock
 from helpers import ROOT, FakeSlotfather
 import view as _view
 
-from godfather import app, entries, news, reducer, settings_model, sources, state as state_module, theme, tui
+from godfather import app, entries, news, reducer, settings_layout, settings_model, sources, state as state_module, theme, tui
 from godfather.adapters import junkfather, lanefather, slotfather as adapter
 from godfather.views import overlays, overview
 
@@ -130,7 +130,7 @@ class FailingTests(FixtureCase):
         context = settings_model.Context(problem=slot_state.problem, width=100, height=40)
         panel = settings_model.opened(screen.settings_sections(), context, 0.0)
         self.assertIn("slotfather: queue unreadable", "\n".join(
-            "".join(part[1] for part in line.parts) for line in settings_model.lines(panel, context)))
+            "".join(part[1] for part in line.parts) for line in settings_layout.lines(panel, context)))
         self.reply("status --json --full", replies(SCENE)["status --json --full"])
         text = self.frame(screen)
         self.assertNotIn("stale", text, "a good snapshot ends it")

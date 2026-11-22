@@ -199,6 +199,12 @@ Versions and release rules: [README.md](README.md#versions).
 
 ### Fixed
 
+- In Settings, editing a typed number after pressing Enter or Tab while `settings check` is still running no longer
+  saves the newly typed text automatically when the check answers, and pressing Tab while a typed value's check is in
+  flight now advances to the next setting once it saves; resetting a setting (`d`) or a section (`D` twice) now waits
+  for any in-flight save or reset of the same tool and pauses periodic settings refreshes until it finishes; and
+  stepping an arrow change back to the saved value while an earlier save of that setting is still queued now saves the
+  revert instead of dropping it (fathers#233).
 - Junkfather sweep events in `EVENTS` now report unowned process and resource counts, running entries and pruned
   records instead of counting diagnostic notes or errors (for example, `3 unowned` instead of `1 notes`), and `QUEUE`
   no longer offers `Ask to yield` on a lease that has already yielded twice, matching Slotfather's limit

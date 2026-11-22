@@ -22,7 +22,7 @@ from unittest import mock
 
 from helpers import FakeSlotfather, FakeTool
 
-from godfather import app, reducer, settings_model, state as state_module, tui
+from godfather import app, reducer, settings_layout, settings_model, settings_schema, state as state_module, tui
 from godfather.model import Dashboard
 from godfather.text import span
 from godfather.views import settings as settings_view
@@ -163,8 +163,8 @@ class Settings:
     def select(self, focus: tuple[str, str]) -> None:
         self.state = state_module.with_modal(self.state, dataclasses.replace(self.panel, focus=focus, reveal=True))
 
-    def geometry(self) -> settings_model.Geometry:
-        return settings_model.geometry(self.panel, self.context())
+    def geometry(self) -> settings_layout.Geometry:
+        return settings_layout.geometry(self.panel, self.context())
 
     def canvas(self, model: Optional[dict[str, Any]] = None, width: Optional[int] = None,
                height: Optional[int] = None) -> tui.Canvas:
@@ -1033,7 +1033,7 @@ class ModelTests(unittest.TestCase):
         panel = settings_model.opened([found], context, 0.0)
         self.assertEqual([INTERVAL, THEME, ("lanefather", "a.wait")],
                          [row.focus for row in settings_model.selectable(panel, context)])
-        text = " ".join(part[1] for line in settings_model.lines(panel, context) for part in line.parts)
+        text = " ".join(part[1] for line in settings_layout.lines(panel, context) for part in line.parts)
         self.assertIn("#ff0000", text)
         self.assertIn("read-only here: needs a newer godfather", text)
         self.assertIn("1m30s", text)
@@ -1065,13 +1065,17 @@ class ModelTests(unittest.TestCase):
         self.assertEqual([("set", "a.wait", "120", "r1")],
                          [(request.kind, request.key, request.value, request.revision) for request in requests])
         self.assertEqual(1, panel.sections[0].generation)
-        self.assertRegex(" ".join(part[1] for line in settings_model.lines(panel, context) for part in line.parts),
+        self.assertRegex(" ".join(part[1] for line in settings_layout.lines(panel, context) for part in line.parts),
                          r"2m +saving…")
         panel, more = settings_model.due_reads(panel, 10.0)
         self.assertEqual([], more, "no read while a save of that tool is under way")
 
     def test_no_thread_or_lock_lives_in_the_state(self) -> None:
-        source = Path(settings_model.__file__).read_text() + Path(state_module.__file__).read_text()
+        source = "".join(
+            Path(mod.__file__).read_text()
+            for mod in (settings_schema, settings_model, settings_layout, state_module)
+            if mod.__file__ is not None
+        )
         self.assertNotIn("threading", source)
         self.assertNotIn("Lock(", source)
         self.assertTrue(dataclasses.fields(settings_model.Panel))
@@ -1085,6 +1089,215 @@ class ModelTests(unittest.TestCase):
             self.assertIn(key, reducer.MODES[reducer.Mode.SETTINGS])
         source = Path(settings_view.__file__).read_text()
         self.assertNotIn("def key", source, "the view handles no key")
+        reducer_source = Path(reducer.__file__).read_text()
+        self.assertNotIn("_settings.replace(", reducer_source, "reducer never mutates Panel fields directly")
+
+    def test_settings_seams_and_panel_invariants(self) -> None:
+        from test_imports import imports
+
+        package = Path(settings_model.__file__).resolve().parent
+        self.assertEqual({"settings_schema", "theme"}, imports(package / "settings_model.py"),
+                         "settings_model does not import layout or views")
+        self.assertEqual({"theme", "text"}, imports(package / "settings_schema.py"),
+                         "settings_schema imports only data-layer modules")
+        pending = settings_model.Pending("slotfather", "order.safety", 3.5, 1.0, "r1")
+        edit = settings_model.EditState("4")
+        armed = settings_model.ArmedReset("slotfather", 1.0)
+        with self.assertRaises(ValueError):
+            settings_model.Panel(edit=edit, pending=pending)
+        with self.assertRaises(ValueError):
+            settings_model.Panel(edit=edit, armed=armed)
+        with self.assertRaises(ValueError):
+            settings_model.Panel(kind="other")
+
+    def test_editing_buffer_while_waiting_on_check_clears_waiting_so_new_text_does_not_auto_commit(self) -> None:
+        row = {"key": "a.wait", "label": "Wait", "type": "integer", "value": 90, "writable": True,
+               "revision": "r1", "step": 10, "min": 0}
+        context = settings_model.Context()
+        panel = settings_model.opened([self.section(row)], context, 0.0)
+        panel = settings_model.begin(panel, context, "5")
+        panel, context, requests = settings_model.commit_typed(panel, context, 1.0)
+        self.assertEqual([], requests, "waiting for check")
+        assert panel.edit is not None
+        self.assertTrue(panel.edit.waiting)
+        # User edits buffer before the check answers: waiting must reset to False.
+        panel = settings_model.edit_key(panel, "0")
+        assert panel.edit is not None
+        self.assertEqual(("50", False, False), (panel.edit.buffer, panel.edit.waiting, panel.edit.move_next))
+        panel, context, requests = settings_model.check_done(
+            panel, context, "lanefather", "a.wait", "5", "r1", {"ok": True}, 1.2
+        )
+        self.assertEqual([], requests)
+        panel, context, requests = settings_model.check_done(
+            panel, context, "lanefather", "a.wait", "50", "r1", {"ok": True}, 1.3
+        )
+        self.assertEqual([], requests, "edited text must not auto-commit without a second Enter")
+        self.assertTrue(panel.editing)
+        panel, context, requests = settings_model.commit_typed(panel, context, 1.4)
+        self.assertFalse(panel.editing)
+        self.assertEqual([("set", "a.wait", "50", "r1")],
+                         [(r.kind, r.key, r.value, r.revision) for r in requests])
+
+        # Cancelling or moving focus while waiting drops EditState completely.
+        waiting_panel = settings_model.begin(panel, context, "7")
+        waiting_panel, context, _ = settings_model.commit_typed(waiting_panel, context, 2.0, move_next=True)
+        assert waiting_panel.edit is not None and waiting_panel.edit.waiting and waiting_panel.edit.move_next
+        cancelled = settings_model.edit_cancel(waiting_panel, 2.1)
+        self.assertIsNone(cancelled.edit)
+        moved, _, _ = settings_model.move_to(waiting_panel, context, INTERVAL, 2.1, cancel_edit=True)
+        self.assertIsNone(moved.edit)
+
+    def test_tab_while_waiting_on_check_saves_and_advances_focus_when_check_answers(self) -> None:
+        first = {"key": "a.wait", "label": "Wait", "type": "integer", "value": 90, "writable": True,
+                 "revision": "r1", "step": 10, "min": 0}
+        second = {"key": "a.limit", "label": "Limit", "type": "integer", "value": 10, "writable": True,
+                  "revision": "r1", "step": 1, "min": 1}
+        context = settings_model.Context()
+        panel = settings_model.opened([self.section(first, second)], context, 0.0)
+        self.assertEqual(("lanefather", "a.wait"), panel.focus)
+        panel = settings_model.begin(panel, context, "60")
+        panel, context, requests = settings_model.commit_typed(panel, context, 1.0, move_next=True)
+        self.assertEqual([], requests)
+        assert panel.edit is not None
+        self.assertEqual((True, True), (panel.edit.waiting, panel.edit.move_next))
+        panel, context, requests = settings_model.check_done(
+            panel, context, "lanefather", "a.wait", "60", "r1", {"ok": True}, 1.2
+        )
+        self.assertFalse(panel.editing)
+        self.assertEqual(("lanefather", "a.limit"), panel.focus, "Tab advances once the check answers ok")
+        self.assertEqual([("set", "a.wait", "60", "r1")],
+                         [(r.kind, r.key, r.value, r.revision) for r in requests])
+
+    def test_unified_write_queue_serializes_set_reset_row_and_reset_section(self) -> None:
+        first = {"key": "a.wait", "label": "Wait", "type": "duration", "value": 90, "writable": True,
+                 "revision": "r1", "step": 30, "min": 0}
+        second = {"key": "a.limit", "label": "Limit", "type": "integer", "value": 10, "writable": True,
+                  "revision": "r1", "step": 1, "min": 1}
+        context = settings_model.Context()
+        panel = settings_model.opened([self.section(first, second)], context, 0.0)
+
+        # 1. `set` in flight -> `reset_row` queues behind it, suppresses due_reads, and rebases revision on ok reply.
+        panel = settings_model.replace(panel, checked={("lanefather", "a.wait", "120", "r1"): {"ok": True}})
+        panel, context, _ = settings_model.step(panel, context, 1, 0.0)
+        panel, context, sent_set = settings_model.commit_pending(panel, context, 0.1)
+        self.assertEqual([("set", "a.wait", "120", "r1")],
+                         [(r.kind, r.key, r.value, r.revision) for r in sent_set])
+        panel, context, _ = settings_model.move_to(panel, context, ("lanefather", "a.limit"), 0.2)
+        panel, context, queued_reset = settings_model.reset_row(panel, context, 0.3)
+        self.assertEqual([], queued_reset, "reset_row waits behind in-flight set")
+        self.assertEqual([settings_model.WriteOp("reset", "lanefather", "a.limit", revision="r1")],
+                         list(panel.queued))
+        _, reads = settings_model.due_reads(panel, 10.0)
+        self.assertEqual([], reads, "due_reads suppressed while set and queued reset are active")
+
+        reply_r2 = self.section(dict(first, value=120, revision="r2"), dict(second, revision="r2")).reply
+        assert reply_r2 is not None
+        panel, after_set = settings_model.write_done(panel, context, sent_set[0], "ok", reply_r2, "", 0.4)
+        reset_reqs = [r for r in after_set if r.kind == "reset"]
+        self.assertEqual([("reset", "a.limit", "r2")],
+                         [(r.kind, r.key, r.revision) for r in reset_reqs],
+                         "queued reset_row sends next with the revision the set reply returned")
+        self.assertEqual((), panel.queued)
+        self.assertEqual(1, len(panel.saving))
+        _, reads_during_reset = settings_model.due_reads(panel, 20.0)
+        self.assertEqual([], reads_during_reset, "due_reads suppressed while reset_row is in flight")
+
+        # 2. While `reset_row` is in flight, queue a `set` and then `reset_section` (`D D`):
+        #    section reset supersedes earlier unsent queued ops for that tool and waits behind `reset_row`.
+        panel = settings_model.replace(panel, checked={("lanefather", "a.limit", "11", "r2"): {"ok": True}})
+        panel, context, _ = settings_model.step(panel, context, 1, 0.5)
+        panel, context, queued_set = settings_model.commit_pending(panel, context, 0.6)
+        self.assertEqual([], queued_set, "set waits behind in-flight reset_row")
+        panel, context, arm_reqs = settings_model.arm_or_reset(panel, context, 0.7)
+        self.assertEqual([], arm_reqs)
+        panel, context, sec_reqs = settings_model.arm_or_reset(panel, context, 0.8)
+        self.assertEqual([], sec_reqs, "reset_section waits behind in-flight reset_row")
+        self.assertEqual((settings_model.WriteOp("reset", "lanefather", None),), panel.queued,
+                         "section reset supersedes unsent per-row queued writes for that tool")
+
+        reply_r3 = self.section(dict(first, value=120, revision="r3"), dict(second, value=5, revision="r3")).reply
+        panel, after_row_reset = settings_model.write_done(panel, context, reset_reqs[0], "ok", reply_r3, "", 0.9)
+        sec_reset_reqs = [r for r in after_row_reset if r.kind == "reset"]
+        self.assertEqual([("reset", None, None)], [(r.kind, r.key, r.revision) for r in sec_reset_reqs])
+
+        # 3. If an in-flight write fails, queued writes for that tool are dropped.
+        panel = settings_model.replace(panel, checked={("lanefather", "a.limit", "6", "r3"): {"ok": True}})
+        panel, context, _ = settings_model.step(panel, context, 1, 1.0)
+        panel, context, _ = settings_model.commit_pending(panel, context, 1.1)
+        self.assertEqual(1, len(panel.queued))
+        panel, _ = settings_model.write_done(panel, context, sec_reset_reqs[0], "failed", None, "disk full", 1.2)
+        self.assertEqual((), panel.saving)
+        self.assertEqual((), panel.queued)
+
+    def test_stepping_back_to_saved_value_while_queued_write_exists_keeps_pending_revert(self) -> None:
+        first = {"key": "a.wait", "label": "Wait", "type": "duration", "value": 90, "writable": True,
+                 "revision": "r1", "step": 30, "min": 0}
+        second = {"key": "a.limit", "label": "Limit", "type": "integer", "value": 10, "writable": True,
+                  "revision": "r1", "step": 1, "min": 1}
+        context = settings_model.Context()
+        panel = settings_model.opened([self.section(first, second)], context, 0.0)
+        panel = settings_model.replace(
+            panel,
+            checked={
+                ("lanefather", "a.wait", "120", "r1"): {"ok": True},
+                ("lanefather", "a.limit", "11", "r1"): {"ok": True},
+            },
+        )
+        # Put a.wait in flight (`saving`) and queue a.limit = 11 (`queued`).
+        panel, context, _ = settings_model.step(panel, context, 1, 0.0)
+        panel, context, sent = settings_model.commit_pending(panel, context, 0.1)
+        panel, context, _ = settings_model.move_to(panel, context, ("lanefather", "a.limit"), 0.2)
+        panel, context, _ = settings_model.step(panel, context, 1, 0.3)
+        panel, context, _ = settings_model.commit_pending(panel, context, 0.4)
+        self.assertEqual(11, settings_model.shown_value(panel, context, settings_model.focused(panel, context)))  # type: ignore[arg-type]
+        # Step a.limit back down to 10 (its saved value in sections, while 11 is still queued!): must keep pending=10.
+        panel, context, _ = settings_model.step(panel, context, -1, 0.5)
+        self.assertIsNotNone(panel.pending)
+        assert panel.pending is not None
+        self.assertEqual(10, panel.pending.value)
+        self.assertEqual(1, len(sent))
+
+    def test_checked_cache_evicts_stale_revisions_on_tool_reply_and_bounds_size(self) -> None:
+        lane_wait = {"key": "a.wait", "label": "Wait", "type": "duration", "value": 90, "writable": True,
+                     "revision": "r1", "step": 30, "min": 0}
+        lane_keep = {"key": "a.keep", "label": "Keep", "type": "integer", "value": 2, "writable": True,
+                     "revision": "rk", "step": 1, "min": 1}
+        junk_row = {"key": "reap.grace", "label": "Grace", "type": "duration", "value": 10, "writable": True,
+                    "revision": "j1", "step": 5, "min": 1}
+        context = settings_model.Context()
+        panel = settings_model.opened(
+            [self.section(lane_wait, lane_keep, tool="lanefather"), self.section(junk_row, tool="junkfather")],
+            context,
+            0.0,
+        )
+        stale_key = ("lanefather", "a.wait", "120", "r1")
+        kept_lane_key = ("lanefather", "a.keep", "3", "rk")
+        other_tool_key = ("junkfather", "reap.grace", "15", "j1")
+        panel = settings_model.replace(
+            panel,
+            checked={stale_key: {"ok": True}, kept_lane_key: {"ok": True}, other_tool_key: {"ok": True}},
+            asked=frozenset({stale_key, kept_lane_key, other_tool_key}),
+        )
+        newer_lane = self.section(dict(lane_wait, value=120, revision="r2"), lane_keep, tool="lanefather").reply
+        assert newer_lane is not None
+        panel = settings_model.take_reply(panel, context, "lanefather", newer_lane, own=True)
+        self.assertNotIn(stale_key, panel.checked)
+        self.assertNotIn(stale_key, panel.asked)
+        self.assertIn(kept_lane_key, panel.checked)
+        self.assertIn(other_tool_key, panel.checked)
+
+        # A late check_done carrying the old revision r1 is ignored instead of re-entering the cache.
+        panel, context, _ = settings_model.check_done(
+            panel, context, "lanefather", "a.wait", "150", "r1", {"ok": True}, 1.0
+        )
+        self.assertNotIn(("lanefather", "a.wait", "150", "r1"), panel.checked)
+
+        # Even within one current revision, checked never exceeds MAX_CHECKED.
+        for n in range(settings_model.MAX_CHECKED + 20):
+            panel, context, _ = settings_model.check_done(
+                panel, context, "lanefather", "a.wait", str(n), "r2", {"ok": True}, 2.0
+            )
+        self.assertLessEqual(len(panel.checked), settings_model.MAX_CHECKED)
 
 
 class CompatibilityTests(unittest.TestCase):

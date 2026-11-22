@@ -1,74 +1,175 @@
-"""Settings (fathers#87) as a value: one section per present tool, read with `<tool> settings --json` and written
-with `settings set` and `settings reset` (SPEC.md, Settings contract), after this dashboard's own section (Refresh
-every, Colour theme). Everything here is pure: the panel is a frozen value, every transition returns the new panel
-and the requests the app carries out (a read, a check, a write, a change of this dashboard's own settings), and
-their answers come back as events (state.py). The keys that drive it are in the mode table (reducer.py).
-
-An arrow change shows `pending` and is saved once the keys have settled for SETTLE_SECONDS, at once on Enter, or
-first when the cursor moves away; a typed value is saved on Enter. Each pending or typed value is checked with
-`settings check`: its error shows in red under the row and blocks the save, its preview shows under the row. A save
-passes the row's revision: a stale one is a conflict, nothing is saved and the row shows the tool's current value. A
-refusal (invalid, read-only, failed) shows once, in red under its row. `d` resets the selected row, `D` twice within
-FLASH_SECONDS resets the selected row's section only."""
+"""Settings (fathers#87, fathers#233) as a pure state machine: one section per present tool, read with
+`<tool> settings --json` and written with `settings set` and `settings reset` (SPEC.md, Settings contract), after this
+dashboard's own section (Refresh every, Colour theme). The panel is a frozen value with explicit `EditState`,
+`Pending`, `ArmedReset`, and per-tool serialized `WriteOp` queues; every transition returns the new panel and the
+requests the app carries out, with no layout, geometry or canvas imports."""
 from __future__ import annotations
 
 import dataclasses
-import math
 from dataclasses import dataclass, field
-from typing import Any, Mapping, NamedTuple, Optional, Sequence, cast
+from typing import Any, Literal, Mapping, NamedTuple, Optional, Sequence, cast
 
-from . import layout as _layout
+from . import settings_schema as _schema
 from . import theme as _theme
-from .text import dashboard_text, span, tilde
+from .settings_schema import (
+    CAPACITY,
+    DEFAULT_INTERVAL,
+    EDITABLE,
+    GODFATHER,
+    LOCAL_DESCRIPTIONS,
+    NAMES,
+    NUMBERS,
+    ORDER,
+    TITLES,
+    CheckKey,
+    Focus,
+    Row,
+    Section,
+    argument,
+    basis_of,
+    choices,
+    number,
+    parse_typed,
+    schema_rows,
+    tool_row,
+    value_text,
+)
 
-GODFATHER = "godfather"
-ORDER = ("godfather", "slotfather", "lanefather", "junkfather")  # the sections, top to bottom
+__all__ = [
+    "CAPACITY",
+    "DEFAULT_INTERVAL",
+    "EDITABLE",
+    "FLASH_SECONDS",
+    "GODFATHER",
+    "LOCAL_DESCRIPTIONS",
+    "MAX_CHECKED",
+    "NAMES",
+    "NUMBERS",
+    "ORDER",
+    "READ_EVERY",
+    "READ_OTHERS",
+    "SETTLE_SECONDS",
+    "TITLES",
+    "ArmedReset",
+    "CheckKey",
+    "Context",
+    "EditState",
+    "Flash",
+    "Focus",
+    "Panel",
+    "Pending",
+    "Refusal",
+    "Request",
+    "Result",
+    "Row",
+    "Section",
+    "WriteOp",
+    "all_rows",
+    "argument",
+    "arm",
+    "arm_or_reset",
+    "basis_of",
+    "begin",
+    "cancel_pending",
+    "check_done",
+    "check_key",
+    "check_reply",
+    "choices",
+    "commit_pending",
+    "commit_typed",
+    "disarm",
+    "due_reads",
+    "edge",
+    "edit_cancel",
+    "edit_key",
+    "enqueue_or_send",
+    "focused",
+    "local",
+    "move",
+    "move_to",
+    "number",
+    "opened",
+    "parse_typed",
+    "read_done",
+    "replace",
+    "reset_row",
+    "reset_section",
+    "row_of",
+    "rows",
+    "save",
+    "saved_value",
+    "say",
+    "schema_rows",
+    "section",
+    "sections_read",
+    "selectable",
+    "send_write",
+    "settle_focus",
+    "shown",
+    "shown_value",
+    "step",
+    "take_reply",
+    "tick",
+    "tool_row",
+    "tools",
+    "update_section",
+    "value_text",
+    "wanted_checks",
+    "write_done",
+]
+
 SETTLE_SECONDS = 1.0  # quiet after an arrow change before it is saved
 FLASH_SECONDS = 4.0  # how long a confirmation shows, and how long a first D stays armed
 READ_EVERY = {"slotfather": 1.0}  # seconds between reads of a tool's settings while Settings is open
 READ_OTHERS = 2.0
-DEFAULT_INTERVAL = 1.0
-EDITABLE = ("choice", "boolean", "integer", "number", "duration", "interval", "theme")  # what Godfather can change
-NUMBERS = ("integer", "number", "duration", "interval")
-CAPACITY = ("capacity.mode", "capacity.slots", "capacity.gib_per_slot")  # Slotfather's, one revision
-STATUS_LABEL = 13  # columns of a status label
-FIELD_LABEL = 28  # columns of a setting's label, its cursor included
-LOCAL_DESCRIPTIONS = {
-    "interval": "Seconds between refreshes, 0.1 to 60 · this dashboard only.",
-    "theme": "Auto, Terminal (palette only) or Built-in colours · this dashboard only.",
-}
-TITLES = {"godfather": "GODFATHER", "slotfather": "SLOTFATHER", "lanefather": "LANEFATHER", "junkfather": "JUNKFATHER"}
-NAMES = {"godfather": "Godfather", "slotfather": "Slotfather", "lanefather": "Lanefather", "junkfather": "Junkfather"}
+MAX_CHECKED = 128  # upper bound on cached `settings check` answers
 
 
-# The value
-
-@dataclass(frozen=True)
-class Section:
-    """One tool's section: its last `settings --json` reply, why it cannot be read now (`problem`, shown as one
-    dimmed row), and its reads. `readable` is False for a tool that has no settings contract this Godfather knows:
-    never read, its problem says why. `generation` goes up with each write, so a read started before one is
-    dropped when it lands."""
-    tool: str
-    reply: Optional[dict[str, Any]] = None
-    problem: Optional[str] = None
-    readable: bool = True
-    read_at: float = -math.inf
-    reading: bool = False
-    generation: int = 0
-
+# Explicit state values
 
 @dataclass(frozen=True)
 class Pending:
-    """A change shown but not saved yet: an arrow change, saved at `at` + SETTLE_SECONDS or at once on Enter; or,
-    once sent (`sent`), a save waiting for the tool's answer. `revision` is the row's as the change began."""
+    """An uncommitted arrow or choice change: saved at `at` + SETTLE_SECONDS, at once on Enter, or first when moving
+    on. `revision` is the row's as the change began; `confirmed` waits for an in-flight `settings check`."""
     tool: str
     key: str
     value: Any
     at: float
     revision: Optional[str] = None
-    sent: bool = False
-    confirmed: bool = False  # to be saved as soon as its check answers ok (Enter, the settle or moving on came first)
+    confirmed: bool = False
+
+
+@dataclass(frozen=True)
+class EditState:
+    """A numeric setting being typed. Dropping `EditState` or editing `buffer` clears `waiting` and `move_next` so an
+    earlier Enter or Tab never auto-commits later edits."""
+    buffer: str
+    replace: bool = True
+    waiting: bool = False  # Enter or Tab pressed while `settings check` has not answered yet
+    move_next: bool = False  # Tab pressed: advance focus once the check answers ok and saves
+
+
+@dataclass(frozen=True)
+class ArmedReset:
+    """After pressing `D` once in `tool`'s section: a second `D` within FLASH_SECONDS resets that section only."""
+    tool: str
+    at: float
+
+
+@dataclass(frozen=True)
+class WriteOp:
+    """One mutating tool CLI operation (`set` or `reset`), either in flight (`saving`) or queued behind an in-flight
+    write of the same tool (`queued`) so `set`, row `reset` and section `reset` serialize per tool."""
+    kind: Literal["set", "reset"]
+    tool: str
+    key: Optional[str]
+    value: Any = None
+    revision: Optional[str] = None
+
+    def to_request(self) -> Request:
+        if self.kind == "set":
+            return Request("set", self.tool, self.key, _schema.argument(self.value), self.revision)
+        return Request("reset", self.tool, self.key, None, self.revision)
 
 
 @dataclass(frozen=True)
@@ -87,31 +188,39 @@ class Refusal:
     text: str
 
 
-Focus = tuple[str, str]  # (tool, key)
-CheckKey = tuple[str, str, str, str]  # (tool, key, the value as given, the row's revision)
-
-
 @dataclass(frozen=True)
 class Panel:
     sections: tuple[Section, ...] = ()
     focus: Focus = ("", "")
-    editing: bool = False
-    buffer: str = ""
-    replace: bool = True
+    edit: Optional[EditState] = None
     pending: Optional[Pending] = None
-    saving: tuple[Pending, ...] = ()  # saves sent, oldest first
-    queued: tuple[Pending, ...] = ()  # saves made while one of the same tool is under way: sent after its answer
+    armed: Optional[ArmedReset] = None
+    saving: tuple[WriteOp, ...] = ()  # writes sent, at most one per tool in flight
+    queued: tuple[WriteOp, ...] = ()  # writes made while one of the same tool is in flight: sent after its answer
     flash: Optional[Flash] = None
     refusal: Optional[Refusal] = None
-    armed: Optional[float] = None  # when D was pressed once
-    armed_tool: str = ""  # the section that D was pressed in: only it is reset
-    typed_waiting: bool = False  # Enter pressed on a typed value whose check has not answered: saved when it does
     loading: bool = False  # the tools' sections are being read: the cursor goes to the first tool's when they come
     offset: int = 0
     reveal: bool = True  # the next placement scrolls the focused row into view
     checked: Mapping[CheckKey, dict[str, Any]] = field(default_factory=lambda: cast(dict[CheckKey, Any], {}))
     asked: frozenset[CheckKey] = frozenset()
     kind: str = "settings"
+
+    def __post_init__(self) -> None:
+        if self.edit is not None and self.pending is not None:
+            raise ValueError("Panel cannot have both edit and pending")
+        if self.edit is not None and self.armed is not None:
+            raise ValueError("Panel cannot have both edit and armed")
+        if self.kind != "settings":
+            raise ValueError(f"invalid Panel kind: {self.kind!r}")
+
+    @property
+    def editing(self) -> bool:
+        return self.edit is not None
+
+    @property
+    def buffer(self) -> str:
+        return self.edit.buffer if self.edit is not None else ""
 
 
 class Context(NamedTuple):
@@ -127,8 +236,8 @@ class Context(NamedTuple):
 
 @dataclass(frozen=True)
 class Request:
-    """What the app carries out for a transition: read · check · set · reset (a tool's settings CLI), local (this
-    dashboard's own settings changed), changed (a tool saved: the model reloads), close, quit."""
+    """What the app carries out for a transition: open · read · check · set · reset (a tool's settings CLI), local
+    (this dashboard's own settings changed), changed (a tool saved: the model reloads), close, quit."""
     kind: str
     tool: str = ""
     key: Optional[str] = None
@@ -142,155 +251,39 @@ class Request:
 Result = tuple[Panel, Context, list[Request]]
 
 
-class Row(NamedTuple):
-    """One setting as shown, from its tool's schema (or this dashboard's own)."""
-    tool: str
-    key: str
-    label: str
-    type: str
-    value: Any
-    writable: bool
-    source: str
-    revision: Optional[str]
-    description: str
-    schema: dict[str, Any]
-
-    @property
-    def focus(self) -> Focus:
-        return self.tool, self.key
-
-    @property
-    def editable(self) -> bool:
-        return self.writable and self.type in EDITABLE
-
-
-class Line(NamedTuple):
-    """One line of the list: kind is title, problem, status, row, note or rule; `focus` the row it selects (rows
-    and their notes), parts are (column, text, style)."""
-    kind: str
-    focus: Optional[Focus]
-    parts: tuple[tuple[int, str, str], ...]
-
-
-# Text
-
-def number(value: Any) -> str:
-    return f"{float(value):g}" if isinstance(value, (int, float)) and not isinstance(value, bool) else str(value)
-
-
-def plural(count: int, word: str) -> str:
-    return f"{count} {word}{'' if count == 1 else 's'}"
-
-
-def argument(value: Any) -> str:
-    """A value as `settings set` takes it: 1800, 0.05, fixed."""
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    if isinstance(value, float) and value.is_integer():
-        return str(int(value))
-    return str(value)
-
-
-def value_text(row: Row, value: Any) -> str:
-    """A value as shown, its unit beside it: 3×, 0.1 cores, 4 GiB, 1h30m, never."""
-    kind = row.type
-    if kind == "theme":
-        return _theme.MODE_LABELS.get(str(value), str(value))
-    if kind == "interval":
-        return span(value, compact=True)
-    if value is None:
-        return "–"
-    if kind == "choice":
-        labels = {str(choice.get("value")): str(choice.get("label") or choice.get("value"))
-                  for choice in choices(row)}
-        return labels.get(str(value), str(value).capitalize())
-    if kind == "boolean":
-        return "On" if value else "Off"
-    if kind in NUMBERS and isinstance(value, (int, float)) and not isinstance(value, bool):
-        if not value and row.schema.get("zero"):
-            return str(row.schema["zero"])
-        if kind == "duration":
-            return span(value, compact=True)
-        unit = str(row.schema.get("unit") or "")
-        if not unit or unit.lower() == row.label.lower():
-            return number(value)
-        return number(value) + ("" if unit == "×" else " ") + unit
-    return tilde(str(value))
-
-
-def choices(row: Row) -> list[dict[str, Any]]:
-    if row.type == "theme":
-        return [{"value": mode, "label": _theme.MODE_LABELS[mode]} for mode in _theme.MODES]
-    found = row.schema.get("choices")
-    return [cast(dict[str, Any], item) for item in cast(list[Any], found) if isinstance(item, dict)] \
-        if isinstance(found, list) else []
-
-
-# The rows
+# Row queries over (Panel, Context)
 
 def section(panel: Panel, tool: str) -> Optional[Section]:
-    return next((found for found in panel.sections if found.tool == tool), None)
-
-
-def local_rows(context: Context) -> list[Row]:
-    return [Row(GODFATHER, "interval", "Refresh every", "interval", context.interval, True, "saved", None,
-                LOCAL_DESCRIPTIONS["interval"], {}),
-            Row(GODFATHER, "theme", "Colour theme", "theme", context.theme, True, "saved", None,
-                LOCAL_DESCRIPTIONS["theme"], {})]
-
-
-def schema_rows(found: Section) -> list[dict[str, Any]]:
-    """Every setting of a reply, in its order: one flat list (owner, 2026-11-11)."""
-    reply = found.reply or {}
-    rows: list[dict[str, Any]] = []
-    for part in cast(list[Any], reply.get("sections") or []):
-        if isinstance(part, dict):
-            items = cast(list[Any], cast(dict[str, Any], part).get("settings") or [])
-            rows.extend(cast(dict[str, Any], item) for item in items
-                        if isinstance(item, dict) and cast(dict[str, Any], item).get("key"))
-    return rows
-
-
-def tool_row(tool: str, item: dict[str, Any], reply: dict[str, Any]) -> Row:
-    writable = item.get("writable", True) is not False and reply.get("writable", True) is not False
-    revision = item.get("revision")
-    return Row(tool, str(item["key"]), str(item.get("label") or item["key"]), str(item.get("type") or "text"),
-               item.get("value"), writable, str(item.get("source") or ""),
-               str(revision) if revision is not None else None, str(item.get("description") or ""), item)
+    return _schema.section(panel.sections, tool)
 
 
 def shown(panel: Panel, tool: str, key: str, saved: Any) -> Any:
-    """A row's value as shown: pending, else being saved, else saved."""
-    for change in (panel.pending, *reversed(panel.queued), *reversed(panel.saving)):
-        if change is not None and (change.tool, change.key) == (tool, key):
-            return change.value
+    """A row's value as shown: pending, else queued/saving `set`, else saved (a newer queued/saving `reset` stops
+    falling back to an older `set`)."""
+    if panel.pending is not None and (panel.pending.tool, panel.pending.key) == (tool, key):
+        return panel.pending.value
+    for op in (*reversed(panel.queued), *reversed(panel.saving)):
+        if op.tool != tool:
+            continue
+        if op.kind == "set" and op.key == key:
+            return op.value
+        if op.kind == "reset" and op.key in (key, None):
+            return saved
     return saved
 
 
 def rows(panel: Panel, context: Context, tool: str) -> list[Row]:
-    """A section's rows as shown now: a row whose `when` names another row's values shows only while that row
-    shows one of them (Slotfather's Slots in Fixed, GiB per slot in the memory modes)."""
-    if tool == GODFATHER:
-        return local_rows(context)
-    found = section(panel, tool)
-    if found is None or found.reply is None:
-        return []
-    items = schema_rows(found)
-    values = {str(item["key"]): shown(panel, tool, str(item["key"]), item.get("value")) for item in items}
-    shown_rows: list[Row] = []
-    for item in items:
-        when = item.get("when")
-        if isinstance(when, dict) and not all(values.get(str(key)) in (allowed if isinstance(allowed, list) else [])
-                                              for key, allowed in cast(dict[str, Any], when).items()):
-            continue
-        shown_rows.append(tool_row(tool, item, found.reply))
-    return shown_rows
+    return _schema.visible_rows(
+        panel.sections,
+        context.interval,
+        context.theme,
+        tool,
+        shown_override=lambda row_tool, row_key, value: shown(panel, row_tool, row_key, value),
+    )
 
 
 def tools(panel: Panel) -> list[str]:
-    """The sections drawn, in ORDER: this dashboard's, then each present tool's."""
-    present = {found.tool for found in panel.sections}
-    return [tool for tool in ORDER if tool == GODFATHER or tool in present]
+    return _schema.tools(panel.sections)
 
 
 def all_rows(panel: Panel, context: Context) -> list[Row]:
@@ -312,18 +305,12 @@ def focused(panel: Panel, context: Context) -> Optional[Row]:
 
 
 def saved_value(panel: Panel, context: Context, tool: str, key: str) -> Any:
-    if tool == GODFATHER:
-        return context.interval if key == "interval" else context.theme
-    found = section(panel, tool)
-    item = next((item for item in schema_rows(found) if item["key"] == key), None) if found else None
-    return item.get("value") if item else None
+    return _schema.saved_value(panel.sections, context.interval, context.theme, tool, key)
 
 
 def shown_value(panel: Panel, context: Context, row: Row) -> Any:
     return shown(panel, row.tool, row.key, saved_value(panel, context, row.tool, row.key))
 
-
-# Checks and what a value would do
 
 def check_key(row: Row, text: str) -> CheckKey:
     return row.tool, row.key, text, row.revision or ""
@@ -333,233 +320,7 @@ def check_reply(panel: Panel, row: Row, text: str) -> Optional[dict[str, Any]]:
     return panel.checked.get(check_key(row, text))
 
 
-def answer_note(row: Row, reply: Optional[dict[str, Any]], context: Context, typed: bool) -> tuple[str, str]:
-    """Under a pending or typed row: why the tool refuses the value, or what it would do; "" for nothing to say."""
-    if reply is None:
-        return "checking…", "dim"
-    if not reply.get("ok"):
-        return "✗ " + str(reply.get("error") or "Not accepted."), "bad"
-    if reply.get("preview"):  # what the tool says the value would do: the tools own their rules
-        return str(reply["preview"]), "dim"
-    return ("Enter saves", "dim") if typed else ("", "dim")
-
-
-def parse_typed(row: Row, text: str) -> tuple[Any, str]:
-    """(value, "") for typed text this dashboard can read for `row`, else (None, why not)."""
-    try:
-        value = float(text)
-    except ValueError:
-        return None, "Enter a number."
-    if not math.isfinite(value):
-        return None, "Enter a number."
-    if row.type == "interval":
-        return (value, "") if 0.1 <= value <= 60 else (None, "Enter seconds from 0.1 to 60.")
-    if row.type == "integer":
-        return (int(value), "") if value.is_integer() else (None, "Enter a whole number.")
-    return value, ""
-
-
-def typed_note(panel: Panel, context: Context, row: Row) -> tuple[str, str]:
-    if not panel.buffer:
-        return "", "dim"
-    if row.tool == GODFATHER:
-        _, problem = parse_typed(row, panel.buffer)
-        return ("✗ " + problem, "bad") if problem else ("Enter saves", "dim")
-    return answer_note(row, check_reply(panel, row, panel.buffer), context, True)
-
-
-def pending_note(panel: Panel, context: Context, row: Row) -> tuple[str, str]:
-    change = panel.pending
-    if change is None or (change.tool, change.key) != row.focus or row.tool == GODFATHER:
-        return "", "dim"
-    return answer_note(row, check_reply(panel, row, argument(change.value)), context, False)
-
-
-# The lines of the list
-
-def status_lines(panel: Panel, context: Context, found: Section) -> list[Line]:
-    def line(label: str, text: str, style: str = "text") -> Line:
-        return Line("status", None, ((2, label, "dim"), (2 + STATUS_LABEL, text, style)))
-
-    reply = found.reply or {}
-    items = [cast(dict[str, Any], item) for item in cast(list[Any], reply.get("status") or [])
-             if isinstance(item, dict)]
-    if found.tool != "slotfather":
-        return [line(str(item.get("label") or ""), tilde(str(item.get("value") or "")),
-                     str(item.get("style") or "text")) for item in items]
-    # Slotfather's, as the panel showed it (#7): the capacity its queue read under its lock, from the model drawn
-    model = context.model
-    where = next((item.get("value") for item in items if item.get("label") == "queue"), None)
-    mine = cast(dict[str, Any], reply.get("basis") or {})
-    lines = [line("queue", tilde(str(where or mine.get("directory") or "?")))]
-    if model:
-        lines.append(line("slots", f"{model['slots']} total · {model.get('free', 0)} free · "
-                                   f"{model.get('used', 0)} held · {len(model.get('waiters', []))} waiting"))
-    else:
-        lines.append(line("slots", "queue unavailable", "dim"))
-    basis = cast(dict[str, Any], (model or {}).get("basis") or mine)
-    if basis.get("mode") in ("fixed", "memory", "lower", "automatic") and "slots" in basis:
-        per = number(basis.get("gib_per_slot") or 0)
-        how = {"fixed": "saved, fixed count", "memory": f"saved, one per {per} GiB of memory",
-               "lower": f"saved, lower of CPU and one per {per} GiB",
-               "automatic": "automatic, lower of the two budgets"}[str(basis["mode"])]
-        lines.append(line("capacity", f"{basis['slots']} slots · {how}"))
-        slots = basis.get("memory_slots") if basis.get("memory_slots") is not None else mine.get("memory_slots")
-        memory = basis.get("memory_gib") if basis.get("memory_gib") is not None else mine.get("memory_gib")
-        lines.append(line("budgets", f"CPU {basis.get('cpu_slots')} ({basis.get('cores')} cores) · memory "
-                                     + (f"{slots}" if slots is not None else "unknown")
-                                     + (f" ({number(memory)} GiB)" if memory is not None else "")))
-    drain = max(0, int(model.get("used", 0)) - int(model["slots"])) if model else 0
-    lines.append(line("draining", f"{drain} slots · nothing starts until at most {model['slots']} are held"
-                      if drain and model else "none", "warn" if drain else "dim"))
-    environment = next((item for item in items if item.get("label") == "environment"), None)
-    if environment and environment.get("value"):
-        lines.append(line("environment", str(environment["value"]), "dim"))
-    compatibility = next((item.get("value") for item in items if item.get("label") == "compatibility"), None)
-    if isinstance(compatibility, str) and compatibility:
-        lines.append(line("clients", dashboard_text(compatibility), "warn"))
-    if context.problem:  # the Slotfather snapshot is stale: why, from the source
-        lines.append(line("slotfather", context.problem, "bad"))
-    return lines
-
-
-def row_lines(panel: Panel, context: Context, row: Row, value_column: int) -> list[Line]:
-    """The row; while it is typed or pending, or refused, a second line says what the value would do, or why not."""
-    selected = row.focus == panel.focus and row.editable
-    label, room = row.label, value_column - 3
-    label = label if len(label) <= room else label[:max(0, room - 1)] + "…"
-    parts: list[tuple[int, str, str]] = [(0, "▶" if selected else " ", "cursor"), (2, label, "text")]
-    notes: list[tuple[str, str]] = []
-    if selected and panel.editing:
-        parts.append((value_column, "[" + panel.buffer + "▏]", "cursor"))
-        notes.append(typed_note(panel, context, row))
-    else:
-        value = shown_value(panel, context, row)
-        pending = panel.pending is not None and (panel.pending.tool, panel.pending.key) == row.focus
-        saving = any((change.tool, change.key) == row.focus for change in panel.saving) and not pending
-        text = value_text(row, value)
-        if selected and row.type in ("choice", "theme", "boolean"):
-            text = f"‹ {text} ›"
-        parts.append((value_column, text, "cursor" if pending or saving else "accent" if row.editable else "dim"))
-        after = value_column + len(text) + 2
-        if pending or saving:
-            parts.append((after, "pending" if pending else "saving…", "dim"))
-            notes.append(pending_note(panel, context, row))
-        elif not row.editable:
-            why = row.source if row.source and row.source not in ("saved", "default") else "read-only"
-            if row.writable and row.type not in EDITABLE:
-                why = "read-only here: needs a newer godfather"
-            parts.append((after, why, "dim"))
-        elif "effective" in row.schema and row.schema["effective"] != row.value:
-            parts.append((after, f"effective here: {value_text(row, row.schema['effective'])}", "dim"))
-    warning = row.schema.get("warning")
-    if selected and isinstance(warning, str) and warning:
-        notes.append((dashboard_text(warning), "warn"))
-    refusal = panel.refusal
-    if refusal is not None and (refusal.tool, refusal.key) == row.focus or refusal is not None and selected \
-            and refusal.tool == row.tool and row_of(panel, context, (refusal.tool, refusal.key)) is None:
-        notes.append(("✗ " + refusal.text, "bad"))  # under its row, or the one that took its place
-    found = [Line("row", row.focus if row.editable else None, tuple(parts))]
-    found += [Line("note", row.focus if row.editable else None, ((4, text, style),)) for text, style in notes if text]
-    return found
-
-
-def section_title(panel: Panel, tool: str) -> Line:
-    title = TITLES.get(tool, tool.upper())
-    found = section(panel, tool)
-    if tool == GODFATHER:
-        note = "· this dashboard only"
-    elif found is not None and found.reply is not None and found.reply.get("writable") is False:
-        note = "· read-only here"
-    elif found is not None and found.reply is not None and found.reply.get("status"):
-        note = "· status read-only, live"
-    else:
-        note = ""
-    return Line("title", None, ((0, title, "title"), (len(title) + 1, note, "dim")))
-
-
-def lines(panel: Panel, context: Context, inner: int = 0) -> list[Line]:
-    """Every line of the list, top to bottom: each section's title, its STATUS rows, then its settings; a rule
-    between sections."""
-    value_column = min(FIELD_LABEL, max(12, inner // 2)) if inner else FIELD_LABEL
-    found: list[Line] = []
-    for tool in tools(panel):
-        if found:
-            found.append(Line("rule", None, ()))
-        found.append(section_title(panel, tool))
-        current = section(panel, tool)
-        if current is not None:
-            if current.reply is not None:
-                reason = current.reply.get("reason")
-                if current.reply.get("writable") is False and reason:
-                    found.append(Line("problem", None, ((2, str(reason), "dim"),)))
-                found.extend(status_lines(panel, context, current))
-            if current.problem:
-                found.append(Line("problem", None, ((2, current.problem, "dim" if current.reply is None
-                                                     else "bad"),)))
-            elif current.reply is None:
-                found.append(Line("problem", None, ((2, "reading…", "dim"),)))
-        for row in rows(panel, context, tool):
-            found.extend(row_lines(panel, context, row, value_column))
-    if panel.loading:
-        found += [Line("rule", None, ()), Line("problem", None, ((0, "Reading the tools' settings…", "dim"),))]
-    return found
-
-
-# Where it is on the screen: the reducer and the drawing share this
-
-class Geometry(NamedTuple):
-    rect: _layout.Rect
-    inside: _layout.SettingsBox
-    lines: list[Line]
-    offset: int  # the first line shown
-
-    @property
-    def visible(self) -> int:
-        return self.inside.rows.height
-
-    def hits(self) -> list[tuple[Focus, int]]:
-        """(row it selects, screen row) for each selectable line shown."""
-        shown_lines = self.lines[self.offset:self.offset + self.visible]
-        return [(line.focus, self.inside.rows.y + n) for n, line in enumerate(shown_lines)
-                if line.focus is not None]
-
-
-def geometry(panel: Panel, context: Context) -> Geometry:
-    inner = _layout.overlay_text(context.width, _layout.SETTINGS_WIDTH, _layout.SETTINGS_INSET)
-    found = lines(panel, context, inner)
-    rect = _layout.centred(context.width, context.height, _layout.SETTINGS_WIDTH, len(found), _layout.SETTINGS_CHROME)
-    inside = _layout.settings(rect)
-    return Geometry(rect, inside, found, scrolled(panel, found, inside.rows.height))
-
-
-def scrolled(panel: Panel, found: Sequence[Line], visible: int) -> int:
-    """The first line shown: the panel's offset, moved to show the focused row when `reveal`, kept in range."""
-    offset = panel.offset
-    if panel.reveal:
-        at = [n for n, line in enumerate(found) if line.focus == panel.focus]
-        if at:
-            offset = min(offset, at[0])
-            offset = max(offset, at[-1] - visible + 1)
-    return _layout.clamp_scroll(offset, len(found), visible)
-
-
-def place(panel: Panel, context: Context) -> Panel:
-    """The offset the screen shows, kept: a reveal is done once."""
-    if not context.width or not context.height:
-        return panel
-    offset = geometry(panel, context).offset
-    if offset == panel.offset and not panel.reveal:
-        return panel
-    return dataclasses.replace(panel, offset=offset, reveal=False)
-
-
-def small(panel: Panel, context: Context) -> bool:
-    """Too small to show anything but a note to enlarge the terminal: only the ways out work."""
-    return context.width > 0 and geometry(panel, context).inside.small
-
-
-# Transitions
+# Transitions (single owner of Panel state)
 
 def replace(panel: Panel, **changes: Any) -> Panel:
     return dataclasses.replace(panel, **changes)
@@ -567,6 +328,14 @@ def replace(panel: Panel, **changes: Any) -> Panel:
 
 def say(panel: Panel, text: str, style: str, now: float) -> Panel:
     return replace(panel, flash=Flash(text, style, now))
+
+
+def disarm(panel: Panel) -> Panel:
+    """Withdraws an armed `D` section-reset prompt and its warning flash."""
+    if panel.armed is None:
+        return panel
+    flash = None if panel.flash is not None and panel.flash.style == "warn" else panel.flash
+    return replace(panel, armed=None, flash=flash)
 
 
 def update_section(panel: Panel, tool: str, **changes: Any) -> Panel:
@@ -587,10 +356,10 @@ def opened(sections: Sequence[Section], context: Context, now: float, loading: b
 
 
 def sections_read(panel: Panel, context: Context, sections: Sequence[Section], now: float) -> Panel:
-    """The tools' sections, read off the screen's thread after Settings opened: the cursor goes to the first tool's
-    first row unless it was moved meanwhile."""
+    """The tools' sections, read after Settings opened: the cursor goes to the first tool's first row unless it was
+    moved meanwhile."""
     found = opened(sections, context, now)
-    untouched = panel.focus == (GODFATHER, "interval") and panel.pending is None and not panel.editing
+    untouched = panel.focus == (GODFATHER, "interval") and panel.pending is None and panel.edit is None
     return replace(panel, sections=found.sections, loading=False, focus=found.focus if untouched else panel.focus,
                    reveal=True)
 
@@ -613,20 +382,20 @@ def settle_focus(panel: Panel, context: Context) -> Panel:
     twin = next((row for row in same if when and set(cast(dict[str, Any], row.schema.get("when") or {})) == when),
                 None)
     target = twin or (same[0] if same else available[0])
-    return replace(panel, focus=target.focus, editing=False, reveal=True)
+    return replace(panel, focus=target.focus, edit=None, reveal=True)
 
 
 def wanted_checks(panel: Panel, context: Context) -> tuple[Panel, list[Request]]:
     """`settings check` for the pending and the typed value, once each while the row's revision lasts."""
     wanted: list[tuple[Row, str]] = []
     row = focused(panel, context)
-    if panel.editing and row is not None and row.tool != GODFATHER and panel.buffer:
-        wanted.append((row, panel.buffer))
+    if panel.edit is not None and row is not None and row.tool != GODFATHER and panel.edit.buffer:
+        wanted.append((row, panel.edit.buffer))
     change = panel.pending
     if change is not None and change.tool != GODFATHER:
         found = row_of(panel, context, (change.tool, change.key))
         if found is not None:
-            wanted.append((found, argument(change.value)))
+            wanted.append((found, _schema.argument(change.value)))
     requests: list[Request] = []
     asked = set(panel.asked)
     for found, text in wanted:
@@ -648,9 +417,28 @@ def local(context: Context, key: str, value: Any) -> tuple[Context, list[Request
     return context, [Request("local", interval=context.interval, theme=context.theme)]
 
 
+def send_write(panel: Panel, context: Context, op: WriteOp) -> Result:
+    found = section(panel, op.tool)
+    panel = update_section(panel, op.tool, generation=(found.generation if found else 0) + 1, reading=False)
+    panel = replace(panel, saving=(*panel.saving, op))
+    return panel, context, [op.to_request()]
+
+
+def enqueue_or_send(panel: Panel, context: Context, op: WriteOp) -> Result:
+    """Serializes all writes (`set`, row `reset`, section `reset`) per tool so concurrent writes never race."""
+    if any(sent.tool == op.tool for sent in panel.saving):
+        prior = (
+            tuple(item for item in panel.queued if item.tool != op.tool)
+            if op.kind == "reset" and op.key is None
+            else panel.queued
+        )
+        return replace(panel, queued=(*prior, op)), context, []
+    return send_write(panel, context, op)
+
+
 def save(panel: Panel, context: Context, change: Pending, now: float) -> Result:
     """Saves one change: this dashboard's own at once; a tool's through `settings set`, with the row's revision as
-    the change began, its answer later (answered())."""
+    the change began, serialized per tool."""
     panel = replace(panel, pending=None, refusal=None if panel.refusal and (panel.refusal.tool, panel.refusal.key)
                     == (change.tool, change.key) else panel.refusal)
     if change.tool == GODFATHER:
@@ -659,18 +447,7 @@ def save(panel: Panel, context: Context, change: Pending, now: float) -> Result:
         text = value_text(row, change.value) if row else str(change.value)
         label = row.label if row else change.key
         return say(panel, f"{label} {text} · this dashboard only", "ok", now), context, requests
-    if any(sent.tool == change.tool for sent in panel.saving):
-        # The tool saves its settings under one revision: this change waits for the answer to the one under way
-        # and goes with the revision that answer gives, so the user's own two changes never conflict.
-        return replace(panel, queued=(*panel.queued, change)), context, []
-    return send(panel, context, change)
-
-
-def send(panel: Panel, context: Context, change: Pending) -> Result:
-    found = section(panel, change.tool)
-    panel = update_section(panel, change.tool, generation=(found.generation if found else 0) + 1, reading=False)
-    panel = replace(panel, saving=(*panel.saving, dataclasses.replace(change, sent=True)))
-    return panel, context, [Request("set", change.tool, change.key, argument(change.value), change.revision)]
+    return enqueue_or_send(panel, context, WriteOp("set", change.tool, change.key, change.value, change.revision))
 
 
 def commit_pending(panel: Panel, context: Context, now: float, leaving: bool = False) -> Result:
@@ -684,7 +461,7 @@ def commit_pending(panel: Panel, context: Context, now: float, leaving: bool = F
     row = row_of(panel, context, (change.tool, change.key))
     if row is None:
         return replace(panel, pending=None), context, []
-    reply = check_reply(panel, row, argument(change.value))
+    reply = check_reply(panel, row, _schema.argument(change.value))
     if reply is None:
         return replace(panel, pending=dataclasses.replace(change, confirmed=True)), context, []
     if not reply.get("ok"):
@@ -697,41 +474,19 @@ def commit_pending(panel: Panel, context: Context, now: float, leaving: bool = F
 
 def step(panel: Panel, context: Context, direction: int, now: float) -> Result:
     """Shows the next value of the focused row; a tick or Enter saves it."""
+    panel = disarm(panel)
     row = focused(panel, context)
     if row is None:
         return panel, context, []
     current = shown_value(panel, context, row)
-    value: Any
-    if row.type in ("choice", "theme"):
-        values = [item.get("value") for item in choices(row)]
-        if not values:
-            return panel, context, []
-        value = values[(values.index(current) + direction) % len(values)] if current in values else values[0]
-    elif row.type == "boolean":
-        value = not current
-    elif row.type == "interval":  # 0.1, 1, 2, 3 ... 60
-        value = (1.0 if current < 1 else min(60.0, math.floor(current) + 1.0)) if direction > 0 else \
-            (max(1.0, math.ceil(current) - 1.0) if current > 1 else 0.1)
-    elif isinstance(current, (int, float)) and not isinstance(current, bool):
-        size = row.schema.get("step") or 1
-        least, most = row.schema.get("min"), row.schema.get("max")
-        value = round(float(current) + direction * float(size), 3)
-        if isinstance(least, (int, float)):
-            floor = float(least) + (float(size) if row.schema.get("min_exclusive") else 0.0)
-            value = max(floor, value)
-        if isinstance(most, (int, float)):
-            value = min(float(most), value)
-        if row.type == "integer":
-            value = int(value)
-    else:
+    value, changed = _schema.step_value(row, current, direction)
+    if not changed:
         return panel, context, []
-    if value == current:
-        return panel, context, []
-    if value == saved_value(panel, context, row.tool, row.key) and not any(
-            (change.tool, change.key) == row.focus for change in panel.saving):
-        panel = say(replace(panel, pending=None), f"{row.label} back to its saved value", "dim", now)
+    in_flight = any(op.tool == row.tool and op.key in (row.key, None) for op in (*panel.saving, *panel.queued))
+    if value == saved_value(panel, context, row.tool, row.key) and not in_flight:
+        panel = say(replace(panel, edit=None, pending=None), f"{row.label} back to its saved value", "dim", now)
     else:
-        panel = replace(panel, pending=Pending(row.tool, row.key, value, now, row.revision),
+        panel = replace(panel, edit=None, pending=Pending(row.tool, row.key, value, now, row.revision),
                         refusal=None if panel.refusal and (panel.refusal.tool, panel.refusal.key) == row.focus
                         else panel.refusal)
         panel = say(panel, f"{row.label} {value_text(row, value)} · saves in {number(SETTLE_SECONDS)} s · "
@@ -749,13 +504,13 @@ def move_to(panel: Panel, context: Context, target: Optional[Focus], now: float,
     """The cursor to `target`; a pending change is saved first, an edit cancelled (and said, for a click)."""
     if panel.flash and panel.flash.style == "bad":
         panel = replace(panel, flash=None)  # an earlier refusal belongs to the row it was about
-    panel = replace(panel, armed=None, armed_tool="")  # a reset question belongs to the row it was asked on
+    panel = disarm(panel)  # a reset question belongs to the row it was asked on
     panel, context, requests = commit_pending(panel, context, now, leaving=True)
-    if cancel_edit and panel.editing:
+    if cancel_edit and panel.edit is not None:
         panel = say(panel, "Edit cancelled · nothing was saved", "dim", now)
     if target is not None:
         panel = replace(panel, focus=target)
-    return settle_focus(replace(panel, editing=False, reveal=True), context), context, requests
+    return settle_focus(replace(panel, edit=None, reveal=True), context), context, requests
 
 
 def move(panel: Panel, context: Context, count: int, now: float) -> Result:
@@ -777,127 +532,161 @@ def begin(panel: Panel, context: Context, text: str = "") -> Panel:
         return panel
     saved = saved_value(panel, context, row.tool, row.key)
     refusal = None if panel.refusal and (panel.refusal.tool, panel.refusal.key) == row.focus else panel.refusal
-    return replace(panel, pending=None, editing=True, replace=not text, flash=None, refusal=refusal, typed_waiting=False,
-                   buffer=text or (number(saved) if saved is not None else ""))
+    buffer = text or (number(saved) if saved is not None else "")
+    return replace(panel, edit=EditState(buffer, replace=not text), pending=None, armed=None, flash=None,
+                   refusal=refusal)
 
 
-def commit_typed(panel: Panel, context: Context, now: float) -> tuple[Panel, Context, list[Request], bool]:
-    """Saves the typed value; one refused stays in the field, unsaved, with why under the row. The flag: saved."""
+def edit_key(panel: Panel, key: str) -> Panel:
+    """Updates the active `EditState` buffer and resets `waiting` and `move_next` whenever the text changes."""
+    edit = panel.edit
+    if edit is None:
+        return panel
+    if key in ("\x7f", "\b"):
+        text = "" if edit.replace else edit.buffer[:-1]
+    elif key == "\x15":  # Ctrl-U clears the field
+        text = ""
+    elif len(edit.buffer) < 16 or edit.replace:
+        text = key if edit.replace else edit.buffer + key
+    else:
+        return panel
+    return replace(panel, edit=EditState(text, replace=False))
+
+
+def edit_cancel(panel: Panel, now: float) -> Panel:
+    if panel.edit is None:
+        return panel
+    return say(replace(panel, edit=None), "Edit cancelled · nothing was saved", "dim", now)
+
+
+def commit_typed(panel: Panel, context: Context, now: float, move_next: bool = False) -> Result:
+    """Saves the typed value; one refused stays in the field, unsaved, with why under the row. When `move_next` is
+    True (Tab), focus advances once the value saves (immediately or when its `settings check` answers)."""
+    edit = panel.edit
+    if edit is None:
+        return panel, context, []
     row = focused(panel, context)
     if row is None:
-        return replace(panel, editing=False), context, [], False
-    value, problem = parse_typed(row, panel.buffer)
+        return replace(panel, edit=None), context, []
+    value, problem = parse_typed(row, edit.buffer)
     if problem:
-        return panel, context, [], False
+        return replace(panel, edit=dataclasses.replace(edit, waiting=False, move_next=False)), context, []
     if row.tool != GODFATHER:
-        reply = check_reply(panel, row, panel.buffer)
+        reply = check_reply(panel, row, edit.buffer)
         if reply is None:  # its check has not answered: saved when it says yes
-            return replace(panel, typed_waiting=True), context, [], False
+            return replace(panel, edit=dataclasses.replace(edit, waiting=True, move_next=move_next)), context, []
         if not reply.get("ok"):
-            return replace(panel, typed_waiting=False), context, [], False
-    panel = replace(panel, editing=False, typed_waiting=False)
+            return replace(panel, edit=dataclasses.replace(edit, waiting=False, move_next=False)), context, []
+    panel = replace(panel, edit=None)
     if row.tool != GODFATHER:  # what the tool gets is what was typed: 30 stays 30, not 30.0
-        value = int(value) if isinstance(value, float) and value.is_integer() and "." not in panel.buffer else value
+        value = int(value) if isinstance(value, float) and value.is_integer() and "." not in edit.buffer else value
     panel, context, requests = save(panel, context, Pending(row.tool, row.key, value, now, row.revision), now)
-    return panel, context, requests, True
+    if move_next:
+        panel, context, more = move(panel, context, 1, now)
+        requests = requests + more
+    return panel, context, requests
 
 
 def reset_row(panel: Panel, context: Context, now: float) -> Result:
     row = focused(panel, context)
-    panel = replace(panel, pending=None)
+    panel = replace(disarm(panel), edit=None, pending=None)
     if row is None:
         return panel, context, []
     if row.tool == GODFATHER:
-        default = DEFAULT_INTERVAL if row.key == "interval" else _theme.DEFAULT_MODE
+        default: Any = DEFAULT_INTERVAL if row.key == "interval" else _theme.DEFAULT_MODE
         return save(panel, context, Pending(row.tool, row.key, default, now), now)
-    found = section(panel, row.tool)
-    panel = update_section(panel, row.tool, generation=(found.generation if found else 0) + 1, reading=False)
     panel = replace(panel, refusal=None)
-    return panel, context, [Request("reset", row.tool, row.key, None, row.revision)]
+    return enqueue_or_send(panel, context, WriteOp("reset", row.tool, row.key, revision=row.revision))
 
 
 def reset_section(panel: Panel, context: Context, now: float) -> Result:
     """`D` twice: the selected row's section, every setting at its default."""
     tool = panel.focus[0]
-    panel = replace(panel, pending=None, armed=None, armed_tool="", refusal=None)
+    panel = replace(panel, edit=None, pending=None, armed=None, refusal=None)
     if tool == GODFATHER:
         context = context._replace(interval=DEFAULT_INTERVAL, theme=_theme.DEFAULT_MODE)
         panel = say(panel, "Saved · this dashboard's settings at their defaults", "ok", now)
         return panel, context, [Request("local", interval=context.interval, theme=context.theme)]
     found = section(panel, tool)
-    panel = update_section(panel, tool, generation=(found.generation if found else 0) + 1, reading=False)
-    return panel, context, [Request("reset", tool, None)]
+    if found is None or not found.readable or (found.reply is not None and found.reply.get("writable") is False):
+        return panel, context, []
+    return enqueue_or_send(panel, context, WriteOp("reset", tool, None))
 
 
 def arm(panel: Panel, now: float) -> Panel:
     tool = panel.focus[0]
     scope = "this dashboard's settings" if tool == GODFATHER else f"every {NAMES.get(tool, tool)} setting"
-    return say(replace(panel, pending=None, armed=now, armed_tool=tool), f"Press D again to reset {scope} to its default"
-               if tool != GODFATHER else f"Press D again to reset {scope} to their defaults", "warn", now)
+    prompt = (
+        f"Press D again to reset {scope} to its default"
+        if tool != GODFATHER
+        else f"Press D again to reset {scope} to their defaults"
+    )
+    return say(replace(panel, edit=None, pending=None, armed=ArmedReset(tool, now)), prompt, "warn", now)
 
 
-def scroll(panel: Panel, context: Context, rows_by: int) -> Panel:
-    view = geometry(panel, context)
-    return replace(panel, offset=_layout.clamp_scroll(view.offset + rows_by, len(view.lines), view.visible),
-                   reveal=False)
-
-
-def page(panel: Panel, context: Context, direction: int) -> Panel:
-    return scroll(panel, context, direction * max(1, geometry(panel, context).visible - 1))
+def arm_or_reset(panel: Panel, context: Context, now: float) -> Result:
+    """`D`: once, it asks; again within FLASH_SECONDS in the same section, that section is reset."""
+    armed = panel.armed
+    if armed is not None and armed.tool == panel.focus[0] and now - armed.at < FLASH_SECONDS:
+        return reset_section(panel, context, now)
+    return arm(panel, now), context, []
 
 
 # Answers from the tools
 
-def basis_of(reply: Optional[dict[str, Any]]) -> dict[str, Any]:
-    return cast(dict[str, Any], (reply or {}).get("basis") or {})
-
-
-def saved_text(row: Optional[Row], panel: Panel, context: Context, key: str) -> str:
-    if row is None:
-        return f"Saved · {key}"
-    if row.tool == "slotfather" and row.key in CAPACITY:
-        found = section(panel, "slotfather")
-        basis = basis_of(found.reply if found else None)
-        return f"Saved · capacity {basis.get('slots', '?')} slots"
-    return f"Saved · {row.label} {value_text(row, saved_value(panel, context, row.tool, row.key))}"
-
-
-def conflict_text(panel: Panel, context: Context, tool: str, key: str, ending: str) -> str:
-    if tool == "slotfather" and key in CAPACITY:
-        found = section(panel, tool)
-        basis = basis_of(found.reply if found else None)
-        return f"Capacity changed elsewhere: now {basis.get('slots', '?')} slots · {ending}"
-    row = row_of(panel, context, (tool, key))
-    now_text = value_text(row, saved_value(panel, context, tool, key)) if row else "?"
-    return f"Changed by another client: now {now_text} · {ending}"
-
-
-def revision_now(panel: Panel, tool: str, key: str) -> Optional[str]:
-    found = section(panel, tool)
-    item = next((item for item in schema_rows(found) if item["key"] == key), None) if found else None
-    revision = item.get("revision") if item else None
-    return str(revision) if revision is not None else None
-
-
 def take_reply(panel: Panel, context: Context, tool: str, reply: dict[str, Any], own: bool = False) -> Panel:
-    """A tool's current settings, from a read or from what set and reset print: a pending change chosen under an
-    older revision of its row is a conflict, dropped and said under the row; but not after this panel's own save
-    (`own`): the changes made meanwhile move to the revision it gave."""
+    """A tool's current settings, from a read or from what set and reset print: stale cached checks are evicted, a
+    pending change chosen under an older revision of its row is a conflict (dropped and said under the row), while
+    changes made on top of this panel's own save (`own`) rebase to the revision it gave."""
     panel = update_section(panel, tool, reply=reply, problem=None)
+    revisions = _schema.revisions_of(reply)
+
+    def fresh_check(ident: CheckKey) -> bool:
+        if ident[0] != tool:
+            return True
+        if own and ident[3] == "":
+            return False
+        return revisions.get(ident[1]) == ident[3]
+
+    checked = {ident: answer for ident, answer in panel.checked.items() if fresh_check(ident)}
+    asked = frozenset(ident for ident in panel.asked if fresh_check(ident))
+    if len(checked) != len(panel.checked) or asked != panel.asked:
+        panel = replace(panel, checked=checked, asked=asked)
+
     if own:
-        def rebased(change: Pending) -> Pending:
-            return dataclasses.replace(change, revision=revision_now(panel, change.tool, change.key)) \
+        def rebased_pending(change: Pending) -> Pending:
+            return dataclasses.replace(change, revision=_schema.revision_of(panel.sections, change.tool, change.key)) \
                 if change.tool == tool else change
-        panel = replace(panel, pending=rebased(panel.pending) if panel.pending else None,
-                        queued=tuple(rebased(change) for change in panel.queued))
+
+        def rebased_op(op: WriteOp) -> WriteOp:
+            if op.tool != tool or op.key is None or op.key not in revisions:
+                return op
+            return dataclasses.replace(op, revision=_schema.revision_of(panel.sections, op.tool, op.key))
+
+        panel = replace(
+            panel,
+            pending=rebased_pending(panel.pending) if panel.pending is not None else None,
+            queued=tuple(rebased_op(op) for op in panel.queued),
+        )
     change = panel.pending
     found = section(panel, tool)
     if change is not None and change.tool == tool and found is not None:
         item = next((item for item in schema_rows(found) if item["key"] == change.key), None)
         revision = item.get("revision") if item else None
         if item is None or (str(revision) if revision is not None else None) != change.revision:
-            panel = replace(panel, pending=None, refusal=Refusal(tool, change.key, conflict_text(
-                panel, context, tool, change.key, "your change was not saved")))
+            row = row_of(panel, context, (tool, change.key))
+            panel = replace(
+                panel,
+                pending=None,
+                refusal=Refusal(
+                    tool,
+                    change.key,
+                    _schema.conflict_text(
+                        row, panel.sections, context.interval, context.theme, tool, change.key,
+                        "your change was not saved",
+                    ),
+                ),
+            )
     refusal = panel.refusal
     if refusal is not None and refusal.tool == tool:  # a row now read-only shows why itself
         row = row_of(panel, context, (refusal.tool, refusal.key))
@@ -921,43 +710,60 @@ def read_done(panel: Panel, context: Context, tool: str, generation: int, reply:
 
 def check_done(panel: Panel, context: Context, tool: str, key: str, text: str, revision: Optional[str],
                reply: dict[str, Any], now: float) -> Result:
-    """A check answered; a change waiting on it (Enter, the settle or moving on came first) is saved if it said
+    """A check answered; a change waiting on it (Enter, Tab, the settle or moving on came first) is saved if it said
     yes, and dropped with why if not."""
     ident = (tool, key, text, revision or "")
-    panel = replace(panel, checked={**panel.checked, ident: reply}, asked=panel.asked - {ident})
+    found = section(panel, tool)
+    current_rev = _schema.revision_of(panel.sections, tool, key) or ""
+    asked = panel.asked - {ident}
+    if found is None or found.reply is None or ident[3] == current_rev:
+        checked = {k: v for k, v in panel.checked.items() if k != ident}
+        checked[ident] = reply
+        while len(checked) > MAX_CHECKED:
+            checked.pop(next(iter(checked)))
+        panel = replace(panel, checked=checked, asked=asked)
+    elif asked != panel.asked:
+        panel = replace(panel, asked=asked)
+
     change = panel.pending
-    if change is not None and change.confirmed and (change.tool, change.key, argument(change.value)) == (
+    if change is not None and change.confirmed and (change.tool, change.key, _schema.argument(change.value)) == (
             tool, key, text):
         return commit_pending(panel, context, now, leaving=(change.tool, change.key) != panel.focus)
+    edit = panel.edit
     row = focused(panel, context)
-    if panel.editing and panel.typed_waiting and row is not None and (row.tool, row.key, panel.buffer) == (
+    if edit is not None and edit.waiting and row is not None and (row.tool, row.key, edit.buffer) == (
             tool, key, text):
-        panel, context, requests, _ = commit_typed(panel, context, now)
-        return panel, context, requests
+        return commit_typed(panel, context, now, move_next=edit.move_next)
     return panel, context, []
 
 
 def write_done(panel: Panel, context: Context, request: Request, outcome: str, reply: Optional[dict[str, Any]],
                message: str, now: float) -> tuple[Panel, list[Request]]:
-    """A set or reset answered: `outcome` is ok, conflict, read-only, invalid or failed; `reply` the tool's
-    settings when it printed them. A refusal shows under its row (a whole-section reset's in the notes); the
-    settings are read again unless the answer carried them."""
+    """A set or reset answered: `outcome` is ok, conflict, read-only, refused or failed; `reply` the tool's settings
+    when it printed them. A refusal shows under its row (a whole-section reset's in the notes); the settings are read
+    again unless the answer carried them."""
     tool, key = request.tool, request.key
-    first = next((n for n, change in enumerate(panel.saving) if (change.tool, change.key) == (tool, key)), None)
+    first = next(
+        (
+            n for n, op in enumerate(panel.saving)
+            if (op.tool, op.key) == (tool, key) and (request.kind not in ("set", "reset") or op.kind == request.kind)
+        ),
+        None,
+    )
     saving = panel.saving if first is None else panel.saving[:first] + panel.saving[first + 1:]
     panel = replace(panel, saving=saving)
     if reply is not None:
         panel = take_reply(panel, context, tool, reply, own=outcome == "ok")
     requests: list[Request] = []
-    waiting = [change for change in panel.queued if change.tool == tool]
-    if waiting and outcome == "ok" and not any(change.tool == tool for change in panel.saving):
-        panel = replace(panel, queued=tuple(change for change in panel.queued if change is not waiting[0]))
-        panel, context, sent = send(panel, context, waiting[0])
+    waiting = [op for op in panel.queued if op.tool == tool]
+    if waiting and outcome == "ok" and not any(op.tool == tool for op in panel.saving):
+        panel = replace(panel, queued=tuple(op for op in panel.queued if op is not waiting[0]))
+        panel, context, sent = send_write(panel, context, waiting[0])
         requests += sent
     elif waiting and outcome != "ok":  # made on top of a change that was not saved: not saved either
-        panel = replace(panel, queued=tuple(change for change in panel.queued if change.tool != tool))
+        panel = replace(panel, queued=tuple(op for op in panel.queued if op.tool != tool))
     found = section(panel, tool)
-    if reply is None and found is not None and not any(change.tool == tool for change in panel.saving):
+    if reply is None and found is not None and not any(op.tool == tool for op in panel.saving):
         requests.append(Request("read", tool, generation=found.generation))
         panel = update_section(panel, tool, reading=True, read_at=now)
     if outcome == "ok":
@@ -966,29 +772,32 @@ def write_done(panel: Panel, context: Context, request: Request, outcome: str, r
             text = f"Saved · every {NAMES.get(tool, tool)} setting at its default" + (
                 f", capacity {basis['slots']} slots" if tool == "slotfather" and "slots" in basis else "")
         else:
-            text = saved_text(row_of(panel, context, (tool, key)), panel, context, key)
+            text = _schema.saved_text(row_of(panel, context, (tool, key)), panel.sections, context.interval,
+                                      context.theme, key)
         panel = say(panel, text, "ok", now)
         requests.append(Request("changed", tool))
     elif key is None:
         panel = say(panel, message or "nothing was saved", "bad", now)
     elif outcome == "conflict":
-        panel = replace(panel, refusal=Refusal(tool, key, conflict_text(panel, context, tool, key,
-                                                                        "nothing was saved")))
+        row = row_of(panel, context, (tool, key))
+        panel = replace(panel, refusal=Refusal(
+            tool, key, _schema.conflict_text(row, panel.sections, context.interval, context.theme, tool, key,
+                                             "nothing was saved")))
     else:
         panel = replace(panel, refusal=Refusal(tool, key, message or "nothing was saved"))
     return settle_focus(panel, context), requests
 
 
 def due_reads(panel: Panel, now: float) -> tuple[Panel, list[Request]]:
-    """While Settings is open each tool's settings are read again: Slotfather's every second, the others' every
-    two; never under a value being typed, nor while a read or a save of that tool is under way."""
-    editing = panel.focus[0] if panel.editing else ""  # only the section being typed in waits
+    """While Settings is open each tool's settings are read again: Slotfather's every second, the others' every two;
+    never under a value being typed, nor while a read, save or reset of that tool is under way."""
+    editing = panel.focus[0] if panel.edit is not None else ""  # only the section being typed in waits
     requests: list[Request] = []
     for found in panel.sections:
         if found.tool == editing:
             continue
         every = READ_EVERY.get(found.tool, READ_OTHERS)
-        busy = found.reading or any(change.tool == found.tool for change in (*panel.saving, *panel.queued))
+        busy = found.reading or any(op.tool == found.tool for op in (*panel.saving, *panel.queued))
         if found.readable and not busy and now - found.read_at >= every:
             panel = update_section(panel, found.tool, reading=True, read_at=now)
             requests.append(Request("read", found.tool, generation=found.generation))
@@ -996,35 +805,15 @@ def due_reads(panel: Panel, now: float) -> tuple[Panel, list[Request]]:
 
 
 def tick(panel: Panel, context: Context, now: float) -> Result:
-    """The loop's pass: a change that settled is saved, a flash that is no longer news goes, reads come due."""
+    """The loop's pass: a change that settled is saved, an old flash or armed reset goes, reads come due."""
     requests: list[Request] = []
     if panel.pending is not None and now - panel.pending.at >= SETTLE_SECONDS:
         panel, context, requests = commit_pending(panel, context, now)
+    if panel.armed is not None and now - panel.armed.at >= FLASH_SECONDS:
+        panel = replace(panel, armed=None)
     flash = panel.flash
     if flash is not None and now - flash.at >= FLASH_SECONDS and flash.style != "bad" \
             and not (flash.style == "accent" and panel.pending is not None):
         panel = replace(panel, flash=None)
     panel, reads = due_reads(panel, now)
     return panel, context, requests + reads
-
-
-def notes(panel: Panel, context: Context) -> list[tuple[str, str]]:
-    """Under the rule: the focused row's description, and what the last change did while it is news (the flash)."""
-    row = focused(panel, context)
-    found = [(row.description, "dim")] if row is not None and row.description else []
-    flash = panel.flash
-    if flash is not None:
-        found = found[:1] + [(_FLASH_MARKS.get(flash.style, "") + flash.text, flash.style)]
-    return found
-
-
-_FLASH_MARKS = {"ok": "✓ ", "warn": "! ", "bad": "✗ ", "accent": "… "}
-
-
-def footer(panel: Panel) -> list[tuple[str, str]]:
-    """The panel's short key line, centred like the dashboard's footer."""
-    if panel.editing:
-        return [("enter", "save"), ("esc", "cancel")]
-    if panel.pending:
-        return [("enter", "save now"), ("esc", "cancel")]
-    return [("↑↓", "select"), ("←→", "change"), ("enter", "edit"), ("d", "reset"), ("esc", "close")]

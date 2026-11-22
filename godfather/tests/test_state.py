@@ -13,7 +13,7 @@ import helpers  # noqa: F401 - src/ on sys.path
 import view as _view
 from test_settings import INTERVAL, SAFETY, SLOTS, THEME, PanelCase, Settings, idle
 
-from godfather import actions, events as events_module, reducer, settings_model, state as state_module
+from godfather import actions, events as events_module, reducer, settings_layout, settings_model, state as state_module
 from godfather.layout import Rect
 
 
@@ -428,7 +428,7 @@ class ModeTableTests(Case):
                 reveal=False,
             )
             if mode == Mode.SETTINGS_EDIT:
-                panel = dataclasses.replace(panel, editing=True, buffer="3", replace=False)
+                panel = dataclasses.replace(panel, edit=settings_model.EditState("3", replace=False))
             elif mode == Mode.SETTINGS_SMALL:
                 state = dataclasses.replace(state, frame=dataclasses.replace(state.frame, width=20, height=8))
             state = tool.with_modal(state, panel)
@@ -580,7 +580,10 @@ class UiBugRegressionTests(Case):
         self.assertEqual("nothing run", after.notice.text)
 
     def test_russian_hotkeys_close_and_quit_settings_small_even_when_editing_is_true(self) -> None:
-        panel = settings_model.Panel(focus=("godfather", "interval"), editing=True, buffer="2", replace=False)
+        panel = settings_model.Panel(
+            focus=("godfather", "interval"),
+            edit=settings_model.EditState("2", replace=False),
+        )
         small_state = dataclasses.replace(
             self.screen(width=20, height=8),
             ui=self.tool.UiState(modal=panel),
@@ -1081,7 +1084,7 @@ class NoticeTests(Case):
         self.assertEqual(1, len(asked))
         self.assertNotIn(threading.current_thread(), asked, "nothing read on the screen's thread")
         self.assertIn("capacity.json is unreadable", " ".join(
-            part[1] for line in settings_model.lines(live.state.ui.overlay, state_module.settings_context(live.state))
+            part[1] for line in settings_layout.lines(live.state.ui.overlay, state_module.settings_context(live.state))
             for part in line.parts))
 
     def test_settings_whose_tools_cannot_be_read_says_why(self) -> None:

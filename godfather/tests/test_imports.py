@@ -12,9 +12,9 @@ PACKAGE = Path(__file__).resolve().parents[1] / "src" / "godfather"
 LAYERS = {
     # what the tools say and how it is read: no geometry, no drawing
     "data": ("keys", "theme", "version", "eventcheck", "sources", "events", "news", "entries", "adapters", "text",
-             "actions", "model"),
+             "actions", "model", "settings_schema"),
     # where things go and the one state and its reducer: no canvas, no terminal
-    "layout": ("layout", "overlay_text", "settings_model", "state", "reducer"),
+    "layout": ("layout", "overlay_text", "settings_model", "settings_layout", "state", "reducer"),
     # drawing: the canvas and terminal (tui), the shared widgets, the screens
     "views": ("tui", "widgets", "views"),
     "app": ("app", "__main__", "__init__"),
@@ -62,16 +62,22 @@ class LayerTests(unittest.TestCase):
 
     def test_no_function_imports_a_module_of_its_own_package_to_break_a_cycle(self) -> None:
         """state.reduce imported modes inside a function (fathers#141): reducer.py imports state at its top."""
-        for name in ("state", "reducer"):
+        for name in ("state", "reducer", "settings_schema", "settings_model", "settings_layout"):
             tree = ast.parse((PACKAGE / f"{name}.py").read_text())
             inner = [node for function in ast.walk(tree) if isinstance(function, ast.FunctionDef)
                      for node in ast.walk(function) if isinstance(node, ast.ImportFrom) and node.level]
             self.assertEqual([], [ast.unparse(node) for node in inner], name)
 
     def test_the_reducer_imports_no_view(self) -> None:
-        for name in ("state", "reducer", "settings_model"):
+        for name in ("state", "reducer", "settings_schema", "settings_model", "settings_layout"):
             with self.subTest(name):
                 self.assertFalse({target for target in imports(PACKAGE / f"{name}.py") if target.startswith("views")})
+
+    def test_settings_model_imports_no_layout(self) -> None:
+        found = imports(PACKAGE / "settings_model.py")
+        self.assertNotIn("layout", found)
+        self.assertNotIn("settings_layout", found)
+        self.assertNotIn("overlay_text", found)
 
     def test_one_scroll_clamp_and_one_hint_lookup(self) -> None:
         """No scroll kept in range by hand: no `max(0, min(` nor a bottom offset worked out (`total - visible`)
