@@ -222,6 +222,20 @@ class MoreGuardTests(WorktreeCase):
         self.assertIsNone(blind.holds("/r-wt-feature"))
         self.assertEqual(([], True), tuple(worktrees.lane_worktrees(str(self.tmp / "absent"))))
 
+    def test_released_lane_is_treated_as_live_until_done(self):
+        root = self.tmp / "lanefather-live"
+        states = root / "lanes"
+        states.mkdir(parents=True)
+        for status in ("planned", "active", "landed", "released", "done"):
+            (states / f"{status}.json").write_text(json.dumps(
+                {"id": f"lane-{status}", "worktree": str(self.tmp / f"wt-{status}"), "status": status}))
+        (root / "projects.json").write_text(json.dumps({"v": 1, "projects": [{"state_dir": str(states)}]}))
+        lanes = worktrees.lane_worktrees(str(root))
+        self.assertTrue(lanes.known)
+        expected = {os.path.realpath(self.tmp / f"wt-{s}") for s in ("planned", "active", "landed", "released")}
+        self.assertEqual(expected, set(lanes.paths))
+        self.assertNotIn(os.path.realpath(self.tmp / "wt-done"), lanes.paths)
+
     def test_a_process_whose_working_directory_cannot_be_read_counts_as_inside(self):
         from junkfather import procs
         path = self.worktree("unknown", "unknown")
@@ -422,6 +436,23 @@ class SweepTests(WorktreeCase):
         shown = next(i for i in status["unowned_resources"] if i["id"] == str(work))
         self.assertEqual(("work", str(self.repo), True, True),
                          (shown["branch"], shown["repo"], isinstance(shown["size"], int), shown["age"] > DAY))
+
+    def test_sweep_keeps_a_released_lanes_idle_worktree_until_done(self):
+        released_wt = self.worktree("released-lane", "lane/released")
+        done_wt = self.worktree("done-lane", "lane/done")
+        self.make_idle(released_wt)
+        self.make_idle(done_wt)
+        records = self.tmp / "no-lanefather" / "fathers" / "lanes"
+        records.mkdir(parents=True)
+        (records / "released.json").write_text(json.dumps(
+            {"id": "r", "worktree": str(released_wt), "status": "released"}))
+        (records / "done.json").write_text(json.dumps(
+            {"id": "d", "worktree": str(done_wt), "status": "done"}))
+        report = self.run_sweep()
+        self.assertEqual([str(done_wt)], [i["id"] for i in report["worktrees"]["removed"]])
+        self.assertTrue(released_wt.is_dir())
+        self.assertFalse(done_wt.exists())
+        self.assertNotIn(str(released_wt), [i["id"] for i in report["unowned_resources"]])
 
 
 if __name__ == "__main__":

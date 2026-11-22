@@ -74,6 +74,33 @@ class EdgeTests(Case):
         self.assertEqual("reaping", self.state_of("jheld"), "its reaper still runs")
         self.assertEqual("reaping", self.state_of("jfresh"), "not stuck long enough")
 
+    def test_reaping_entry_members_are_owned_in_sweep_and_not_reported_as_unowned(self):
+        me = os.getpid()
+        now = 10_000.0
+        start = "Thu Nov 12 08:30:00 2026"
+        here = table(
+            proc(me, ppid=1, start="Thu Nov 12 09:00:00 2026", cmd="python3"),
+            proc(4243, ppid=1, pgid=4243, start=start, cmd="node server.js"),
+            proc(4244, ppid=4243, pgid=4243, start=start, cmd="node worker.js"),
+            proc(4246, ppid=1, pgid=4246, start=start, cmd="python3 -m junkfather supervise jheld"),
+            proc(4245, ppid=1, pgid=4245, start=start, cmd="sleep 600"),
+        )
+        record = running(4243, start, "node server.js", "jheld")
+        record.update(state="reaping", supervisor={"pid": 4246, "start": start},
+                      reaping={"at": now - 1, "by": me, "by_start": here.procs[me].start})
+        self.store.save(record)
+        cwds = {4243: "/scratch/s1", 4244: "/scratch/s1", 4245: "/scratch/s1", 4246: "/scratch/s1"}
+        with mock.patch.dict(os.environ, {"JUNKFATHER_SCRATCH_ROOTS": "/scratch"}), \
+                mock.patch.object(resources, "unowned", return_value=([], [])):
+            report = sweep.sweep(self.store, table=here, cwds=cwds, sessions=[], now=now)
+        self.assertEqual([4245], [i["pid"] for i in report["unowned"]])
+        saved = json.loads((self.state / "unowned.json").read_text())
+        self.assertEqual([4245], [i["pid"] for i in saved["items"]])
+        events = [json.loads(line) for line in (self.state / "events.jsonl").read_text().splitlines()]
+        reported = [e["subject"]["pid"] for e in events if e["kind"] == "unowned.reported"]
+        self.assertEqual([4245], reported)
+        self.assertEqual("reaping", self.state_of("jheld"))
+
     def test_corrupt_and_partial_entry_files_are_skipped(self):
         child = self.spawn("sleep", "600", start_new_session=True)
         mine = procs.Table.read().get(child.pid)

@@ -128,6 +128,17 @@ class SimulatorTests(ResourceCase):
         self.assertFalse([c for c in self.fake_state()["calls"] if c[:3] == ["xcrun", "simctl", "shutdown"]])
         self.assertEqual("running", self.state_of(entry["id"]))
 
+    def test_dry_run_reports_would_fail_while_whether_it_runs_cannot_be_told(self):
+        entry = self.own("--kind", "simulator", "--", "xcrun", "simctl", "boot", SIM)
+        self.change_fake(fail=[["xcrun", "simctl", "list"]])
+        result = self.cli("reap", "--id", entry["id"], "--dry-run", "--json", env=self.env)
+        self.assertEqual((0, ""), (result.returncode, result.stderr))
+        (row,) = json.loads(result.stdout)["results"]
+        self.assertEqual("would-fail", row["result"])
+        self.assertIn("cannot be told", row["reason"])
+        self.assertFalse([c for c in self.fake_state()["calls"] if c[:3] == ["xcrun", "simctl", "shutdown"]])
+        self.assertEqual("running", self.state_of(entry["id"]))
+
     def test_a_failed_boot_or_nothing_new_owns_nothing(self):
         self.change_fake(fail=[["xcrun", "simctl", "boot"]])
         self.assertEqual(3, self.cli("own", "--kind", "simulator", "--", "xcrun", "simctl", "boot", SIM,

@@ -67,7 +67,7 @@ def lane_of(env: Mapping[str, str], cwd: str) -> Optional[str]:
         if not isinstance(worktree, str) or not data.get("id"):
             continue
         tree = os.path.realpath(worktree)
-        if (root == tree or root.startswith(tree.rstrip("/") + "/")) and data.get("status") not in ("done", "released"):
+        if (root == tree or root.startswith(tree.rstrip("/") + "/")) and data.get("status") != "done":
             if best is None or len(tree) > best[0]:
                 best = (len(tree), str(data["id"]))
     return best[1] if best else None

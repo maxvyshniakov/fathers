@@ -87,6 +87,10 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 
 ### Fixed
 
+- Processes belonging to an entry currently being reaped are now treated as owned during `junkfather sweep` and
+  skipped as already reaping by `junkfather reap --pid` instead of being reported as unowned; `junkfather reap
+  --dry-run` on a resource whose liveness cannot be determined now reports `would-fail` to match a real reap; and
+  worktrees of released Lanefather lanes remain treated as live until Lanefather marks the lane done (fathers#231).
 - An attached command whose process-table read fails transiently as it exits now retries cleanly to the exited state
   instead of reporting zero remaining processes, a background-shell watcher backs off for 1 s rather than spinning when
   the process table cannot be read at expiry, shortening an entry's TTL during reap-failure backoff takes effect at the

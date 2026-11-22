@@ -244,7 +244,7 @@ def lane_worktrees(root: Optional[str] = None) -> Lanes:
             except (OSError, ValueError):
                 continue
             worktree = lane.get("worktree")
-            if isinstance(worktree, str) and lane.get("status") not in ("done", "released"):
+            if isinstance(worktree, str) and lane.get("status") != "done":
                 found.append(os.path.realpath(worktree))
     return Lanes(found, known)
 

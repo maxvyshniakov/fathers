@@ -347,7 +347,7 @@ def reap_command(store: Store, args: argparse.Namespace) -> int:
                                              args.via), args)
     selected, results = _reap.select(store, args.id, args.owner, args.agent, args.lane, table, args.pid,
                                      lifecycle=lifecycle)
-    if table is not None and not selected:
+    if table is not None and not selected and not results:
         return report(_reap.reap_unowned(store, args.pid, table, False, args.reason, args.grace, args.dry_run,
                                          args.via), args)
     if args.expired:

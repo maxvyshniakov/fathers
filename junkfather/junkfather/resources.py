@@ -723,8 +723,13 @@ def reap_target(store: Store, entry: Entry, reason: str, grace: float, actor: Op
 
     def preview() -> Dict[str, Any]:
         state = alive()
-        refused = kind.check(resource) if kind is not None and state is not False else None
-        return {"id": entry_id, "result": "gone" if state is False else "would-fail" if refused else "would-stop",
+        if state is False:
+            return {"id": entry_id, "result": "gone", "reason": reason, "pids": [], "how": how}
+        if state is None:
+            return {"id": entry_id, "result": "would-fail",
+                    "reason": f"{reason}; whether it runs cannot be told", "pids": [], "how": how}
+        refused = kind.check(resource) if kind is not None else None
+        return {"id": entry_id, "result": "would-fail" if refused else "would-stop",
                 "reason": f"{reason}; {refused}" if refused else reason, "pids": [], "how": how}
 
     def teardown(current: Entry) -> _reap.ReapOutcome:

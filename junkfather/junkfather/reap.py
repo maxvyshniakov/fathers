@@ -461,8 +461,9 @@ def select(store: Store, ids: List[str], owner: Optional[str], agent: Optional[s
            table: Optional[_procs.Table] = None, pid: Optional[int] = None, *, lifecycle: Optional[Lifecycle] = None
            ) -> Tuple[List[Entry], List[Dict[str, Any]]]:
     """The running or starting entries one `reap` selector names (--id, --owner, --lane, or --pid with `table`),
-    and a result row for each id given that names no such entry."""
-    running = [e for e in store.entries() if e.get("state") in _entry.OPEN]
+    and a result row for each id given that names no such entry or each reaping entry holding `pid`."""
+    entries = store.entries()
+    running = [e for e in entries if e.get("state") in _entry.OPEN]
     missing: List[Dict[str, Any]] = []
     if ids:
         known = {e["id"] for e in running}
@@ -477,7 +478,13 @@ def select(store: Store, ids: List[str], owner: Optional[str], agent: Optional[s
     if lane:
         return [e for e in running if (e.get("owner") or {}).get("lane") == lane], missing
     assert table is not None
-    return [e for e in running if pid in {p.pid for p in members(e, table)[0]}], missing
+    selected = [e for e in running if e.get("mode") != "resource" and pid in {p.pid for p in members(e, table)[0]}]
+    for entry in entries:
+        if entry.get("state") == _entry.REAPING and entry.get("mode") != "resource" \
+                and pid in {p.pid for p in members(entry, table)[0]}:
+            missing.append({"id": entry["id"], "result": "skipped", "reason": f"already {_entry.REAPING}",
+                            "pids": [], "how": ""})
+    return selected, missing
 
 
 def results_text(results: List[Dict[str, Any]]) -> str:

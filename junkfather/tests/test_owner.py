@@ -3,9 +3,10 @@ from __future__ import annotations
 
 import calendar
 import json
+from pathlib import Path
 import re
 import time
-from typing import Optional
+from typing import Dict, Optional
 import unittest
 
 from support import ROOT, Case, proc, table
@@ -251,6 +252,26 @@ class FromEnvTests(unittest.TestCase):
         self.assertEqual("shell", owner.from_env({"CODEX_SESSION_ID": "t1"}, parent=1)["kind"])
         self.assertEqual(("claude", "t1"), tuple(owner.from_env({"CODEX_THREAD_ID": "t1"}, parent=1)[k]
                                                  for k in ("kind", "session")))
+
+
+class LaneOfTests(Case):
+    """fathers#231: `lane_of` treats released lanes as live until Lanefather marks them done."""
+
+    def test_released_lane_is_detected_as_live_while_done_is_ignored(self):
+        records = self.tmp / "lanes"
+        records.mkdir()
+        trees: Dict[str, Path] = {}
+        for status in ("planned", "active", "landed", "released", "done"):
+            tree = self.tmp / f"wt-{status}"
+            tree.mkdir()
+            trees[status] = tree
+            (records / f"{status}.json").write_text(json.dumps(
+                {"id": f"lane-{status}", "worktree": str(tree), "status": status}))
+        env = {"JUNKFATHER_LANE_RECORDS": str(records)}
+        for status in ("planned", "active", "landed", "released"):
+            with self.subTest(status=status):
+                self.assertEqual(f"lane-{status}", owner.lane_of(env, str(trees[status])))
+        self.assertIsNone(owner.lane_of(env, str(trees["done"])))
 
 
 if __name__ == "__main__":

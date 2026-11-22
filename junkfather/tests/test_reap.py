@@ -697,3 +697,35 @@ class BeginReapSkipReasonTests(Case):
                                            lifecycle=lifecycle, owner=owner_id, allowed=guard)
                     self.assertEqual(("skipped", expected, [], [here]),
                                      (result["result"], result["reason"], post_loads, seen_tables))
+
+
+class ReapingSelectTests(Case):
+    """fathers#231: a PID belonging to a `reaping` entry is reported as already reaping instead of unowned."""
+
+    def test_select_pid_reports_reaping_entry_as_skipped(self):
+        record = entry(pid=100, known=[[100, A]])
+        record["state"] = "reaping"
+        self.store.save(record)
+        here = table(proc(100, cmd="node server.js"), proc(101, ppid=100, pgid=100, cmd="node worker.js"))
+        for target_pid in (100, 101):
+            with self.subTest(pid=target_pid):
+                selected, skipped = reap.select(self.store, [], None, None, None, here, target_pid)
+                self.assertEqual([], selected)
+                self.assertEqual([{"id": "jtest", "result": "skipped", "reason": "already reaping",
+                                   "pids": [], "how": ""}], skipped)
+
+    def test_cli_reap_pid_on_reaping_entry_skips_instead_of_falling_through_to_reap_unowned(self):
+        child = self.spawn("sleep", "600", start_new_session=True)
+        self.runs_600(child)
+        self.assertEqual(0, self.cli("adopt", str(child.pid), "--ttl", "1h").returncode)
+        (owned,) = self.store.entries()
+        self.store.update(owned["id"], lambda e: e.update(
+            state="reaping", reaping={"reason": "other", "at": 1.0, "by": os.getpid(), "by_start": A}))
+        for extra in ((), ("--dry-run",), ("--expired",)):
+            with self.subTest(extra=extra):
+                result = self.cli("reap", "--pid", str(child.pid), "--json", *extra)
+                self.assertEqual((0, ""), (result.returncode, result.stderr))
+                self.assertEqual([{"id": owned["id"], "result": "skipped", "reason": "already reaping",
+                                   "pids": [], "how": ""}], json.loads(result.stdout)["results"])
+                self.assertEqual("reaping", self.state_of(owned["id"]))
+                self.assertTrue(self.runs(child.pid))

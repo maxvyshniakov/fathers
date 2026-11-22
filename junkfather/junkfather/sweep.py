@@ -148,6 +148,19 @@ def sweep(store: Store, dry_run: bool = False, table: Optional[_procs.Table] = N
             if not dry_run:
                 _entry.release_stuck(store, entry["id"])
             state = _entry.RUNNING
+        if state == _entry.REAPING:
+            if entry.get("mode") != "resource":
+                members, _ = _reap.members(entry, table)
+                daemons = survey.daemons_below(members)
+                if daemons:
+                    members, _ = _reap.members(_entry.with_daemons(entry, daemons), table)
+                owned.update(p.pid for p in members)
+                if members:
+                    members_of[entry["id"]] = (entry.get("label"), members)
+                supervisor = entry.get("supervisor") or {}
+                if table.alive(supervisor.get("pid"), supervisor.get("start")):
+                    owned.add(supervisor["pid"])
+            continue
         if state not in _entry.OPEN:
             ended = entry.get("ended")
             if ended and now - float(ended) > KEEP_FINISHED and not dry_run:
