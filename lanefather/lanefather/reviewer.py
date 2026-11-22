@@ -851,12 +851,17 @@ def _codex_limit(codex: str) -> dict[str, Any]:
     except OSError:
         pass
     finally:
-        child.kill()
-        child.wait()
-        if child.stdin is not None:
-            with contextlib.suppress(OSError):
-                child.stdin.close()
-        reader.join(timeout=1)
+        try:
+            child.kill()
+            child.wait()
+        finally:
+            if child.stdin is not None:
+                with contextlib.suppress(OSError):
+                    child.stdin.close()
+            reader.join(timeout=1)
+            if child.stdout is not None and not child.stdout.closed:
+                with contextlib.suppress(OSError):
+                    child.stdout.close()
     if not answer:
         return {"left": None, "blocked": f"codex app-server gave no rate limits within {LIMIT_TIMEOUT} s"}
     if answer.get("error"):

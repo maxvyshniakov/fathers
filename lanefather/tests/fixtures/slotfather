@@ -159,7 +159,8 @@ def main(argv):
             queue_hold = os.environ.get("FAKE_SLOTFATHER_QUEUE_HOLD")
             if queue_hold and os.path.exists(queue_hold + ".waiting") and not os.path.exists(queue_hold):
                 try:
-                    info = json.loads(open(queue_hold + ".waiting").read())
+                    with open(queue_hold + ".waiting") as waiting_file:
+                        info = json.loads(waiting_file.read())
                     entries.append({
                         "id": "fake-wait", "state": "waiting", "label": info.get("label", ""),
                         "pid": info.get("pid"), "count": info.get("count", 1), "position": 1,

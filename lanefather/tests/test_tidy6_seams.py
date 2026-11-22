@@ -10,7 +10,7 @@ import sys
 import time
 import unittest
 
-from support import LaneCase
+from support import LaneCase, close_process
 
 from lanefather import config, github, review, state
 from lanefather.errors import LaneError
@@ -144,6 +144,7 @@ class DoneLockFreeGhTests(LaneCase):
             stderr=subprocess.PIPE,
             text=True,
         )
+        self.addCleanup(close_process, proc)
         try:
             deadline = time.monotonic() + 10
             while not started.exists() and time.monotonic() < deadline:

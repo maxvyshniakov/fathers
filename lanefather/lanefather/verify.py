@@ -636,9 +636,14 @@ class Run:
         self._clock = time.monotonic()
         self._progress.reset(self._clock)
         self._load = {"start": host.load_averages()}
-        self._handle = open(self.log, "w")  # noqa: SIM115 - closed in finish/stop, after the child exits
-        self._child = subprocess.Popen(self.argv, cwd=self.root, env=self.env,
-                                       stdout=self._handle, stderr=subprocess.STDOUT)
+        handle = open(self.log, "w")  # noqa: SIM115 - closed in finish/stop, after the child exits
+        try:
+            self._child = subprocess.Popen(self.argv, cwd=self.root, env=self.env,
+                                           stdout=handle, stderr=subprocess.STDOUT)
+        except BaseException:
+            handle.close()
+            raise
+        self._handle = handle
 
     def finish(self) -> Outcome:
         assert self._child is not None and self._handle is not None

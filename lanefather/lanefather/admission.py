@@ -94,12 +94,14 @@ def transport(command: str, request: dict[str, Any], timeout: float = TIMEOUT) -
         failed = False
         return bytes(output)
     finally:
-        if failed:
-            with contextlib.suppress(ProcessLookupError):
-                os.killpg(process.pid, signal.SIGKILL)
-        process.wait(timeout=1)
-        for pipe in pipes:
-            pipe.close()
+        try:
+            if failed:
+                with contextlib.suppress(ProcessLookupError):
+                    os.killpg(process.pid, signal.SIGKILL)
+            process.wait(timeout=1)
+        finally:
+            for pipe in pipes:
+                pipe.close()
 
 
 def request_for(project: config.Config, occupied: int) -> dict[str, Any]:

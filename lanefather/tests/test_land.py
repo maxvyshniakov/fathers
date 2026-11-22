@@ -629,7 +629,7 @@ class SmokeNarrowingTests(LaneCase):
             'plan_module = "tools/verification_plan.py"\n', "")
         verify = (self.integration / "verify.sh").read_text().replace(
             'if args[:1] == ["--changed"]:\n',
-            f'if args[:1] == ["--changed"]:\n    open({str(bootstrap_log)!r}, "a").write(str(root) + "\\n")\n')
+            f'if args[:1] == ["--changed"]:\n    with open({str(bootstrap_log)!r}, "a") as _log:\n        _log.write(str(root) + "\\n")\n')
         self.commit(self.integration, {".lanefather.toml": config, "verify.sh": verify},
                     "log plan bootstrap without plan_module")
         worktree = self.created("a", "lib/**")

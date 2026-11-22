@@ -10,7 +10,7 @@ from typing import Any
 import unittest
 from unittest.mock import patch
 
-from support import LaneCase
+from support import LaneCase, close_process
 
 from lanefather import config
 from lanefather.errors import LaneError
@@ -188,6 +188,8 @@ print(json.dumps(answer))
                      "--claims",name+"/**"] for name in ("first","second")]
         children = [subprocess.Popen(argv,cwd=self.integration,env=self.env,stdout=subprocess.PIPE,
                                      stderr=subprocess.PIPE,text=True) for argv in commands]
+        for child in children:
+            self.addCleanup(close_process, child)
         results = [child.communicate(timeout=15) for child in children]
         self.assertEqual([0,1],sorted(child.returncode for child in children),results)
         records = list(self.state.glob("*.json"))

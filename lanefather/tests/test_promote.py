@@ -15,7 +15,7 @@ from typing import Any
 import unittest
 import unittest.mock
 
-from support import FAKE_PLAN, ROOT, LaneCase
+from support import FAKE_PLAN, ROOT, LaneCase, close_process
 
 
 class PromoteGateTests(LaneCase):
@@ -100,9 +100,11 @@ class PromoteGateTests(LaneCase):
         self.assertNotEqual(self.git(self.repo, "rev-parse", "dev"), tip)
 
     def promote_in_background(self, sha):
-        return subprocess.Popen([sys.executable, "-m", "lanefather", "promote", sha, "--no-push", "--wait", "60"],
-                                cwd=self.integration, env=self.env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                text=True)
+        process = subprocess.Popen([sys.executable, "-m", "lanefather", "promote", sha, "--no-push", "--wait", "60"],
+                                   cwd=self.integration, env=self.env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                   text=True)
+        self.addCleanup(close_process, process)
+        return process
 
     def test_a_second_promote_waits_for_the_first_batch_gate_instead_of_moving_its_worktree(self):
         # #454: concurrent promotes force-checked-out the shared batch-gate worktree under each other's verify.
@@ -555,14 +557,7 @@ class SyncTests(LaneCase):
         process = subprocess.Popen([sys.executable, "-m", "lanefather", "sync", "--drop-local", "--wait", "60"], cwd=self.repo,
                                    env=self.env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
 
-        def cleanup_process() -> None:
-            if process.poll() is None:
-                process.kill()
-                process.wait()
-            if process.stdout is not None:
-                process.stdout.close()
-
-        self.addCleanup(cleanup_process)
+        self.addCleanup(close_process, process)
         guard = self.repo / ".git" / "landing.lock.guard"
         deadline = time.monotonic() + 60
         while not guard.exists():
