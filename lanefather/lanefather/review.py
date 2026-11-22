@@ -986,12 +986,13 @@ def review(args: Any) -> int:
 def landing_findings(record: Record, store: state.Store) -> tuple[list[LaneFinding], list[LaneFinding]]:
     """The open findings of other lanes here. A valid parent cannot hold the fix that will resolve its findings."""
     parents = set(valid_fix_parents(record, store))
+    blocks = store.project.review_blocks
     other = (r for r in store.lanes() if r.get("common_dir") == record["common_dir"] and r["id"] != record["id"])
     held: list[LaneFinding] = []
     reported: list[LaneFinding] = []
     for lane, findings in review_record.ReviewRecord.unmarked(store, other):
         for finding in findings:
-            if finding.get("severity", "P2") in ("P1", "P2"):
+            if finding.get("severity", "P2") in blocks:
                 if lane["id"] not in parents:
                     held.append((lane, finding))
             else:

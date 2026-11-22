@@ -238,6 +238,12 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
 
 ### Fixed
 
+- `lanefather land` now honours `[review] blocks` in `.lanefather.toml` when checking other finished reviews for
+  unmarked findings, matching `lanefather promote` and `lanefather findings` (fathers#230): severities excluded from
+  `[review] blocks` are reported as non-blocking warnings instead of refusing the merge, and `[review] blocks` that
+  include `P3` hold `land` on unmarked `P3` findings and name the configured severities in the refusal and `land
+  --help`.
+
 - Unified post-merge smoke, clearing, and lane-completion lifecycle (fathers#227): post-merge smoke, `lanefather
   recheck`, `lanefather done`, `lanefather done --finished`, and automatic completion after `land` and `review` now
   share one phase and completion model, recover a green `<id>.recheck.json` written before an interrupted `recheck`

@@ -295,7 +295,8 @@ def check_other_reviews(record: state.Record, force_reason: str | None,
     store = store or state.Store(config.current())
     held, reported = review.landing_findings(record, store)
     for lane, finding in reported:
-        print(f"lane: reported ({finding['severity']}, does not block): {review_gate.finding_line(lane, finding)}",
+        severity = finding.get("severity", "P2")
+        print(f"lane: reported ({severity}, does not block): {review_gate.finding_line(lane, finding)}",
               file=sys.stderr)
     if not held:
         return None
@@ -304,7 +305,8 @@ def check_other_reviews(record: state.Record, force_reason: str | None,
         lines = [f"- {text}" for text in refusals]
         blocking_lanes = {lane["id"]: lane for lane, _ in held}
         fixes = review.fix_round_commands(blocking_lanes.values(), review.valid_fix_parents(record, store))
-        raise LaneError("\n".join(["land refused: other finished reviews have unmarked P1/P2 findings", *lines,
+        blocks = "/".join(store.project.review_blocks or config.Config().review_blocks)
+        raise LaneError("\n".join([f"land refused: other finished reviews have unmarked {blocks} findings", *lines,
                                   "For findings that need a fix:", *(f"  {line}" for line in fixes),
                                   "--force-reason overrides and is logged"]))
     override = {"at": journal.now(), "reason": force_reason, "refusals": refusals}

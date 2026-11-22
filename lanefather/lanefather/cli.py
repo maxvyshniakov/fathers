@@ -164,8 +164,16 @@ def agent_kind(value: str) -> str:
     return cleaned
 
 
+def review_blocks() -> tuple[str, ...]:
+    try:
+        return config.current().review_blocks
+    except LaneError:
+        return config.Config().review_blocks
+
+
 def parser() -> Parser:
     prog = config.prog()
+    blocks = review_blocks()
     root = Parser(prog=prog, tool=prog, usage="%(prog)s [--config PATH] <command> ...",
                   description="Parallel changes in one repository: lanes registered, checked, landed, reviewed\n"
                               "and cleaned up.",
@@ -226,8 +234,13 @@ def parser() -> Parser:
                    help=f"give up after S seconds (default {wait.DEFAULT_TIMEOUT:g})")
     p.add_argument("--json", action="store_true", help="the version-1 reply: lane, for, status, reached, waited")
     p.set_defaults(run=wait.command)
+    land_review = (
+        f"Earlier finished reviews with unmarked {'/'.join(blocks)} findings hold the merge (fathers#177)."
+        if blocks
+        else "Unmarked findings from earlier finished reviews are reported without holding the merge (fathers#177)."
+    )
     p = add(root, commands, "land", "After a current green receipt: merge, start the review and run the post-merge "
-            "smoke. Earlier finished reviews with unmarked P1/P2 findings hold the merge (fathers#177).")
+            f"smoke. {land_review}")
     p.add_argument("id")
     p.add_argument("--into", help="integration worktree (default: the worktree on the lane's base branch)")
     p.add_argument("-m", "--message")

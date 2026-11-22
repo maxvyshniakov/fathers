@@ -61,6 +61,35 @@ class LandingGateTableTests(unittest.TestCase):
         self.assertEqual([record["id"] for record, _ in blockers], ["unlanded", "unrelated"])
         self.assertEqual(warnings, [])
 
+    def test_landing_findings_honors_configured_review_blocks(self):
+        self.store.save(self.target)
+        self.store.save({"id": "a", "status": "landed", "landed": {"merge": "merge"}, "common_dir": "/repo/.git"})
+        state.write_json(
+            self.store.receipt_path("a", "review"),
+            {
+                "status": "finished",
+                "findings": [
+                    {"n": 1, "severity": "P1"},
+                    {"n": 2, "severity": "P2"},
+                    {"n": 3, "severity": "P3"},
+                ],
+            },
+        )
+        p1_only = state.Store(config.Config(review_blocks=("P1",)), self.store.directory)
+        blockers, warnings = review.landing_findings(self.target, p1_only)
+        self.assertEqual([f["severity"] for _, f in blockers], ["P1"])
+        self.assertEqual([f["severity"] for _, f in warnings], ["P2", "P3"])
+
+        all_three = state.Store(config.Config(review_blocks=("P1", "P2", "P3")), self.store.directory)
+        blockers, warnings = review.landing_findings(self.target, all_three)
+        self.assertEqual([f["severity"] for _, f in blockers], ["P1", "P2", "P3"])
+        self.assertEqual(warnings, [])
+
+        none_blocking = state.Store(config.Config(review_blocks=()), self.store.directory)
+        blockers, warnings = review.landing_findings(self.target, none_blocking)
+        self.assertEqual(blockers, [])
+        self.assertEqual([f["severity"] for _, f in warnings], ["P1", "P2", "P3"])
+
 
 class ReviewGateTableTests(LaneCase):
     def setUp(self):
@@ -146,6 +175,33 @@ class ReviewGateTableTests(LaneCase):
         (self.integration / ".lanefather.toml").write_text(config)
         answer = self.answer()
         self.assertEqual((answer["held"], answer["blocks"]), (True, ["P1", "P2", "P3"]))
+
+    def test_land_honors_configured_review_blocks_for_other_lanes(self):
+        base_config = (self.integration / ".lanefather.toml").read_text()
+        self.commit(self.integration, {".lanefather.toml": base_config + '\n[review]\nblocks = ["P1"]\n'}, "blocks P1")
+        self.assertIn("unmarked P1 findings hold the merge", self.lane("land", "--help"))
+        self.findings({"severity": "P2"})
+        worktree_b = self.created("b", "calls/**")
+        self.commit(worktree_b, {"calls/b.txt": "foo\n"})
+        self.lane("check", "b")
+        land_b = self.lane("land", "b")
+        self.assertIn("reported (P2, does not block): lane a (#404): finding #1 P2", land_b)
+
+        self.commit(
+            self.integration,
+            {".lanefather.toml": base_config + '\n[review]\nblocks = ["P1", "P2", "P3"]\n'},
+            "blocks P1-P3",
+        )
+        self.assertIn("unmarked P1/P2/P3 findings hold the merge", self.lane("land", "--help"))
+        self.findings({"severity": "P3"})
+        worktree_c = self.created("c", "docs/**")
+        self.commit(worktree_c, {"docs/c.md": "c\n"})
+        self.lane("check", "c")
+        previous = self.tip()
+        blocked = self.lane("land", "c", ok=False)
+        self.assertEqual(self.tip(), previous)
+        self.assertIn("land refused: other finished reviews have unmarked P1/P2/P3 findings", blocked)
+        self.assertIn("lane a (#404): finding #1 P3 lib/extra.txt:1 finding 1", blocked)
 
     def test_the_publish_path_holds_with_exit_1_and_an_override_answers_0_logged(self):
         self.findings({"severity": "P2"})
