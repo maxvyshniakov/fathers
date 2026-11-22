@@ -101,6 +101,10 @@ full pages one key away.
     - Under 83 columns DETAILS has the full-width band and MACHINE the bottom row alone, and EVENTS is not shown, as
       in Slotfather's one-column layout. Too short for the bottom row (under 27 rows with six queue rows), QUEUE and
       DETAILS only.
+    - From fathers#203 (2026-11-22), while Slotfather's unleased load is at least half the cores, MACHINE's chart
+      gives its place, rows and axis line to the top unleased processes: name, pid, cpu and memory, the busiest
+      first, read with `ps` (at most every 5 s, only while the load is high) less the running leases' processes and
+      their descendants. A lower load or a failed `ps` keeps the chart.
 13. SLOTS' bottom border carries the summaries of the other tools, each led by its page key:
     `2 lanes 3 active · 2 reviews · 🔥 gate red` on the left and `3 procs 7 · 1 orphan` on the right.
     - lanes: `N active` (lanes in status active), `N planned` when any, `N reviews` (lanes whose review runs or has
@@ -217,7 +221,7 @@ full pages one key away.
 | 9 | built 0.1.0 (Slotfather); Lanefather and Junkfather Unreleased (fathers#85, fathers#86) |
 | 10 | built 0.1.0; the pages' borders Unreleased (fathers#85, fathers#86) |
 | 11 | built 0.1.0 |
-| 12 | built 0.1.0; frames in one synchronized update Unreleased (fathers#143) |
+| 12 | built 0.1.0; frames in one synchronized update Unreleased (fathers#143); top unleased processes Unreleased (fathers#203) |
 | 13 | built Unreleased (fathers#85, fathers#86) |
 | 14 | built Unreleased (fathers#85, fathers#86) |
 | 15 | built Unreleased (fathers#84, then fathers#152) |
@@ -309,7 +313,7 @@ Every module under `src/godfather/`, as built (`tests/test_spec.py` holds this t
 | `views.common` | Marks, holder colours, bars and cells several panels draw alike. |
 | `views.details` | DETAILS: the selected row's facts, links and marks. |
 | `views.events` | EVENTS: one tool's log at a time, its rows and its switch. |
-| `views.machine` | MACHINE: load, memory and swap, and the chart of held slots. |
+| `views.machine` | MACHINE: load, memory and swap, the chart of held slots, or the top unleased processes. |
 | `views.overlays` | Help and what's new drawn. |
 | `views.overview` | The overview screen, composed from the panels. |
 | `views.pages` | The Lanes and Processes pages and the border summaries that open them. |

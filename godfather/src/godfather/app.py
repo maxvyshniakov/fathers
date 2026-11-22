@@ -43,7 +43,7 @@ from .adapters import settings as _settings_adapter
 from .adapters import slotfather as _slotfather
 from .adapters.settings import Conflict, ReadOnly, SettingsClient, SettingsError
 from .adapters.slotfather import Unsupported
-from .model import Dashboard, Request
+from .model import Dashboard, PsRow, Request, TreeRow
 from .sources import SnapshotError, Source
 from . import pages as _pages
 from . import reducer as _reducer
@@ -52,6 +52,7 @@ from .tui import Canvas, Jobs, Loader, full_screen, read_keys, suspended
 from .views import common as _common
 from .views import details as _details
 from .views import events as _events_view
+from .views import machine as _machine
 from .views import overview as _overview
 
 USAGE = ("usage: godfather [--interval SECONDS]\n"
@@ -126,6 +127,8 @@ class Screen:
         self.action_sources = {"slotfather": Source("slotfather", _slotfather),
                                **{name: Source(name, adapter) for name, adapter in TOOL_ADAPTERS.items()}}
         self.fresh: set[str] = set()  # the sources whose log gained a line in the last load: polled again soon
+        self.table: list[PsRow] | None = None  # the machine's processes, read while unleased load is high
+        self.table_at = -math.inf
 
     def close(self) -> None:
         """Closes every followed event-log handle; an in-flight load cannot reopen or read one after this."""
@@ -215,9 +218,26 @@ class Screen:
         # This frame's colours and lanes stay off the cached snapshot
         model["holders"] = [item.copy() for item in model["holders"]]
         model["waiters"] = [item.copy() for item in model["waiters"]]
+        top = self.unleased(model)
+        if top is not None:
+            model["unleased_top"] = top
         if source.state == "stale" and source.failed_at is not None:
             model["stale_since"] = datetime.datetime.fromtimestamp(source.failed_at, datetime.timezone.utc)
         return model, source.problem if source.state == "stale" else None
+
+    def unleased(self, model: Dashboard) -> list[TreeRow] | None:
+        """MACHINE's top unleased processes (fathers#203), on the model loader's thread: the machine's process table
+        is read with `ps` only while unleased load is high, at most every UNLEASED_EVERY seconds, and the running
+        leases' processes left out of it each load; None while the load is not high or `ps` failed."""
+        if not _machine.unleased_high(model):
+            self.table, self.table_at = None, -math.inf
+            return None
+        now = time.monotonic()
+        if now - self.table_at >= UNLEASED_EVERY:
+            self.table, self.table_at = _sources.process_table(), now
+        if self.table is None:
+            return None
+        return _machine.unleased_top(self.table, model["holders"])
 
     def load_tool(self, name: str) -> _state.Tool:
         """Another tool's snapshot, polled once (discovery first when it is due): its Tool for the reducer."""
@@ -671,6 +691,7 @@ def terminal_size(fd: int) -> os.terminal_size:
 
 ACTOR = f"godfather/{_version.VERSION}"  # GODFATHER_ACTOR for every action (SPEC 24)
 TOOL_DEBOUNCE = 0.25  # seconds after a tool's event before its snapshot is polled (SPEC 9)
+UNLEASED_EVERY = 5.0  # seconds between looks at the machine's processes while unleased load is high (fathers#203)
 
 
 def dashboard_live(interval: float, theme: str = _theme.DEFAULT_MODE, screen: Screen | None = None) -> None:

@@ -1,0 +1,11 @@
+╭─ MACHINE ───────────────── admission: 2 slots ─╮
+│                                                │
+│  🔥 load ■■■■■■■■■■■■■■■■■■■■■■■■■■■■ 14.2/12  │
+│  🆗 mem  ■■■■■■■■■■■■■■■■■■■░░░░░░░░░ warning  │
+│  🆗 swap ■■■■■■■■■■■■■■■■■■■■░░░░░░░░  0.7/1G  │
+│  top unleased                 pid   cpu   mem  │
+│  com.apple.Virtualization.…   812  312%  2.4G  │
+│  Google Chrome Helper (Ren…  9120  148%  1.1G  │
+│  Code Helper (Plugin)         433   61%  640M  │
+│  WindowServer                  77   12%   90M  │
+╰────────────────────────────────────────────────╯

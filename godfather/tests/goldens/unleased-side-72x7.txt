@@ -1,0 +1,7 @@
+╭─ MACHINE ─────────────────────── unleased 11.8 · admission: 2 slots ─╮
+│                                top unleased         pid   cpu   mem  │
+│  🔥 load ■■■■■■■■■■■■ 14.2/12  com.apple.Virtual…   812  312%  2.4G  │
+│  🆗 mem  ■■■■■■■■░░░░ warning  Google Chrome Hel…  9120  148%  1.1G  │
+│  🆗 swap ■■■■■■■■░░░░  0.7/1G  Code Helper (Plug…   433   61%  640M  │
+│                                WindowServer          77   12%   90M  │
+╰──────────────────────────────────────────────────────────────────────╯

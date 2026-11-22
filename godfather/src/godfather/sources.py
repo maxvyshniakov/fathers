@@ -5,7 +5,8 @@ Godfather never imports a tool's modules and never reads a file in a tool's stat
 
     DIR/<tool>/replies.json   {"capabilities --json": {"code": 0, "json": {...}}, "status --json --full": ...}
     DIR/host.json             {"cwd": {"PID": "/path"}, "host": "mbp"}   (optional: a holder's working directory,
-                              for lsof; the host name the event logs are read for)
+                              for lsof; the host name the event logs are read for; `processes`, the rows
+                              process_table() reads from ps)
 
 A tool is present in fixture mode when DIR/<tool>/ exists; its event log is DIR/<tool>/events.jsonl. A call with no recorded reply exits 127. A call that
 would change something (`settings set`, `settings reset`, an action) is recorded in `recorded` (and appended to
@@ -22,6 +23,8 @@ import threading
 import time
 from pathlib import Path
 from typing import Any, Mapping, NamedTuple, Optional, cast
+
+from .model import PsRow
 
 TOOLS = ("slotfather", "lanefather", "junkfather")  # the names Godfather looks for (SPEC: built in)
 CAPABILITIES_TIMEOUT = 2.0
@@ -172,6 +175,52 @@ def process_cwd(pid: Any) -> Optional[str]:
     except (OSError, subprocess.TimeoutExpired):
         return None
     return next((line[1:] for line in result.stdout.splitlines() if line.startswith("n")), None)
+
+
+PROCESS_TIMEOUT = 2.0  # seconds `ps` may take for the whole process table
+
+
+def process_table() -> Optional[list[PsRow]]:
+    """Every process on the machine as `ps -A` gives it, for MACHINE's top unleased processes (fathers#203): pid,
+    parent pid, cpu %, rss KB and the command's base name; None when `ps` fails. Presentation, like a holder's
+    directory: no tool owns the machine's process table. In fixture mode DIR/host.json's `processes`
+    (`[[pid, ppid, cpu, rss_kb, name], ...]`), None without it; a malformed row is skipped."""
+    root = fixtures()
+    if root is not None:
+        try:
+            found: Any = json.loads((root / "host.json").read_text(encoding="utf-8")).get("processes")
+        except (OSError, ValueError, AttributeError):
+            return None
+        if not isinstance(found, list):
+            return None
+        rows: list[PsRow] = []
+        for row in cast(list[Any], found):
+            with contextlib.suppress(TypeError, ValueError):
+                pid, ppid, cpu, rss, name = cast(list[Any], row)
+                rows.append((int(pid), int(ppid), float(cpu), int(rss), str(name)))
+        return rows
+    try:
+        result = subprocess.run(["ps", "-A", "-o", "pid=,ppid=,pcpu=,rss=,comm="], capture_output=True, text=True,
+                                timeout=PROCESS_TIMEOUT, stdin=subprocess.DEVNULL, env=dict(os.environ, LC_ALL="C"))
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0:
+        return None
+    rows = []
+    own = os.getpid()
+    for line in result.stdout.splitlines():
+        parts = line.split(None, 4)
+        if len(parts) < 5:
+            continue
+        try:
+            pid, ppid, cpu, rss = int(parts[0]), int(parts[1]), float(parts[2]), int(parts[3])
+        except ValueError:
+            continue
+        name = os.path.basename(parts[4].strip()) or parts[4].strip()
+        if ppid == own and name == "ps":  # this very look
+            continue
+        rows.append((pid, ppid, cpu, rss, name))
+    return rows
 
 
 DISCOVERY_EVERY = 60.0  # seconds between capability checks of a tool
