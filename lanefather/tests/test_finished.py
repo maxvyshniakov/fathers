@@ -12,7 +12,7 @@ from typing import Any
 import unittest
 import unittest.mock
 
-from support import TWO_FINDINGS, LaneCase, project, template_repository
+from support import TWO_FINDINGS, LaneCase, close_process, project, template_repository
 
 
 class FinishedLaneTests(LaneCase):
@@ -244,14 +244,7 @@ class FinishedLaneTests(LaneCase):
                                   "scratch-holder"], cwd=scratch, stdout=subprocess.PIPE, text=True,
                                  start_new_session=True)
 
-        def cleanup_child() -> None:
-            if child.poll() is None:
-                child.kill()
-            child.wait()
-            if child.stdout is not None:
-                child.stdout.close()
-
-        self.addCleanup(cleanup_child)
+        self.addCleanup(close_process, child)
         assert child.stdout is not None
         self.assertEqual(child.stdout.readline().strip(), "ready")
         output = self.lane("done", "a", ok=False)

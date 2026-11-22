@@ -11,7 +11,7 @@ import time
 from typing import Any
 import unittest
 
-from support import LaneCase
+from support import LaneCase, close_process
 
 from lanefather import results
 
@@ -218,14 +218,7 @@ class ClearedPostMergeTests(LaneCase):
                                  env={**self.env, "FIXTURE_HOLD": f"recheck-a:{hold}"}, stdout=subprocess.PIPE,
                                  stderr=subprocess.STDOUT, text=True)
 
-        def cleanup_first() -> None:
-            if first.poll() is None:
-                first.kill()
-                first.wait()
-            if first.stdout is not None:
-                first.stdout.close()
-
-        self.addCleanup(cleanup_first)
+        self.addCleanup(close_process, first)
         self.addCleanup(hold.touch)
         started = pathlib.Path(f"{hold}.started")
         deadline = time.monotonic() + 60

@@ -80,6 +80,9 @@ def smoke_checkout(common: str, merge: str) -> Generator[str]:
             handle.close()
             index += 1
             continue
+        except BaseException:
+            handle.close()
+            raise
         if path in listed or not os.path.exists(path):
             break
         # A directory that is not a worktree is someone else's: leave it.

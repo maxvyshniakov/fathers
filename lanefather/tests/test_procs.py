@@ -11,7 +11,7 @@ from typing import Any
 import unittest
 import unittest.mock
 
-from support import LaneCase
+from support import LaneCase, close_process
 
 from lanefather import config, procs, slots
 from lanefather.procs import SlotfatherSource
@@ -228,7 +228,7 @@ class DoneWhileHelpersComeAndGoTests(LaneCase):
              "while True: subprocess.Popen(['true']).wait()"],
             cwd=elsewhere, stdout=subprocess.PIPE, text=True, start_new_session=True)
         assert churn.stdout is not None
-        self.addCleanup(lambda: (churn.kill(), churn.wait(), churn.stdout and churn.stdout.close()))
+        self.addCleanup(close_process, churn)
         self.assertEqual(churn.stdout.readline().strip(), "ready")
         output = self.lane("done", "a", process=False)
         self.assertIn("Lane a done", output)

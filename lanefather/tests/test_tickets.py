@@ -21,7 +21,8 @@ if fail and fail in " ".join(args):
     print("HTTP 502: Bad Gateway (https://api.github.com/graphql)", file=sys.stderr)
     sys.exit(1)
 path = os.environ["FAKE_TICKETS_STATE"]
-state = json.load(open(path))
+with open(path) as handle:
+    state = json.load(handle)
 issue = lambda number: state["issues"].setdefault(number, {"labels": [], "comments": []})
 if args[:2] == ["label", "create"]:
     if args[2] in state["labels"]:
@@ -48,7 +49,8 @@ elif args[:2] == ["issue", "view"]:
     print(json.dumps({"comments": issue(args[2])["comments"]}))
 else:
     sys.exit(2)
-json.dump(state, open(path, "w"))
+with open(path, "w") as handle:
+    json.dump(state, handle)
 '''
 
 ALL_ON = """

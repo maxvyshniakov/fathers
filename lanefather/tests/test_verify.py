@@ -13,7 +13,7 @@ from typing import Any
 import unittest
 import unittest.mock
 
-from support import FAKE_PLAN, FAKE_VERIFY, LaneCase
+from support import FAKE_PLAN, FAKE_VERIFY, LaneCase, close_process
 
 PACKAGE_DIR = pathlib.Path(__file__).resolve().parent.parent / "lanefather"
 
@@ -296,16 +296,16 @@ class VerifyProgressHeartbeatTests(LaneCase):
             '    sys.stdout.write(check_log.read_text())',
             '    with open(check_log, "w") as out:\n'
             '        if script.exists():\n'
-            '            proc = subprocess.Popen(["bash", str(script)], cwd=root, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)\n'
-            '            assert proc.stdout is not None\n'
-            '            while True:\n'
-            '                ch = proc.stdout.read(1)\n'
-            '                if not ch:\n'
-            '                    break\n'
-            '                text = ch.decode(errors="replace")\n'
-            '                out.write(text); out.flush()\n'
-            '                sys.stdout.write(text); sys.stdout.flush()\n'
-            '            code = proc.wait()\n'
+            '            with subprocess.Popen(["bash", str(script)], cwd=root, stdout=subprocess.PIPE, stderr=subprocess.STDOUT) as proc:\n'
+            '                assert proc.stdout is not None\n'
+            '                while True:\n'
+            '                    ch = proc.stdout.read(1)\n'
+            '                    if not ch:\n'
+            '                        break\n'
+            '                    text = ch.decode(errors="replace")\n'
+            '                    out.write(text); out.flush()\n'
+            '                    sys.stdout.write(text); sys.stdout.flush()\n'
+            '                code = proc.wait()\n'
             '            sys.stdout.write("\\n"); sys.stdout.flush()\n'
             '        else:\n'
             '            code = 0',
@@ -356,8 +356,8 @@ class VerifyProgressHeartbeatTests(LaneCase):
             [sys.executable, "-m", "lanefather", "check", "held"],
             cwd=wt, env=self.env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
         )
+        self.addCleanup(close_process, proc)
         self.addCleanup(hold.touch)
-        self.addCleanup(lambda: (proc.kill(), proc.wait()) if proc.poll() is None else None)
         deadline = time.monotonic() + 30
         while not started.exists():
             self.assertIsNone(proc.poll(), "lanefather check exited before held child started")
@@ -390,8 +390,8 @@ class VerifyProgressHeartbeatTests(LaneCase):
             [sys.executable, "-m", "lanefather", "check", "queued"],
             cwd=wt, env=self.env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
         )
+        self.addCleanup(close_process, proc)
         self.addCleanup(queue_hold.touch)
-        self.addCleanup(lambda: (proc.kill(), proc.wait()) if proc.poll() is None else None)
         waiting_marker = pathlib.Path(str(queue_hold) + ".waiting")
         deadline = time.monotonic() + 30
         while not waiting_marker.exists():

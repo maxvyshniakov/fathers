@@ -343,11 +343,14 @@ if args[:2] == ["issue", "create"] and os.environ.get("FAKE_GH_FAIL_CREATE"):
     sys.exit(1)
 if args[:2] == ["issue", "create"]:
     # Each created issue gets the next number after the lines logged so far.
-    print("https://github.com/fixture/straylight/issues/" + str(900 + len(open(os.environ["FAKE_GH_LOG"]).readlines())))
+    with open(os.environ["FAKE_GH_LOG"]) as log:
+        count = len(log.readlines())
+    print("https://github.com/fixture/straylight/issues/" + str(900 + count))
 elif "--json" in args and "title" in args[args.index("--json") + 1]:
     print(json.dumps({"title": "Fixture ticket title", "body": "The fixture ticket body."}))
 else:
-    print(json.dumps({"comments": json.loads(open(os.environ["FAKE_GH_COMMENTS"]).read())}))
+    with open(os.environ["FAKE_GH_COMMENTS"]) as handle:
+        print(json.dumps({"comments": json.loads(handle.read())}))
 '''
 
 # Stand-ins for the two reviewers (#570). codex answers `app-server` JSON-RPC with the weekly limit
@@ -469,7 +472,8 @@ with open(os.environ["FIXTURE_ROLE_LOG"], "a") as handle:
 if os.environ.get("FIXTURE_ROLE_EXIT"):
     print("role: cannot read the table", file=sys.stderr)
     sys.exit(int(os.environ["FIXTURE_ROLE_EXIT"]))
-table = tomllib.loads(open(os.environ["MASTACK_MODELS"]).read())
+with open(os.environ["MASTACK_MODELS"]) as handle:
+    table = tomllib.loads(handle.read())
 family = args[args.index("--implementer-family") + 1] if "--implementer-family" in args else None
 left = int(100 - float(os.environ.get("FIXTURE_CODEX_USED", "27")))
 reached = os.environ.get("FIXTURE_CODEX_REACHED") or None
@@ -678,58 +682,70 @@ def run_in_process(argv: list[str], cwd: Any, env: dict[str, str], timeout: floa
     def expired(_signum: int, _frame: Any) -> None:
         raise InProcessTimeout(f"lanefather {' '.join(argv)} ran longer than {timeout:g} s")
 
-    previous_alarm = signal.signal(signal.SIGALRM, expired)
-    signal.setitimer(signal.ITIMER_REAL, timeout)
-    outputs = [tempfile.TemporaryFile(), tempfile.TemporaryFile()]  # noqa: SIM115 - closed after the run
-    saved_fds = [os.dup(1), os.dup(2)]
-    sys.stdout.flush()
-    sys.stderr.flush()
-    code = 1
-    try:
-        os.environ.clear()
-        os.environ.update(env)
-        os.chdir(cwd)
-        os.dup2(outputs[0].fileno(), 1)
-        os.dup2(outputs[1].fileno(), 2)
-        config.use(None)
-        claims._head_kinds.clear()  # pyright: ignore[reportPrivateUsage]
-        try:
-            code = cli.main(argv)
-        except SystemExit as error:
-            if isinstance(error.code, str):
-                print(error.code, file=sys.stderr)  # as the interpreter prints a string exit code
-            code = error.code if isinstance(error.code, int) else 0 if error.code is None else 1
-        except InProcessTimeout:
-            raise
-        except Exception:  # a crash, as the process would print it
-            import traceback
-            traceback.print_exc()
-            code = 1
-    finally:
-        signal.setitimer(signal.ITIMER_REAL, 0)
-        signal.signal(signal.SIGALRM, previous_alarm)
+    with tempfile.TemporaryFile() as out_file, tempfile.TemporaryFile() as err_file:
+        outputs = (out_file, err_file)
+        previous_alarm = signal.signal(signal.SIGALRM, expired)
+        signal.setitimer(signal.ITIMER_REAL, timeout)
+        saved_fds = [os.dup(1), os.dup(2)]
         sys.stdout.flush()
         sys.stderr.flush()
-        os.dup2(saved_fds[0], 1)
-        os.dup2(saved_fds[1], 2)
-        for fd in saved_fds:
-            os.close(fd)
-        os.chdir(saved_cwd)
-        os.environ.clear()
-        os.environ.update(saved_env)
-        sys.path[:] = saved_path
-        # A project hook's sibling modules come from that test's scratch repository: none stays cached for the next.
-        for name in set(sys.modules) - saved_modules:
-            origin = str(getattr(sys.modules[name], "__file__", None) or "")
-            if origin and not origin.startswith((sys.prefix, sys.base_prefix, str(ROOT))):
-                del sys.modules[name]
-        config.use(saved_config)
-    texts: list[str] = []
-    for handle in outputs:
-        handle.seek(0)
-        texts.append(handle.read().decode(errors="replace"))
-        handle.close()
-    return code, texts[0] + texts[1]
+        code = 1
+        try:
+            os.environ.clear()
+            os.environ.update(env)
+            os.chdir(cwd)
+            os.dup2(outputs[0].fileno(), 1)
+            os.dup2(outputs[1].fileno(), 2)
+            config.use(None)
+            claims._head_kinds.clear()  # pyright: ignore[reportPrivateUsage]
+            try:
+                code = cli.main(argv)
+            except SystemExit as error:
+                if isinstance(error.code, str):
+                    print(error.code, file=sys.stderr)  # as the interpreter prints a string exit code
+                code = error.code if isinstance(error.code, int) else 0 if error.code is None else 1
+            except InProcessTimeout:
+                raise
+            except Exception:  # a crash, as the process would print it
+                import traceback
+                traceback.print_exc()
+                code = 1
+        finally:
+            signal.setitimer(signal.ITIMER_REAL, 0)
+            signal.signal(signal.SIGALRM, previous_alarm)
+            sys.stdout.flush()
+            sys.stderr.flush()
+            os.dup2(saved_fds[0], 1)
+            os.dup2(saved_fds[1], 2)
+            for fd in saved_fds:
+                os.close(fd)
+            os.chdir(saved_cwd)
+            os.environ.clear()
+            os.environ.update(saved_env)
+            sys.path[:] = saved_path
+            # A project hook's sibling modules come from that test's scratch repository: none stays cached for the next.
+            for name in set(sys.modules) - saved_modules:
+                origin = str(getattr(sys.modules[name], "__file__", None) or "")
+                if origin and not origin.startswith((sys.prefix, sys.base_prefix, str(ROOT))):
+                    del sys.modules[name]
+            config.use(saved_config)
+        texts: list[str] = []
+        for handle in outputs:
+            handle.seek(0)
+            texts.append(handle.read().decode(errors="replace"))
+        return code, texts[0] + texts[1]
+
+
+def close_process(process: subprocess.Popen[Any]) -> None:
+    """Stop (if still running), reap, and close all pipes of a test subprocess."""
+    try:
+        if process.poll() is None:
+            process.kill()
+        process.wait()
+    finally:
+        for stream in (process.stdin, process.stdout, process.stderr):
+            if stream is not None:
+                stream.close()
 
 
 class LaneCase(unittest.TestCase):
@@ -886,14 +902,7 @@ class LaneCase(unittest.TestCase):
                                    env={**self.env, "FIXTURE_HOLD": f"post-merge-{lane_id}:{hold}", **env},
                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
 
-        def cleanup_process() -> None:
-            if process.poll() is None:
-                process.kill()
-                process.wait()
-            if process.stdout is not None:
-                process.stdout.close()
-
-        self.addCleanup(cleanup_process)
+        self.addCleanup(close_process, process)
         self.addCleanup(hold.touch)
         return process
 
