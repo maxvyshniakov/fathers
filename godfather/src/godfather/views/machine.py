@@ -234,7 +234,8 @@ def unleased_high(model: Model) -> bool:
     advice: Any = model.get("advice")
     value: Any = cast(dict[str, Any], advice).get("unleased_load") if isinstance(advice, dict) else None
     cores: Any = model.get("cores")
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or not isinstance(cores, int) or cores <= 0:
+    if (isinstance(value, bool) or not isinstance(value, (int, float)) or isinstance(cores, bool)
+            or not isinstance(cores, int) or cores <= 0):
         return False
     return value >= cores * UNLEASED_SHARE
 
@@ -303,11 +304,14 @@ def unleased_lines(rows: Sequence[TreeRow], width: int) -> list[list[Part]]:
         header = [(clip(UNLEASED_TITLE, width), "dim")]
     lines = [header]
     for index, (_, cpu, _, name) in enumerate(rows):
-        label = clip(name, name_width)
-        parts: list[Part] = [(label + " " * (name_width - text_width(label)), "text")]
-        for (head, values), column in shown:
+        parts: list[Part] = []
+        if name_width > 0:
+            label = clip(name, name_width)
+            parts.append((label + " " * (name_width - text_width(label)), "text"))
+        for col_index, ((head, values), column) in enumerate(shown):
             style = "dim" if head == "pid" else "warn" if head == "cpu" and cpu >= 100 else "text"
-            parts.append((" " * gap + values[index].rjust(column), style))
+            prefix = "" if name_width == 0 and col_index == 0 else " " * gap
+            parts.append((prefix + values[index].rjust(column), style))
         lines.append(parts)
     return lines
 

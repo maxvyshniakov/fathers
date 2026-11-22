@@ -85,8 +85,13 @@ class TopTests(unittest.TestCase):
 
     def test_a_holder_without_a_usable_pid_hides_nothing(self) -> None:
         holders: list[dict[str, Any]] = [{"kind": "held", "pid": 1, "tree": []},
+                                         {"kind": "held", "pid": 4100},
                                          {"kind": "legacy", "pid": None, "tree": [[], [0, 0, 0, "x"]]}]
-        self.assertEqual(5, len(machine.unleased_top(TABLE, holders)))
+        cyclic = [*TABLE, (7001, 7002, 10.0, 100, "cyc-a"), (7002, 7001, 10.0, 100, "cyc-b")]
+        pids = [row[0] for row in machine.unleased_top(cyclic, holders, limit=10)]
+        self.assertNotIn(4100, pids, "a holder without a tree key still excludes itself")
+        self.assertIn(7001, pids, "a ppid cycle does not loop")
+        self.assertIn(7002, pids)
 
 
 class DrawTests(unittest.TestCase):
@@ -128,8 +133,10 @@ class DrawTests(unittest.TestCase):
         narrow = machine.unleased_lines(rows, 18)
         self.assertEqual(3, len(narrow[1]), "name, cpu and mem: the pid went")
         self.assertEqual("top unleased", narrow[0][0][0])
-        for line in [*wide, *narrow]:
+        for line in wide:
             self.assertLessEqual(sum(len(text) for text, _ in line), 40)
+        for line in narrow:
+            self.assertLessEqual(sum(len(text) for text, _ in line), 18)
         self.assertEqual("warn", wide[1][2][1], "a cpu over one core")
         self.assertEqual("text", wide[5][2][1], "90%: under one core")
 
@@ -154,8 +161,10 @@ class TableTests(unittest.TestCase):
 
     def test_ps_is_read_by_columns_with_the_commands_base_name(self) -> None:
         output = (f"    1     0   0.0  20000 /sbin/launchd\n"
-                  f"  812     1 312.4 2516582 /System/Library/Frameworks/Virtualization.framework/VirtualMachine\n"
+                  f"  812     1 312,4 2516582 /System/Library/Frameworks/Virtualization.framework/VirtualMachine\n"
                   f" 9120     1 148.0 1153434 /Applications/Google Chrome.app/Contents/Google Chrome Helper (Renderer)\n"
+                  f" 9200     2   5.0       0 kworker/u16:2\n"
+                  f" 9201     1   nan    1000 bad-float\n"
                   f"  bad\n"
                   f"99999 {os.getpid()}   0.0   900 ps\n")
         done = subprocess.CompletedProcess([], 0, output, "")
@@ -163,9 +172,10 @@ class TableTests(unittest.TestCase):
                                                                              return_value=done) as run:
             os.environ.pop("GODFATHER_FIXTURES", None)
             found = sources.process_table()
-        self.assertEqual(["ps", "-A", "-o", "pid=,ppid=,pcpu=,rss=,comm="], run.call_args.args[0])
+        self.assertEqual(["ps", "-A", "-ww", "-o", "pid=,ppid=,pcpu=,rss=,comm="], run.call_args.args[0])
         self.assertEqual([(1, 0, 0.0, 20000, "launchd"), (812, 1, 312.4, 2516582, "VirtualMachine"),
-                          (9120, 1, 148.0, 1153434, "Google Chrome Helper (Renderer)")], found)
+                          (9120, 1, 148.0, 1153434, "Google Chrome Helper (Renderer)"),
+                          (9200, 2, 5.0, 0, "kworker/u16:2")], found)
 
     def test_a_failed_ps_reads_none(self) -> None:
         with mock.patch.dict(os.environ, {}, clear=False):

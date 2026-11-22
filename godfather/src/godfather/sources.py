@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import math
 import os
 import shutil
 import subprocess
@@ -197,11 +198,14 @@ def process_table() -> Optional[list[PsRow]]:
         for row in cast(list[Any], found):
             with contextlib.suppress(TypeError, ValueError):
                 pid, ppid, cpu, rss, name = cast(list[Any], row)
-                rows.append((int(pid), int(ppid), float(cpu), int(rss), str(name)))
+                cpu_val = float(str(cpu).replace(",", "."))
+                if math.isfinite(cpu_val):
+                    rows.append((int(pid), int(ppid), cpu_val, int(rss), str(name)))
         return rows
     try:
-        result = subprocess.run(["ps", "-A", "-o", "pid=,ppid=,pcpu=,rss=,comm="], capture_output=True, text=True,
-                                timeout=PROCESS_TIMEOUT, stdin=subprocess.DEVNULL, env=dict(os.environ, LC_ALL="C"))
+        result = subprocess.run(["ps", "-A", "-ww", "-o", "pid=,ppid=,pcpu=,rss=,comm="], capture_output=True,
+                                text=True, encoding="utf-8", errors="replace", timeout=PROCESS_TIMEOUT,
+                                stdin=subprocess.DEVNULL, env=dict(os.environ, LC_ALL="C"))
     except (OSError, subprocess.TimeoutExpired):
         return None
     if result.returncode != 0:
@@ -213,10 +217,13 @@ def process_table() -> Optional[list[PsRow]]:
         if len(parts) < 5:
             continue
         try:
-            pid, ppid, cpu, rss = int(parts[0]), int(parts[1]), float(parts[2]), int(parts[3])
+            pid, ppid, cpu, rss = int(parts[0]), int(parts[1]), float(parts[2].replace(",", ".")), int(parts[3])
         except ValueError:
             continue
-        name = os.path.basename(parts[4].strip()) or parts[4].strip()
+        if not math.isfinite(cpu):
+            continue
+        raw = parts[4].strip()
+        name = (os.path.basename(raw) or raw) if raw.startswith(("/", "-/")) else raw
         if ppid == own and name == "ps":  # this very look
             continue
         rows.append((pid, ppid, cpu, rss, name))

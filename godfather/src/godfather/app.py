@@ -229,6 +229,8 @@ class Screen:
         """MACHINE's top unleased processes (fathers#203), on the model loader's thread: the machine's process table
         is read with `ps` only while unleased load is high, at most every UNLEASED_EVERY seconds, and the running
         leases' processes left out of it each load; None while the load is not high or `ps` failed."""
+        if self.closed:
+            return None
         if not _machine.unleased_high(model):
             self.table, self.table_at = None, -math.inf
             return None
