@@ -239,13 +239,13 @@ def draw_notice(canvas: Canvas, lines: list[str]) -> None:
 def render(canvas: Canvas, state: AppState, now: float, notice: Optional[list[str]] = None) -> None:
     """An app state drawn at its moment: the focus, the details' spinner while they load, the thumbs that flash, then
     the screen. The selected entry's lane is in the model already (the reducer joins it, state.settle())."""
-    from .. import pages as _pages_state
     from .. import state as _state
 
     found = _state.items(state)
     index, cwd, failure = state.selection.index, None, None
-    canvas.focus, canvas.fresh_events, canvas.glow = state.focus, state.fresh_events, _state.glowing(state, now)
-    event = _state.event_index(state) if state.shows == "events" and state.page == "overview" else None
+    ui = state.ui
+    canvas.focus, canvas.fresh_events, canvas.glow = ui.focus, state.fresh_events, _state.glowing(state, now)
+    event = _state.event_index(state) if ui.shows == "events" and ui.page == "overview" else None
     if found and event is None:
         item = found[index]
         known = state.details.get(_state.details_key(item, cast(_state.EntryId, state.selection.key)))
@@ -256,9 +256,9 @@ def render(canvas: Canvas, state: AppState, now: float, notice: Optional[list[st
     shown_notice = notice if notice is not None else (
         list(state.slotfather_notice) if state.slotfather_notice is not None else None
     )
-    dashboard_draw(canvas, state.model, index, state.overlay, state.refresh.error, cwd, state.scroll, shown_notice,
+    dashboard_draw(canvas, state.model, index, ui.overlay, state.refresh.error, cwd, state.scroll, shown_notice,
                    state.notice.text if state.notice else None, failure, state.news, state.read, state.moment,
-                   state.events_filter, _settings_view.context_of(state, canvas.width, canvas.height), event,
-                   state.tools, state.page,
-                   _pages_state.page_index(state, state.page) if state.page != "overview" else None,
+                   ui.events_filter, _settings_view.context_of(state, canvas.width, canvas.height), event,
+                   state.tools, ui.page,
+                   _state.page_index(state, ui.page) if ui.page != "overview" else None,
                    state.notice.style if state.notice else "bad")

@@ -19,7 +19,7 @@ from helpers import ROOT
 from test_lanes import STRAYLIGHT, Case, decoded as lanes_decoded, request
 from test_state import entry
 
-from godfather import pages, events, sources, state as state_module
+from godfather import events, sources, state as state_module
 from godfather.adapters import junkfather, lanefather
 from godfather.model import Processes
 
@@ -176,17 +176,17 @@ class PageTests(Case):
         return request("644-build-once", STRAYLIGHT, pid=10000, label="the-lease")
 
     def picked_proc(self, state: Any) -> Any:
-        rows = pages.page_rows(state, "processes")
-        index = pages.page_index(state, "processes")
+        rows = state_module.page_rows(state, "processes")
+        index = state_module.page_index(state, "processes")
         return rows[index]["key"] if index is not None else None
 
     def test_details_list_the_requests_processes_as_links(self) -> None:
         state = self.screen([self.lease(), entry(1)])
         self.assertRegex(self.text(), r"processes\s+storybook · running · ")  # its TTL left, ticking
         state = self.click(state, *self.at("storybook · running"))
-        self.assertEqual(("processes", ("entry", "j5e6f7a")), (state.page, self.picked_proc(state)))
+        self.assertEqual(("processes", ("entry", "j5e6f7a")), (state.ui.page, self.picked_proc(state)))
         state = self.keys(state, "esc")
-        self.assertEqual(("overview", 0), (state.page, state.selection.index))
+        self.assertEqual(("overview", 0), (state.ui.page, state.selection.index))
 
     def test_none_owned(self) -> None:
         self.screen([entry(1)])
@@ -200,12 +200,14 @@ class PageTests(Case):
         self.assertEqual(("entry", "j5e6f7a"), self.picked_proc(state))
         self.assertIn("PROCESS DETAILS", self.text())
         state = self.keys(state, "G")
-        self.assertEqual("resource", pages.page_rows(state, "processes")[pages.page_index(state,
-                                                                                                       "processes") or 0]["kind"])
+        self.assertEqual(
+            "resource",
+            state_module.page_rows(state, "processes")[state_module.page_index(state, "processes") or 0]["kind"],
+        )
         state = self.keys(state, "1")
-        self.assertEqual("overview", state.page)
+        self.assertEqual("overview", state.ui.page)
         state = self.click(state, *self.at("3 procs"))
-        self.assertEqual("processes", state.page)
+        self.assertEqual("processes", state.ui.page)
 
     def test_summary_separates_resources_excludes_dead_and_drops_resources_first(self) -> None:
         raw = snapshot()
@@ -265,7 +267,7 @@ class PageTests(Case):
         self.assertIn("extend ttl · a / enter", screen)
         self.assertIn("a actions", screen.splitlines()[-1])
         opened = self.click(state, *self.at("a actions"))
-        self.assertEqual("actions", getattr(opened.overlay, "kind", None))
+        self.assertEqual("actions", getattr(opened.ui.overlay, "kind", None))
         self.assertIn("ACTIONS", self.text())
         # Live unowned process: shows reap and `a actions`
         state = self.draw(dataclasses.replace(state, picked={"processes": ("pid", 88123, "Tue Nov  4 08:29:00 2026")}))
@@ -304,7 +306,7 @@ class PageTests(Case):
 
     def test_the_separator_is_skipped_and_unowned_rows_show_why(self) -> None:
         state = self.keys(self.screen([entry(1)]), "3")
-        rows = pages.page_rows(state, "processes")
+        rows = state_module.page_rows(state, "processes")
         keys = [row.get("key") for row in rows if row.get("key")]
         state = dataclasses.replace(state, picked={"processes": keys[4]})
         state = self.keys(state, "j")
@@ -317,13 +319,13 @@ class PageTests(Case):
         self.assertEqual((STRAYLIGHT, "710-speech-paste-phase"), self.picked(state))
         self.assertIn("vite dev · running · ", self.text())
         state = self.click(state, *self.at("vite dev · running"))
-        self.assertEqual(("processes", ("entry", "j3f9a1c")), (state.page, self.picked_proc(state)))
+        self.assertEqual(("processes", ("entry", "j3f9a1c")), (state.ui.page, self.picked_proc(state)))
         state = self.click(state, *self.at("710-speech-paste-phase · Straylight"))
-        self.assertEqual("lanes", state.page)
+        self.assertEqual("lanes", state.ui.page)
         state = self.keys(state, "esc")
-        self.assertEqual("processes", state.page, "Esc goes back where the link came from")
+        self.assertEqual("processes", state.ui.page, "Esc goes back where the link came from")
         state = self.keys(state, "esc")
-        self.assertEqual("lanes", state.page)
+        self.assertEqual("lanes", state.ui.page)
 
     def test_no_ttl_entry_renders_dash_in_processes_table_details_and_links(self) -> None:
         sentinel = 100 * 365 * 86400.0
@@ -359,7 +361,7 @@ class PageTests(Case):
     def test_absent_and_unsupported(self) -> None:
         self.tools = {name: tool for name, tool in self.tools.items() if name != "junkfather"}
         state = self.keys(self.screen([self.lease()]), "3")
-        self.assertEqual("overview", state.page)
+        self.assertEqual("overview", state.ui.page)
         self.assertNotRegex(self.text(), r"processes\s+(none owned|storybook)")
         self.assertNotIn("3 procs", self.text())
         self.tools["junkfather"] = state_module.Tool("junkfather", "unsupported", "junkfather 0.1.0: no dashboard "

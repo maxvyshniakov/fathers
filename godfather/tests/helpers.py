@@ -143,9 +143,24 @@ def drawn_state(canvas: Any, model: dict[str, Any] | None = None, selected: int 
     """An app state with `selected` selected in `model`, over the frame `canvas` drew."""
     import dataclasses
 
+    events = importlib.import_module("godfather.events")
     state = importlib.import_module("godfather.state")
     found = state.move(state.AppState(model=model), selected)
-    return dataclasses.replace(found, frame=frame_of(canvas), **fields)
+    ui = fields.pop("ui", None)
+    focus = fields.pop("focus", None)
+    shows = fields.pop("shows", "")
+    page = fields.pop("page", "overview")
+    came_from = fields.pop("came_from", ())
+    modal = fields.pop("modal", fields.pop("overlay", None))
+    events_filter = fields.pop("events_filter", fields.pop("filter", events.Filter()))
+    if ui is None:
+        screen = (
+            state.OverviewScreen(focus or "requests", shows)
+            if page == "overview"
+            else state.PageScreen(page, focus or "", came_from)
+        )
+        ui = state.UiState(screen, modal, events_filter)
+    return dataclasses.replace(found, frame=frame_of(canvas), ui=ui, **fields)
 
 
 def mouse(canvas: Any, event: tuple[str, int, int, int, bool], scroll: dict[str, int], selected: int = 0,

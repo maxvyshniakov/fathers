@@ -544,7 +544,7 @@ class FilterReducerTests(unittest.TestCase):
         canvas.tables["events"] = dict(x=0, y=0, width=90, height=20, top=2, visible=16, count=6, offset=0,
                                        base=None, row_items=None)
         state = dataclasses.replace(tool.AppState(model=model), frame=frame_of(canvas), scroll={"events": scroll},
-                                    focus=focus)
+                                    ui=tool.UiState(tool.OverviewScreen(focus)))
         return tool.follow_events(state, model["events"])
 
     def keys(self, state: Any, *keys: str) -> Any:
@@ -557,12 +557,12 @@ class FilterReducerTests(unittest.TestCase):
         seen: list[Any] = []
         for _ in range(4):
             state = self.keys(state, "f")
-            seen.append(state.events_filter.source)
+            seen.append(state.ui.events_filter.source)
         self.assertEqual(["lanefather", "junkfather", "all", "slotfather"], seen, "from SLOTS LOG, the default")
         focused = self.state(focus="events")
-        self.assertEqual("all", self.keys(focused, "left").events_filter.source, "← back, around")
-        self.assertEqual("lanefather", self.keys(focused, "right").events_filter.source)
-        self.assertIsNone(self.keys(self.state(), "right").events_filter.source, "→ with QUEUE focused: nothing")
+        self.assertEqual("all", self.keys(focused, "left").ui.events_filter.source, "← back, around")
+        self.assertEqual("lanefather", self.keys(focused, "right").ui.events_filter.source)
+        self.assertIsNone(self.keys(self.state(), "right").ui.events_filter.source, "→ with QUEUE focused: nothing")
 
     def test_a_log_switch_flashes_the_arrow_on_its_side_as_a_scroll_flashes_the_thumb(self) -> None:
         """fathers#165: the scrollbar's flash (state.glow, SCROLL_GLOW), one per arrow, lit by the key that switched."""
@@ -587,37 +587,37 @@ class FilterReducerTests(unittest.TestCase):
         state = self.state()
         row, start, _ = state.frame.switch
         state, _ = self.tool.reduce(state, self.tool.Mouse(0, start + 2, row, True), 0.0)
-        self.assertEqual(("lanefather", "events"), (state.events_filter.source, state.focus))
+        self.assertEqual(("lanefather", "events"), (state.ui.events_filter.source, state.ui.focus))
 
     def test_r_shows_every_event_as_logged_and_back(self) -> None:
         state = self.keys(self.state(), "r")
-        self.assertTrue(state.events_filter.raw)
-        self.assertFalse(self.keys(state, "r").events_filter.raw)
+        self.assertTrue(state.ui.events_filter.raw)
+        self.assertFalse(self.keys(state, "r").ui.events_filter.raw)
 
     def test_slash_types_into_the_field_enter_keeps_it_and_esc_clears_it(self) -> None:
         state = self.keys(self.state(), "/")
-        self.assertTrue(state.events_filter.editing)
-        self.assertEqual("filter", self.tool.mode(state))
+        self.assertTrue(state.ui.events_filter.editing)
+        self.assertEqual(self.tool.Mode.FILTER, self.tool.mode_of(state))
         state = self.keys(state, "7", "1", "q", "\x7f", "0")
-        self.assertEqual("710", state.events_filter.text, "q types, it does not quit; backspace deletes")
+        self.assertEqual("710", state.ui.events_filter.text, "q types, it does not quit; backspace deletes")
         state = self.keys(state, "\r")
-        self.assertEqual(("710", False), (state.events_filter.text, state.events_filter.editing))
+        self.assertEqual(("710", False), (state.ui.events_filter.text, state.ui.events_filter.editing))
         state = self.keys(state, "f", "/", "esc")
-        self.assertEqual(self.tool.Filter("lanefather"), state.events_filter, "esc clears the text, not the log")
+        self.assertEqual(self.tool.Filter("lanefather"), state.ui.events_filter, "esc clears the text, not the log")
 
     def test_esc_clears_a_filter_enter_kept(self) -> None:
         state = self.keys(self.state(), "f", "/", "7", "\r")
-        self.assertEqual(self.tool.Filter("lanefather", "7"), state.events_filter)
+        self.assertEqual(self.tool.Filter("lanefather", "7"), state.ui.events_filter)
         state = self.keys(state, "esc")
-        self.assertEqual(self.tool.Filter("lanefather"), state.events_filter, "the text goes, the log stays")
+        self.assertEqual(self.tool.Filter("lanefather"), state.ui.events_filter, "the text goes, the log stays")
 
     def test_typed_text_stays_as_typed_on_another_layout(self) -> None:
         state = self.keys(self.state(), "/", "й")
-        self.assertEqual("й", state.events_filter.text)
+        self.assertEqual("й", state.ui.events_filter.text)
 
     def test_f_and_slash_do_nothing_where_events_is_not_drawn(self) -> None:
         state = dataclasses.replace(self.state(), frame=self.tool.Frame())
-        self.assertEqual(self.tool.Filter(), self.keys(state, "f", "/", "r").events_filter)
+        self.assertEqual(self.tool.Filter(), self.keys(state, "f", "/", "r").ui.events_filter)
 
     def test_clicks_and_footer_hints_exit_filter_editing_cleanly(self) -> None:
         """fathers#212: clicking a footer hint or outside the filter field while editing exits filter edit mode
@@ -629,35 +629,35 @@ class FilterReducerTests(unittest.TestCase):
         canvas.tables["details"] = dict(x=90, y=0, width=66, height=20, top=2, visible=16, count=4, offset=0)
         base = dataclasses.replace(base, frame=frame_of(canvas))
         editing = self.keys(base, "/", "7", "1")
-        self.assertEqual((True, "71", "filter"),
-                         (editing.events_filter.editing, editing.events_filter.text, self.tool.mode(editing)))
+        self.assertEqual((True, "71", self.tool.Mode.FILTER),
+                         (editing.ui.events_filter.editing, editing.ui.events_filter.text, self.tool.mode_of(editing)))
 
         # Clicking a footer hint (`? help`, `s settings`, `q quit`, `tab panel`) exits filter editing and runs the hint.
         row, start, _, _ = next(hint for hint in editing.frame.hints if hint[3] == "?")
         helped, _ = self.tool.reduce(editing, self.tool.Mouse(0, start, row, True), 0.0)
         self.assertEqual((False, "71", "help"),
-                         (helped.events_filter.editing, helped.events_filter.text, helped.overlay.kind))
+                         (helped.ui.events_filter.editing, helped.ui.events_filter.text, helped.ui.overlay.kind))
 
         row, start, _, _ = next(hint for hint in editing.frame.hints if hint[3] == "q")
         quitting, effects = self.tool.reduce(editing, self.tool.Mouse(0, start, row, True), 0.0)
-        self.assertFalse(quitting.events_filter.editing)
-        self.assertEqual("71", quitting.events_filter.text)
+        self.assertFalse(quitting.ui.events_filter.editing)
+        self.assertEqual("71", quitting.ui.events_filter.text)
         self.assertIn(self.tool.QUIT, effects)
 
         # Clicking a panel or row exits filter editing and allows normal hotkeys afterwards.
         details = editing.frame.tables["details"]
         clicked, _ = self.tool.reduce(editing, self.tool.Mouse(0, details["x"] + 2, details["y"] + 2, True), 0.0)
-        self.assertEqual((False, "71", "details", "panel"),
-                         (clicked.events_filter.editing, clicked.events_filter.text, clicked.focus,
-                          self.tool.mode(clicked)))
+        self.assertEqual((False, "71", "details", self.tool.Mode.OVERVIEW_DETAILS),
+                         (clicked.ui.events_filter.editing, clicked.ui.events_filter.text, clicked.ui.focus,
+                          self.tool.mode_of(clicked)))
         after_q, effects = self.tool.reduce(clicked, self.tool.Key("q"), 0.0)
-        self.assertEqual("71", after_q.events_filter.text)
+        self.assertEqual("71", after_q.ui.events_filter.text)
         self.assertIn(self.tool.QUIT, effects)
 
     def test_new_rows_count_only_what_the_log_lets_through_and_a_switch_keeps_the_pin(self) -> None:
         rows = rows_of(mixed(), TAGS)
         state = self.keys(self.state(rows[:2], scroll=1), "f")  # LANES LOG, from its top (fathers#88 review 8)
-        self.assertEqual(("lanefather", None), (state.events_filter.source, state.scroll.get("events")))
+        self.assertEqual(("lanefather", None), (state.ui.events_filter.source, state.scroll.get("events")))
         state = dataclasses.replace(state, scroll={**state.scroll, "events": 1})  # then scrolled down
         later = rows_of(mixed() + [logged("lane.landed", NOW + dt.timedelta(seconds=5), source="lanefather",
                                           ident="710", onto="main"),

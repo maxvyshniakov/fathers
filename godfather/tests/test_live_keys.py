@@ -16,7 +16,7 @@ from godfather import tui
 
 class SettingsKeyTests(LiveCase):
     def test_hotkeys_translate_and_typed_values_stay_as_typed(self) -> None:
-        """Keys reach Settings through the mode table, which translates them once (modes.press())."""
+        """Keys reach Settings through the mode table, which translates them once (reducer.press())."""
         from test_settings import SAFETY, INTERVAL, Clock, Settings
 
         with mock.patch.dict(os.environ, self.fake.environ()):
@@ -36,7 +36,7 @@ class SettingsKeyTests(LiveCase):
             settings.select(SAFETY)
             self.assertIn("load-model", settings.key("в"), "в is d: reset the selected setting")
             settings.key("ы")
-            self.assertIsNone(settings.state.overlay, "ы is s: close")
+            self.assertIsNone(settings.state.ui.overlay, "ы is s: close")
 
 
 class TerminalTests(LiveCase):

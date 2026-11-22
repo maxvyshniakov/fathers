@@ -199,6 +199,13 @@ Versions and release rules: [README.md](README.md#versions).
 
 ### Fixed
 
+- Shrinking the terminal under 83 columns while typing an `EVENTS` `/` filter now closes the filter box so `q` and
+  other hotkeys work instead of typing into the hidden field; pressing `/` and then Esc on an empty filter keeps
+  `EVENTS`' scroll offset, row selection and new-event count; clicking `q` in the main footer while typing a park
+  reason cancels the dialog instead of typing `q`; Russian hotkeys (`ы`, `й`) close or quit a small Settings window
+  even when a numeric field was being edited before the resize; Esc on a page skips intermediate pages in the link
+  history whose tool has since left PATH; and when a page's tool disappears, returning to the overview also closes any
+  open row action menu, reason prompt or confirmation for that page (fathers#225).
 - Tool discovery and snapshot polling now share one thread-safe `ToolClient` per tool with single-flight `capabilities
   --json` discovery, generation-guarded snapshot updates, a locked `lanefather show` cache, and `AppState` notice
   delivery so background workers neither duplicate discovery calls nor race with the live renderer (fathers#215).

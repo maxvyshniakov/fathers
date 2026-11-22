@@ -147,13 +147,13 @@ class FlowTests(PageTests):
 
     def test_enter_opens_the_menu_and_a_reap_asks_first(self) -> None:
         state, _ = self.key(self.to_orphan(), "\r")
-        self.assertIsInstance(state.overlay, state_module.ActionMenu)
+        self.assertIsInstance(state.ui.overlay, state_module.ActionMenu)
         self.assertIn("ACTIONS", self.text())
         again, effects = self.key(state, "\r")
-        self.assertEqual((state.overlay, []), (again.overlay, effects), "a second Enter chooses nothing")
+        self.assertEqual((state.ui.overlay, []), (again.ui.overlay, effects), "a second Enter chooses nothing")
         state, _ = self.key(state, "j")
         state, effects = self.key(state, "\r")
-        self.assertIsInstance(state.overlay, state_module.Confirm)
+        self.assertIsInstance(state.ui.overlay, state_module.Confirm)
         self.assertIn("junkfather reap --id j7a8b9c '--reason=godfather: orphan'", self.text())
         self.assertIn("claude 4bceaaaf/a71c", self.text(), "the target's owner")
         self.assertEqual([], effects, "nothing runs before y")
@@ -163,7 +163,7 @@ class FlowTests(PageTests):
                 self.assertEqual([], [effect for effect in effects if effect.kind == "action"])
         after, effects = self.key(state, "y")
         self.assertEqual(["action"], [effect.kind for effect in effects])
-        self.assertIsNone(after.overlay)
+        self.assertIsNone(after.ui.overlay)
 
     def test_a_running_entry_extends_without_asking(self) -> None:
         state = self.keys(self.screen([entry(1)]), "3")
@@ -179,7 +179,7 @@ class FlowTests(PageTests):
         state = dataclasses.replace(state, picked={"processes": ("resource", "simulator",
                                                                  "9F8E7D6C-0000-4000-8000-0123456789AB")})
         state, _ = self.key(state, "\r")
-        self.assertIsNone(state.overlay)
+        self.assertIsNone(state.ui.overlay)
         self.assertIn("no actions", self.text())
 
     def test_park_asks_a_reason_and_an_empty_one_cancels(self) -> None:
@@ -188,9 +188,9 @@ class FlowTests(PageTests):
         state, _ = self.key(state, "\r")
         state, _ = self.key(state, "G")
         state, _ = self.key(state, "\r")
-        self.assertIsInstance(state.overlay, state_module.Reason)
+        self.assertIsInstance(state.ui.overlay, state_module.Reason)
         empty, effects = self.key(state, "\r")
-        self.assertEqual((None, []), (empty.overlay, effects))
+        self.assertEqual((None, []), (empty.ui.overlay, effects))
         for char in "q later":  # typed, never a hotkey
             state, _ = self.key(state, char)
         state, _ = self.key(state, "\r")
@@ -204,7 +204,7 @@ class FlowTests(PageTests):
         x, y = self.at("playwright s")
         state, _ = reducer.reduce(state, state_module.Mouse(2, x, y, True), 0.0)
         self.assertEqual(("entry", "j7a8b9c"), state.picked["processes"])
-        self.assertIsInstance(state.overlay, state_module.ActionMenu)
+        self.assertIsInstance(state.ui.overlay, state_module.ActionMenu)
 
     def test_a_done_action_says_so_and_polls_its_source(self) -> None:
         state, effects = reducer.reduce(self.screen(), state_module.ActionDone("junkfather", False, "no such entry"),
@@ -396,16 +396,23 @@ class ExecutorTests(FixtureCase):
         self.assertEqual("godfather/test", started[0]["env"]["GODFATHER_ACTOR"])
 
     def test_the_same_action_in_flight_is_not_started_twice(self) -> None:
-        from godfather import modes
-
-        state = state_module.AppState()
-        state, effects = modes.run_action(state, self.reap(), "", 0.0)
+        reap = self.reap()
+        confirm = state_module.AppState(
+            ui=state_module.UiState(state_module.PageScreen("processes"), state_module.Confirm(reap)),
+            tools={"junkfather": state_module.Tool("junkfather", "ok")},
+        )
+        state, effects = reducer.reduce(confirm, state_module.Key("y"), 0.0)
         self.assertEqual(["action"], [effect.kind for effect in effects])
-        again, effects = modes.run_action(state, self.reap(), "", 0.0)
+        self.assertIsNone(state.ui.modal)
+        again_confirm = dataclasses.replace(
+            state,
+            ui=dataclasses.replace(state.ui, modal=state_module.Confirm(reap)),
+        )
+        again, effects = reducer.reduce(again_confirm, state_module.Key("y"), 0.0)
         self.assertEqual([], effects)
         self.assertIn("already running", cast(Any, again.notice).text)
         done, _ = reducer.reduce(state, state_module.ActionDone("junkfather", True, "ok",
-                                                                state_module.action_key(self.reap())), 0.0)
+                                                                state_module.action_key(reap)), 0.0)
         self.assertEqual(frozenset(), done.acting)
 
 

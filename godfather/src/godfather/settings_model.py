@@ -2,7 +2,7 @@
 with `settings set` and `settings reset` (SPEC.md, Settings contract), after this dashboard's own section (Refresh
 every, Colour theme). Everything here is pure: the panel is a frozen value, every transition returns the new panel
 and the requests the app carries out (a read, a check, a write, a change of this dashboard's own settings), and
-their answers come back as events (state.py). The keys that drive it are in the mode table (modes.py).
+their answers come back as events (state.py). The keys that drive it are in the mode table (reducer.py).
 
 An arrow change shows `pending` and is saved once the keys have settled for SETTLE_SECONDS, at once on Enter, or
 first when the cursor moves away; a typed value is saved on Enter. Each pending or typed value is checked with

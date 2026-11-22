@@ -1,29 +1,32 @@
-"""The live view's state in one value, and the one reducer that changes it (fathers#90). Everything the screen shows
-but the tools' own data is here: the focus, the one overlay open (fathers#17), the selection by entry identity
-(fathers#21), each panel's scroll and its thumb's flash, the details' load states (fathers#23), and a notice kept
-apart from the refresh state (fathers#24). Keys and the mouse go through the mode table in modes.py; the loaders'
-results, the clock and each drawn frame come in as events too. reduce() returns the new state and the effects for
-the app to carry out (quit, load, apply a theme, save choices, a tool's settings call); it does no I/O of its own:
-app. Settings is a value too (settings_model.Panel): its reads, checks and writes are effects, and their answers
+"""The live view's state in one value (fathers#90, fathers#225). Everything the screen shows but the tools' own data
+is here: the UI state (`UiState`: the active screen and its valid focus, at most one open modal or overlay, and the
+committed EVENTS filter), the selection by entry identity (fathers#21), each panel's scroll and its thumb's flash, the
+details' load states (fathers#23), and a notice kept apart from the refresh state (fathers#24). Keys, the mouse, the
+loaders' results, the clock and each drawn frame go through `reducer.reduce()`, which returns the new state and the
+effects for the app to carry out (quit, load, apply a theme, save choices, a tool's settings call) and does no I/O of
+its own. Settings is a value too (`settings_model.Panel`): its reads, checks and writes are effects, and their answers
 events."""
 from __future__ import annotations
 
 import dataclasses
 import datetime
 from dataclasses import dataclass, field
-from typing import Any, Mapping, Optional, Union, cast
+from enum import StrEnum
+from typing import Any, Mapping, Optional, Sequence, Union, cast
 
 from . import actions as _actions
-from . import news as _news
-from . import settings_model as _settings
 from . import entries as _entries
 from . import events as _events_view
 from . import layout as _layout
+from . import news as _news
 from . import overlay_text as _overlays
+from . import settings_model as _settings
+from .adapters import junkfather as _junkfather
+from .adapters import lanefather as _lanefather
+from .model import Dashboard as Model
 from .overlay_text import OverlayView
 from .text import hint_at
 
-from .model import Dashboard as Model  # noqa: E402
 EntryId = tuple[Any, int]
 DetailsKey = tuple[EntryId, str]
 
@@ -31,31 +34,125 @@ DETAILS_FRESH = 5.0  # seconds a request's loaded details are shown as they are;
 DETAILS_RETRY = DETAILS_FRESH  # seconds before a failed load is tried again, its error shown meanwhile
 NOTICE_SECONDS = 4.0  # how long a notice (a Settings panel that would not open) stays in the footer
 SCROLL_GLOW = 0.28  # seconds a scrolled panel's thumb stays in the foreground after its last scroll: a flash
-PANELS = ("requests", "details", "events")  # the focusable panels
+PANELS = ("requests", "details", "events")  # the overview's focusable panels
 # The pages (fathers#85, fathers#86): `1` the overview, `2` Lanes, `3` Processes; each page's tool and its table
 PAGES = ("overview", "lanes", "processes")
 PAGE_TOOLS = {"lanes": "lanefather", "processes": "junkfather"}
 PAGE_TABLES = {"overview": "requests", "lanes": "lanes", "processes": "procs"}
+PAGE_SCROLLS = ("details", "events", "lanes", "procs")  # what a page shows: scrolled again from the top on a switch
+FILTER_MAX = 40  # characters EVENTS' text filter takes
+REASON_MAX = 120  # characters a park reason takes
 
 
-# The overlays: at most one is open (fathers#17), and each owns its scroll
+class Mode(StrEnum):
+    """The 14 input modes of the dashboard (fathers#22, fathers#225)."""
+    MAIN = "main"
+    OVERVIEW_EVENTS = "overview-events"
+    OVERVIEW_DETAILS = "overview-details"
+    PAGE = "page"
+    PAGE_PANEL = "page-panel"
+    FILTER = "filter"
+    ACTIONS = "actions"
+    REASON = "reason"
+    CONFIRM = "confirm"
+    HELP = "help"
+    NEWS = "news"
+    SETTINGS = "settings"
+    SETTINGS_EDIT = "settings-edit"
+    SETTINGS_SMALL = "settings-small"
+
+
+# Screens and modals: illegal states are unrepresentable (fathers#225)
+
+@dataclass(frozen=True)
+class OverviewScreen:
+    """The overview screen: `focus` is one of QUEUE, DETAILS or EVENTS; `shows` is whichever of QUEUE or EVENTS
+    DETAILS currently describes (always matching `focus` while QUEUE or EVENTS is focused)."""
+    focus: str = "requests"
+    shows: str = ""
+
+    def __post_init__(self) -> None:
+        if self.focus not in PANELS:
+            raise ValueError(f"invalid overview focus: {self.focus!r}")
+        if not self.shows:
+            object.__setattr__(self, "shows", self.focus if self.focus in ("requests", "events") else "requests")
+        if self.shows not in ("requests", "events"):
+            raise ValueError(f"invalid overview details target: {self.shows!r}")
+        if self.focus in ("requests", "events") and self.shows != self.focus:
+            raise ValueError(f"overview details cannot show {self.shows!r} while {self.focus!r} is focused")
+
+    @property
+    def page(self) -> str:
+        return "overview"
+
+    @property
+    def came_from(self) -> tuple[str, ...]:
+        return ()
+
+
+@dataclass(frozen=True)
+class PageScreen:
+    """A tool's page (`lanes` or `processes`): `focus` is its table, DETAILS or EVENTS; `came_from` the pages links
+    left on the way here."""
+    page: str
+    focus: str = ""
+    came_from: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.page not in PAGE_TOOLS:
+            raise ValueError(f"invalid page screen: {self.page!r}")
+        table = PAGE_TABLES[self.page]
+        if not self.focus:
+            object.__setattr__(self, "focus", table)
+        if self.focus not in (table, "details", "events"):
+            raise ValueError(f"invalid focus {self.focus!r} for page {self.page!r}")
+        if not isinstance(cast(object, self.came_from), tuple) or any(origin not in PAGES for origin in self.came_from):
+            raise ValueError(f"invalid came_from history: {self.came_from!r}")
+
+    @property
+    def shows(self) -> str:
+        return "requests"
+
+
+ScreenState = Union[OverviewScreen, PageScreen]
+
+
+@dataclass(frozen=True)
+class FilterEdit:
+    """EVENTS' text filter field open in its bottom border (fathers#84)."""
+    kind: str = "filter"
+
+    def __post_init__(self) -> None:
+        if self.kind != "filter":
+            raise ValueError(f"invalid FilterEdit kind: {self.kind!r}")
+
 
 @dataclass(frozen=True)
 class Help:
     scroll: int = 0
     kind: str = "help"
 
+    def __post_init__(self) -> None:
+        if self.scroll < 0 or self.kind != "help":
+            raise ValueError(f"invalid Help state: scroll={self.scroll!r}, kind={self.kind!r}")
+
 
 @dataclass(frozen=True)
-class Changelog:
+class News:
     """What's new (fathers#102): `tab` is its filter, 0 for every tool, then each tool with entries
     (overlays.filters()); closing it marks everything read."""
     tab: int = 0
     scroll: int = 0
     kind: str = "changelog"
 
+    def __post_init__(self) -> None:
+        if self.tab < 0 or self.scroll < 0 or self.kind not in ("changelog", "news"):
+            raise ValueError(f"invalid News state: tab={self.tab!r}, scroll={self.scroll!r}, kind={self.kind!r}")
 
-SettingsOverlay = _settings.Panel  # Settings (fathers#87): its sections, cursor, pending change and answers
+
+Changelog = News
+SettingsPanel = _settings.Panel  # Settings (fathers#87): its sections, cursor, pending change and answers
+SettingsOverlay = SettingsPanel
 
 
 @dataclass(frozen=True)
@@ -66,6 +163,19 @@ class ActionMenu:
     cursor: Optional[int] = None
     kind: str = "actions"
 
+    def __post_init__(self) -> None:
+        if not isinstance(cast(object, self.actions), tuple) or not self.actions or any(
+            not isinstance(cast(object, action), _actions.Action) for action in self.actions
+        ):
+            raise ValueError("ActionMenu requires a non-empty tuple of actions")
+        if self.cursor is not None and not 0 <= self.cursor < len(self.actions):
+            raise ValueError(f"ActionMenu cursor {self.cursor!r} out of range")
+        pages = {action.identity[0] for action in self.actions if action.identity}
+        if len(pages) > 1 or any(page not in PAGES for page in pages):
+            raise ValueError(f"ActionMenu actions have inconsistent pages: {pages!r}")
+        if self.kind != "actions":
+            raise ValueError(f"invalid ActionMenu kind: {self.kind!r}")
+
 
 @dataclass(frozen=True)
 class Reason:
@@ -73,6 +183,12 @@ class Reason:
     action: _actions.Action
     text: str = ""
     kind: str = "reason"
+
+    def __post_init__(self) -> None:
+        if not isinstance(cast(object, self.action), _actions.Action) or not self.action.reason:
+            raise ValueError("Reason requires an action with reason=True")
+        if len(self.text) > REASON_MAX or self.kind != "reason":
+            raise ValueError(f"invalid Reason state: len(text)={len(self.text)}, kind={self.kind!r}")
 
 
 @dataclass(frozen=True)
@@ -83,8 +199,108 @@ class Confirm:
     reason: str = ""
     kind: str = "confirm"
 
+    def __post_init__(self) -> None:
+        if not isinstance(cast(object, self.action), _actions.Action) or not self.action.confirm:
+            raise ValueError("Confirm requires an action with confirm=True")
+        if self.action.reason and not self.reason.strip():
+            raise ValueError("Confirm for an action with reason=True requires a non-empty reason")
+        if not self.action.reason and self.reason:
+            raise ValueError("Confirm for an action without reason cannot carry a reason")
+        if self.kind != "confirm":
+            raise ValueError(f"invalid Confirm kind: {self.kind!r}")
 
-Overlay = Union[Help, Changelog, SettingsOverlay, ActionMenu, Reason, Confirm]
+
+Overlay = Union[Help, News, SettingsPanel, ActionMenu, Reason, Confirm]
+Modal = Union[FilterEdit, Overlay]
+
+_UNSET: Any = object()
+_DEFAULT_SCREEN = OverviewScreen()
+
+
+@dataclass(frozen=True, init=False)
+class UiState:
+    """The consolidated UI state (fathers#225): the active screen (`OverviewScreen` or `PageScreen`), at most one
+    active modal (`FilterEdit`, `ActionMenu`, `Reason`, `Confirm`, `Help`, `News`, `SettingsPanel`), and EVENTS'
+    filter criteria."""
+    screen: ScreenState
+    modal: Optional[Modal]
+    filter: _events_view.Filter
+
+    def __init__(
+        self,
+        screen: ScreenState = _DEFAULT_SCREEN,
+        modal: Any = _UNSET,
+        filter: Any = _UNSET,
+        *,
+        overlay: Any = _UNSET,
+        events_filter: Any = _UNSET,
+    ) -> None:
+        if not isinstance(cast(object, screen), (OverviewScreen, PageScreen)):
+            raise ValueError(f"invalid screen: {screen!r}")
+        if modal is not _UNSET and overlay is not _UNSET and modal != overlay:
+            raise ValueError("cannot specify two simultaneous modals")
+        chosen = overlay if modal is _UNSET else modal
+        if chosen is _UNSET:
+            chosen = None
+        if chosen is not None and not isinstance(
+            chosen, (FilterEdit, ActionMenu, Reason, Confirm, Help, News, SettingsPanel)
+        ):
+            raise ValueError(f"invalid modal: {chosen!r}")
+        if filter is not _UNSET and events_filter is not _UNSET and filter != events_filter:
+            raise ValueError("cannot specify conflicting filter and events_filter")
+        chosen_filter = events_filter if filter is _UNSET else filter
+        if chosen_filter is _UNSET:
+            chosen_filter = _events_view.Filter()
+        if not isinstance(chosen_filter, _events_view.Filter):
+            raise ValueError(f"invalid events filter: {chosen_filter!r}")
+        if chosen_filter.editing:
+            if chosen is not None and not isinstance(chosen, FilterEdit):
+                raise ValueError("cannot combine filter editing with another modal")
+            if chosen is None:
+                raise ValueError("events_filter.editing=True requires modal=FilterEdit()")
+            chosen_filter = dataclasses.replace(chosen_filter, editing=False)
+        if isinstance(chosen, FilterEdit) and not isinstance(screen, OverviewScreen):
+            raise ValueError("FilterEdit is only valid on OverviewScreen")
+        if isinstance(chosen, (ActionMenu, Reason, Confirm)):
+            if screen.focus != PAGE_TABLES[screen.page]:
+                raise ValueError(
+                    f"action modal requires focus on {PAGE_TABLES[screen.page]!r}, not {screen.focus!r}"
+                )
+            actions = chosen.actions if isinstance(chosen, ActionMenu) else (chosen.action,)
+            for action in actions:
+                if action.identity and action.identity[0] != screen.page:
+                    raise ValueError(f"action for {action.identity[0]!r} cannot open on {screen.page!r}")
+        object.__setattr__(self, "screen", screen)
+        object.__setattr__(self, "modal", chosen)
+        object.__setattr__(self, "filter", chosen_filter)
+
+    @property
+    def page(self) -> str:
+        return self.screen.page
+
+    @property
+    def focus(self) -> str:
+        return self.screen.focus
+
+    @property
+    def shows(self) -> str:
+        return self.screen.shows
+
+    @property
+    def came_from(self) -> tuple[str, ...]:
+        return self.screen.came_from
+
+    @property
+    def overlay(self) -> Optional[Overlay]:
+        return None if self.modal is None or isinstance(self.modal, FilterEdit) else self.modal
+
+    @property
+    def editing_filter(self) -> bool:
+        return isinstance(self.modal, FilterEdit)
+
+    @property
+    def events_filter(self) -> _events_view.Filter:
+        return dataclasses.replace(self.filter, editing=True) if isinstance(self.modal, FilterEdit) else self.filter
 
 
 @dataclass(frozen=True)
@@ -180,8 +396,7 @@ class AppState:
     model: Optional[Model] = None
     refresh: Refresh = Refresh()
     notice: Optional[Notice] = None
-    focus: str = "requests"
-    overlay: Optional[Overlay] = None
+    ui: UiState = field(default_factory=UiState)
     selection: Selection = Selection()
     scroll: dict[str, int] = field(default_factory=lambda: cast(dict[str, int], {}))  # QUEUE, DETAILS, EVENTS
     glow: dict[str, float] = field(default_factory=lambda: cast(dict[str, float], {}))  # when each last scrolled or flashed
@@ -189,7 +404,6 @@ class AppState:
     colours: dict[EntryId, int] = field(default_factory=lambda: cast(dict[EntryId, int], {}))
     fresh_events: int = 0  # events the filter lets through that arrived while EVENTS was scrolled down
     newest: Any = None  # the newest shown event's identity
-    events_filter: _events_view.Filter = field(default_factory=_events_view.Filter)  # EVENTS' filters (fathers#84)
     interval: float = 1.0  # Refresh every
     theme: str = "auto"  # Colour theme
     news: Any = None  # news.News: what's new, once the tools answered
@@ -199,12 +413,43 @@ class AppState:
     # A table's selected row other than QUEUE's, by the row's identity: EVENTS' cursor (fathers#152; without one it
     # is on its newest row, and stays there as new ones arrive) and each page's row (fathers#85)
     picked: dict[str, Any] = field(default_factory=lambda: cast(dict[str, Any], {}))
-    shows: str = "requests"  # what DETAILS shows: the panel focused last of QUEUE and EVENTS (fathers#152)
     tools: dict[str, Tool] = field(default_factory=lambda: cast(dict[str, Tool], {}))  # Lanefather, Junkfather
-    page: str = "overview"  # the page shown (PAGES)
-    came_from: tuple[str, ...] = ()  # the pages a link left, Esc goes back through them
     acting: frozenset[tuple[Any, ...]] = frozenset()  # the actions in flight (action_key()), each started once
     slotfather_notice: Optional[tuple[str, ...]] = None  # notice lines when Slotfather is absent or unsupported
+
+    @property
+    def focus(self) -> str:
+        return self.ui.focus
+
+    @property
+    def shows(self) -> str:
+        return self.ui.shows
+
+    @property
+    def page(self) -> str:
+        return self.ui.page
+
+    @property
+    def came_from(self) -> tuple[str, ...]:
+        return self.ui.came_from
+
+    @property
+    def overlay(self) -> Optional[Overlay]:
+        return self.ui.overlay
+
+    @property
+    def modal(self) -> Optional[Modal]:
+        return self.ui.modal
+
+    @property
+    def events_filter(self) -> _events_view.Filter:
+        return self.ui.events_filter
+
+
+def with_modal(state: AppState, modal: Optional[Modal]) -> AppState:
+    if modal == state.ui.modal:
+        return state
+    return dataclasses.replace(state, ui=dataclasses.replace(state.ui, modal=modal))
 
 
 # Events
@@ -373,9 +618,9 @@ def details_key(item: dict[str, Any], identity: EntryId) -> DetailsKey:
     return identity, "request" if item.get("kind") == "waiting" else "lease"
 
 
-def overlay_box(state: AppState, overlay: Union[Help, Changelog]) -> OverlayView:
+def overlay_box(state: AppState, overlay: Union[Help, News]) -> OverlayView:
     """Where an overlay is on this screen and how much of it shows: the geometry its keys and the wheel use."""
-    tab = overlay.tab if isinstance(overlay, Changelog) else 0
+    tab = overlay.tab if isinstance(overlay, News) else 0
     return _overlays.overlay_view(overlay.kind, state.frame.width, state.frame.height, overlay.scroll, tab,
                                   state.news, state.read)[0]
 
@@ -387,28 +632,28 @@ def unread(state: AppState) -> bool:
 
 def news_loaded(state: AppState, news: Any) -> AppState:
     """New news: an open what's new keeps its tool filter by name (the filters are the tools with entries)."""
-    overlay = state.overlay
-    if isinstance(overlay, Changelog):
+    modal = state.ui.modal
+    if isinstance(modal, News):
         before = _overlays.filters(_overlays.shown_news(state.news))
-        tool = before[overlay.tab % len(before)]
+        tool_name = before[modal.tab % len(before)]
         after = _overlays.filters(_overlays.shown_news(news))
-        tab = after.index(tool) if tool in after else 0
-        if tab != overlay.tab:
-            overlay = Changelog(tab)
-    return dataclasses.replace(state, news=news, overlay=overlay)
+        tab = after.index(tool_name) if tool_name in after else 0
+        if tab != modal.tab:
+            modal = News(tab)
+    return dataclasses.replace(state, news=news, ui=dataclasses.replace(state.ui, modal=modal))
 
 
 def closed_news(before: AppState, state: AppState, quitting: bool = False) -> Result:
     """What's new closed, however (Esc, v, ?, a click outside, q while it is open): everything it showed is read,
     and saved."""
-    if isinstance(before.overlay, Changelog) and (quitting or not isinstance(state.overlay, Changelog)):
+    if isinstance(before.ui.modal, News) and (quitting or not isinstance(state.ui.modal, News)):
         read = _news.mark_read(state.news, state.read)
         if read != state.read:
             return dataclasses.replace(state, read=read), [SAVE_READ]
     return state, []
 
 
-# Transitions shared by the modes
+# Queries and transitions shared by the modes
 
 def move(state: AppState, index: int, by_key: bool = False,
          known: Optional[tuple[list[dict[str, Any]], list[EntryId]]] = None) -> AppState:
@@ -462,22 +707,22 @@ def offsets(state: AppState, overlay: bool = True) -> dict[str, int]:
     """Every scroll offset by panel name, the open overlay's too unless `overlay` is False: what the thumb's flash
     watches."""
     found = dict(state.scroll)
-    shown = state.overlay
-    if overlay and isinstance(shown, (Help, Changelog)):
+    shown = state.ui.overlay
+    if overlay and isinstance(shown, (Help, News)):
         found[shown.kind] = shown.scroll
-    elif overlay and isinstance(shown, SettingsOverlay):
+    elif overlay and isinstance(shown, SettingsPanel):
         found["settings"] = shown.offset
     return found
 
 
 def overlay_identity(state: AppState) -> tuple[Any, ...]:
     """Which overlay is open, and which tab or panel: one that opens or switches starts at its top unscrolled."""
-    shown = state.overlay
+    shown = state.ui.overlay
     if shown is None:
         return ()
-    if isinstance(shown, SettingsOverlay):
+    if isinstance(shown, SettingsPanel):
         return shown.kind, 0
-    return shown.kind, shown.tab if isinstance(shown, Changelog) else 0
+    return shown.kind, shown.tab if isinstance(shown, News) else 0
 
 
 def glowing(state: AppState, now: float) -> set[str]:
@@ -496,31 +741,38 @@ def follow_events(state: AppState, events: list[dict[str, Any]]) -> AppState:
     the same events as new ones arrive above them and counts those. Only the rows the filter lets through count
     (fathers#84)."""
     model = {"events": events, "sources": (state.model or {}).get("sources") or []}
-    ids = [event_id(event) for event in _events_view.shown_rows(model, state.events_filter)[::-1]]
+    ids = [event_id(event) for event in _events_view.shown_rows(model, state.ui.filter)[::-1]]
     arrived = ids.index(state.newest) if state.newest in ids else 0
     scroll, fresh = dict(state.scroll), 0
-    if scroll.get("events") and state.page == "overview":  # a page's strip is another list
+    if scroll.get("events") and state.ui.page == "overview":  # a page's strip is another list
         scroll["events"] += arrived
         fresh = state.fresh_events + arrived
     return dataclasses.replace(state, scroll=scroll, fresh_events=fresh, newest=ids[0] if ids else None)
 
 
-def filtered(state: AppState, events_filter: _events_view.Filter) -> AppState:
+_KEEP: Any = object()
+
+
+def filtered(state: AppState, events_filter: _events_view.Filter, modal: Any = _KEEP) -> AppState:
     """A filter changed: what EVENTS shows is another list, so the newest shown is found again and nothing counts as
-    new; one pinned to the newest stays pinned (fathers#84)."""
-    if events_filter == state.events_filter:
-        return state
-    rows = _events_view.shown_rows(state.model, events_filter)
+    new; one pinned to the newest stays pinned (fathers#84). Leaving FilterEdit without changing the filter criteria
+    preserves scroll, picked, and fresh_events (fathers#225)."""
+    clean = dataclasses.replace(events_filter, editing=False)
+    next_modal = state.ui.modal if modal is _KEEP else modal
+    current = state.ui.filter
+    ui = dataclasses.replace(state.ui, modal=next_modal, filter=clean)
+    if (clean.source, clean.text, clean.raw) == (current.source, current.text, current.raw):
+        return state if ui == state.ui else dataclasses.replace(state, ui=ui)
+    rows = _events_view.shown_rows(state.model, clean)
     newest = event_id(rows[-1]) if rows else None
     picked = {name: key for name, key in state.picked.items() if name != "events"}  # another list: its newest
     scroll = {name: offset for name, offset in state.scroll.items() if name != "events"}  # and the view with it
-    return dataclasses.replace(state, events_filter=events_filter, newest=newest, fresh_events=0, picked=picked,
-                               scroll=scroll)
+    return dataclasses.replace(state, ui=ui, newest=newest, fresh_events=0, picked=picked, scroll=scroll)
 
 
 def event_rows(state: AppState) -> list[dict[str, Any]]:
     """EVENTS' rows as drawn, newest first."""
-    return _events_view.newest_first(state.model, state.events_filter)
+    return _events_view.newest_first(state.model, state.ui.filter)
 
 
 def event_index(state: AppState, rows: Optional[list[dict[str, Any]]] = None) -> int:
@@ -536,7 +788,7 @@ def event_index(state: AppState, rows: Optional[list[dict[str, Any]]] = None) ->
 
 def selected_event(state: AppState) -> Optional[dict[str, Any]]:
     """The event or run DETAILS shows while EVENTS was focused last, None while it shows QUEUE's entry."""
-    if state.shows != "events" or state.model is None:
+    if state.ui.shows != "events" or state.model is None:
         return None
     rows = event_rows(state)
     return rows[event_index(state, rows)] if rows else None
@@ -572,6 +824,84 @@ def event_id(event: dict[str, Any]) -> Any:
     return event.get("key") or (event.get("when"), event.get("kind"), event.get("pid"), event.get("count"))
 
 
+# Pages and row actions (fathers#85, fathers#86, fathers#88)
+
+def tool(state: AppState, name: str) -> Tool:
+    """Another tool as the state last heard of it; absent until its first poll."""
+    return state.tools.get(name) or Tool(name)
+
+
+def selected_item(state: AppState) -> Optional[dict[str, Any]]:
+    found = items(state)
+    return found[min(state.selection.index, len(found) - 1)] if found else None
+
+
+def selected_cwd(state: AppState) -> Optional[str]:
+    """The selected request's holder directory, once its details loaded: the worktree join's fallback."""
+    item = selected_item(state)
+    if item is None or state.selection.key is None:
+        return None
+    known = state.details.get(details_key(item, state.selection.key))
+    return known.cwd if known is not None else None
+
+
+def page_rows(state: AppState, page: Optional[str] = None) -> Sequence[Mapping[str, Any]]:
+    """A page's table rows, from its tool's last good snapshot; a row without a `key` is not selectable."""
+    which = state.ui.page if page is None else page
+    if which == "lanes":
+        return _lanefather.page_rows(tool(state, "lanefather").snapshot)
+    if which == "processes":
+        return _junkfather.page_rows(tool(state, "junkfather").snapshot)
+    return []
+
+
+def page_index(state: AppState, page: Optional[str] = None,
+               rows: Optional[Sequence[Mapping[str, Any]]] = None) -> Optional[int]:
+    """The selected row of a page: the one picked while it is there, else the first selectable one."""
+    which = state.ui.page if page is None else page
+    rows = page_rows(state, which) if rows is None else rows
+    keys = [row.get("key") for row in rows]
+    picked = state.picked.get(which)
+    if picked is not None and picked in keys:
+        return keys.index(picked)
+    return next((index for index, key in enumerate(keys) if key is not None), None)
+
+
+def linked(state: AppState, page: str) -> Any:
+    """The row of `page` the selected request links to: its lane (fathers#85), its first owned process
+    (fathers#86); None where it has none."""
+    item = selected_item(state)
+    if item is None:
+        return None
+    lane = _lanefather.lane_of(item, tool(state, "lanefather").snapshot, selected_cwd(state))
+    if page == "lanes":
+        return lane["key"] if lane is not None else None
+    if page == "processes":  # its first owned entry (fathers#86)
+        owned = _junkfather.of_request(item, tool(state, "junkfather").snapshot, lane)
+        return owned[0]["key"] if owned else None
+    return None
+
+
+def applicable(state: AppState) -> list[_actions.Action]:
+    """The actions of the row the keys act on (fathers#88): QUEUE's selected request on the overview, a page's
+    selected row on a page; those its tool advertises and that apply to it now."""
+    page = state.ui.page
+    if page == "overview":
+        item = selected_item(state)
+        if item is None or state.model is None:
+            return []
+        uid = state.model.get("uid")
+        return _actions.for_request(item, cast(list[dict[str, Any]], state.model["waiters"]),
+                                    state.model.get("actions") or (), uid if isinstance(uid, int) else None)
+    index = page_index(state, page)
+    if index is None:
+        return []
+    if page == "processes":
+        return _actions.for_process(_junkfather.page_rows(tool(state, "junkfather").snapshot)[index],
+                                    tool(state, "junkfather").actions)
+    return _actions.for_lane(page_rows(state, page)[index], tool(state, "lanefather").actions)
+
+
 def settings_context(state: AppState) -> _settings.Context:
     return _settings.Context(state.interval, state.theme, state.model, state.refresh.error, state.frame.width,
                              state.frame.height)
@@ -589,28 +919,28 @@ def settings_result(state: AppState, panel: _settings.Panel, context: _settings.
         state = dataclasses.replace(state, interval=context.interval, theme=context.theme)
         effects.append(REMEMBER)
     context = settings_context(state)
-    overlay: Optional[Overlay] = panel
+    modal: Optional[Modal] = panel
     for request in requests:
         if request.kind in ("open", "read", "check", "set", "reset"):
             effects.append(Effect("settings", item=request))
         elif request.kind == "changed" and LOAD_MODEL not in effects:
             effects.append(LOAD_MODEL)
         elif request.kind == "close":
-            overlay = None
+            modal = None
             effects.append(REPAINT)
         elif request.kind == "quit":
             effects.append(QUIT)
-    if overlay is not None:
+    if modal is not None:
         panel, checks = _settings.wanted_checks(_settings.settle_focus(panel, context), context)
-        overlay = _settings.place(panel, context)
+        modal = _settings.place(panel, context)
         effects += [Effect("settings", item=request) for request in checks]
-    return dataclasses.replace(state, overlay=overlay), effects
+    return with_modal(state, modal), effects
 
 
 def settings_event(state: AppState, event: Event, now: float) -> Result:
     """An answer from a tool's settings CLI, or the loop's tick, while Settings is open."""
-    panel = state.overlay
-    if not isinstance(panel, SettingsOverlay):
+    panel = state.ui.modal
+    if not isinstance(panel, SettingsPanel):
         return state, []
     context = settings_context(state)
     requests: list[_settings.Request] = []
@@ -640,23 +970,34 @@ def settle(state: AppState, now: float) -> Result:
     if not state.scroll.get("events") and state.fresh_events:
         state = dataclasses.replace(state, fresh_events=0)
     # DETAILS follows the focused panel (fathers#152): QUEUE's entry or EVENTS' row, whichever was focused last; with
-    # EVENTS not drawn (one column under 83 columns or short), QUEUE's
-    shows = state.focus if state.focus in ("requests", "events") and state.page == "overview" else state.shows
-    if shows == "events" and state.frame.width and "events" not in state.frame.tables:
-        shows = "requests"
-    if shows != state.shows:
-        state = dataclasses.replace(state, shows=shows)
+    # EVENTS not drawn (one column under 83 columns or short), QUEUE's, and any open filter edit closes (fathers#225).
+    screen = state.ui.screen
+    modal = state.ui.modal
+    if isinstance(screen, OverviewScreen):
+        focus = screen.focus
+        shows = screen.focus if screen.focus in ("requests", "events") else screen.shows
+        if state.frame.width and "events" not in state.frame.tables:
+            if focus == "events":
+                focus = "requests"
+            shows = "requests"
+            if isinstance(modal, FilterEdit):
+                modal = None
+        if focus != screen.focus or shows != screen.shows or modal is not state.ui.modal:
+            state = dataclasses.replace(
+                state,
+                ui=dataclasses.replace(state.ui, screen=OverviewScreen(focus, shows), modal=modal),
+            )
     known = entries(state)
     found = known[0]
     state = move(state, resolve(state, known), known=known)
     if found:
         index = state.selection.index
         key = details_key(found[index], cast(EntryId, state.selection.key))
-        known = state.details.get(key)
-        if known is None or now - known.at >= (DETAILS_RETRY if known.error else DETAILS_FRESH):
+        loaded = state.details.get(key)
+        if loaded is None or now - loaded.at >= (DETAILS_RETRY if loaded.error else DETAILS_FRESH):
             effects.append(Effect("load-details", key, dict(found[index])))
-        if known is not None and known.lane is not None and found[index].get("lane") != known.lane:
-            state = join_lane(state, index, known.lane)
+        if loaded is not None and loaded.lane is not None and found[index].get("lane") != loaded.lane:
+            state = join_lane(state, index, loaded.lane)
     return state, effects
 
 

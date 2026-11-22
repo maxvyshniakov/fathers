@@ -1,5 +1,5 @@
 """The package's layers (fathers#141): data → layout → views → app. A module imports only from its own layer or one
-below it, so the reducer (state, modes) reads no view, and the views read the state they draw; one scroll clamp
+below it, so the reducer (state, reducer) reads no view, and the views read the state they draw; one scroll clamp
 (layout.clamp_scroll) and one hint lookup (text.hint_at)."""
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ LAYERS = {
     "data": ("keys", "theme", "version", "eventcheck", "sources", "events", "news", "entries", "adapters", "text",
              "actions", "model"),
     # where things go and the one state and its reducer: no canvas, no terminal
-    "layout": ("layout", "overlay_text", "settings_model", "state", "pages", "modes", "reducer"),
+    "layout": ("layout", "overlay_text", "settings_model", "state", "reducer"),
     # drawing: the canvas and terminal (tui), the shared widgets, the screens
     "views": ("tui", "widgets", "views"),
     "app": ("app", "__main__", "__init__"),
@@ -61,15 +61,15 @@ class LayerTests(unittest.TestCase):
                                          f"{module} ({ORDER[own]}) imports {target} ({layer_of(target)})")
 
     def test_no_function_imports_a_module_of_its_own_package_to_break_a_cycle(self) -> None:
-        """state.reduce imported modes inside a function (fathers#141): reducer.py imports both at its top."""
-        for name in ("state", "modes", "reducer"):
+        """state.reduce imported modes inside a function (fathers#141): reducer.py imports state at its top."""
+        for name in ("state", "reducer"):
             tree = ast.parse((PACKAGE / f"{name}.py").read_text())
             inner = [node for function in ast.walk(tree) if isinstance(function, ast.FunctionDef)
                      for node in ast.walk(function) if isinstance(node, ast.ImportFrom) and node.level]
             self.assertEqual([], [ast.unparse(node) for node in inner], name)
 
     def test_the_reducer_imports_no_view(self) -> None:
-        for name in ("state", "modes", "reducer", "settings_model"):
+        for name in ("state", "reducer", "settings_model"):
             with self.subTest(name):
                 self.assertFalse({target for target in imports(PACKAGE / f"{name}.py") if target.startswith("views")})
 

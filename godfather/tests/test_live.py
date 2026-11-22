@@ -58,10 +58,10 @@ def tabs(canvas: Any, key: str = "\t", presses: int = 3) -> list[str]:
     """The focus from QUEUE after each Tab (or Shift-Tab) through the reducer, over the frame `canvas` drew."""
     view = _view.current()
     state = drawn_state(canvas)
-    order = [state.focus]
+    order = [state.ui.focus]
     for _ in range(presses):
         state, _ = view.reduce(state, view.Key(key), 0.0)
-        order.append(state.focus)
+        order.append(state.ui.focus)
     return order
 
 
@@ -209,7 +209,7 @@ class FocusTests(unittest.TestCase):
         canvas.tables = {name: dict(view, x=view["x"], top=view["y"] + 2, visible=6, count=0, offset=0)
                          for name, view in canvas.tables.items()}
         for x, y, focus in ((50, 2, "details"), (70, 15, "events"), (5, 5, "requests")):
-            self.assertEqual(focus, tool().reduce(drawn_state(canvas), tool().Mouse(0, x, y, True), 0.0)[0].focus)
+            self.assertEqual(focus, view.reduce(drawn_state(canvas), view.Mouse(0, x, y, True), 0.0)[0].ui.focus)
 
     def test_scroll_keys_move_a_panel_and_its_thumb(self) -> None:
         view = tool()
@@ -307,7 +307,7 @@ class FocusRestsOnDrawnPanelsTests(unittest.TestCase):
             state = drawn_state(canvas, model if model["holders"] else None, 1, focus="details")
             for key in ("j", "k", "down", "page_down", "home"):
                 after, _ = view.reduce(state, view.Key(key), 0.0)
-                self.assertEqual((state.selection, "details"), (after.selection, after.focus),
+                self.assertEqual((state.selection, "details"), (after.selection, after.ui.focus),
                                  f"{key} is the panel's: QUEUE's selection stays")
 
     def test_tab_goes_by_columns_from_the_layout(self) -> None:
@@ -415,8 +415,8 @@ class FocusRestsOnDrawnPanelsTests(unittest.TestCase):
         self.assertEqual(["requests", "events", "requests", "events"], tabs(canvas))
         self.assertEqual("events", tabs(canvas, "back_tab")[1])
         state = drawn_state(canvas, focus="details")
-        self.assertEqual("requests", view.reduce(state, view.Key("\t"), 0.0)[0].focus, "a focus that lost its panel")
-        self.assertEqual("requests", view.reduce(state, view.Drawn(state.frame), 0.0)[0].focus,
+        self.assertEqual("requests", view.reduce(state, view.Key("\t"), 0.0)[0].ui.focus, "a focus that lost its panel")
+        self.assertEqual("requests", view.reduce(state, view.Drawn(state.frame), 0.0)[0].ui.focus,
                          "and a frame that no longer draws it gives the focus back to QUEUE")
 
 
@@ -528,7 +528,7 @@ class WhatsNewLayoutTests(unittest.TestCase):
         self.assertEqual("Godfather what's new?", footer[start:end])
         for x in (start, end - 1):
             state, _ = view.reduce(drawn_state(canvas), view.Mouse(0, x, row, True), 0.0)
-            self.assertEqual(view.Changelog(), state.overlay, "a click on what's new opens it")
+            self.assertEqual(view.Changelog(), state.ui.overlay, "a click on what's new opens it")
         canvas = view.Canvas(100, 30)
         view.dashboard_draw(canvas, None, overlay=view.Changelog())
         self.assertIn("WHAT'S NEW", canvas.render(False))
@@ -537,7 +537,7 @@ class WhatsNewLayoutTests(unittest.TestCase):
         state = drawn_state(canvas, overlay=view.Changelog())
 
         def after(event: Any) -> Any:
-            return view.reduce(state, event, 0.0)[0].overlay
+            return view.reduce(state, event, 0.0)[0].ui.overlay
 
         self.assertIsNone(after(view.Mouse(0, 0, 0, True)), "a click outside closes it")
         self.assertEqual(view.Changelog(), after(view.Mouse(0, info.x + 5, info.y + 3, True)), "one inside does not")

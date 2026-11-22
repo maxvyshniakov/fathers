@@ -153,7 +153,7 @@ class Settings:
 
     @property
     def panel(self) -> settings_model.Panel:
-        overlay = self.state.overlay
+        overlay = self.state.ui.overlay
         assert isinstance(overlay, settings_model.Panel), overlay
         return overlay
 
@@ -161,8 +161,7 @@ class Settings:
         return state_module.settings_context(self.state)
 
     def select(self, focus: tuple[str, str]) -> None:
-        self.state = dataclasses.replace(self.state, overlay=dataclasses.replace(self.panel, focus=focus,
-                                                                                 reveal=True))
+        self.state = state_module.with_modal(self.state, dataclasses.replace(self.panel, focus=focus, reveal=True))
 
     def geometry(self) -> settings_model.Geometry:
         return settings_model.geometry(self.panel, self.context())
@@ -374,9 +373,9 @@ class RenderTests(PanelCase):
         self.assertIn("esc close", settings.text(idle(), width=40, height=18).split("\n")[-2],
                       "a narrow footer keeps the way out")
         settings.click(0, 0, 65)
-        self.assertIsNotNone(settings.state.overlay, "the wheel outside does nothing")
+        self.assertIsNotNone(settings.state.ui.overlay, "the wheel outside does nothing")
         self.assertIn("repaint", settings.click(0, 0))
-        self.assertIsNone(settings.state.overlay, "a click outside closes the panel")
+        self.assertIsNone(settings.state.ui.overlay, "a click outside closes the panel")
         self.assertEqual([], self.writes(), "viewing settings saves nothing")
 
 
@@ -417,12 +416,12 @@ class KeyTests(PanelCase):
         self.assertEqual(3.5, self.saved_order()["safety"])
         settings.key("right")
         settings.key("esc")
-        self.assertIsNotNone(settings.state.overlay, "the first Esc cancels the pending change")
+        self.assertIsNotNone(settings.state.ui.overlay, "the first Esc cancels the pending change")
         self.settle(settings)
         self.assertEqual(3.5, self.saved_order()["safety"])
         self.assertIn("Change cancelled", settings.text(idle()))
         settings.key("esc")
-        self.assertIsNone(settings.state.overlay)
+        self.assertIsNone(settings.state.ui.overlay)
 
     def test_one_cursor_through_every_section_with_labels_that_read_alone(self) -> None:
         settings = self.open()
@@ -488,7 +487,7 @@ class KeyTests(PanelCase):
         self.assertEqual({"slots": 4}, self.saved_capacity())
         self.assertIn("Edit cancelled", settings.text(idle()))
         settings.key("esc")
-        self.assertIsNone(settings.state.overlay)
+        self.assertIsNone(settings.state.ui.overlay)
 
     def test_keys_while_editing_stay_in_the_field(self) -> None:
         settings = self.open()
@@ -602,7 +601,7 @@ class KeyTests(PanelCase):
         self.assertEqual([], self.writes())
         self.assertEqual(["quit"], settings.key("q"))
         settings.key("esc")
-        self.assertIsNone(settings.state.overlay)
+        self.assertIsNone(settings.state.ui.overlay)
 
     def test_changes_from_another_client_show_while_open_and_are_not_overwritten(self) -> None:
         settings = self.open()
@@ -1080,12 +1079,10 @@ class ModelTests(unittest.TestCase):
             settings_model.Panel().focus = ("x", "y")  # type: ignore[misc]
 
     def test_settings_keys_are_in_the_mode_table(self) -> None:
-        from godfather import modes
-
-        for mode in ("settings", "settings-edit", "settings-small"):
-            self.assertIn(mode, modes.SETTINGS_TABLE)
+        for mode in (reducer.Mode.SETTINGS, reducer.Mode.SETTINGS_EDIT, reducer.Mode.SETTINGS_SMALL):
+            self.assertIn(mode, reducer.MODES)
         for key in ("left", "right", "d", "D", "\r", "esc", "page_down", "5"):
-            self.assertIn(key, modes.SETTINGS)
+            self.assertIn(key, reducer.MODES[reducer.Mode.SETTINGS])
         source = Path(settings_view.__file__).read_text()
         self.assertNotIn("def key", source, "the view handles no key")
 

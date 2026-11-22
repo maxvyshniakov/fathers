@@ -33,7 +33,6 @@ from . import actions as _actions
 from . import entries as _entries
 from . import events as _events
 from . import news as _news
-from . import pages as _pages
 from . import reducer as _reducer
 from . import settings_model as _settings_model
 from . import sources as _sources
@@ -659,7 +658,7 @@ class Live:
     def loading(self) -> bool:
         """The selected request's details are loading: the spinner turns at ten frames a second."""
         found = _state.items(self.state)
-        if not found or self.state.shows == "events":  # DETAILS shows an event (fathers#152): nothing loads
+        if not found or self.state.ui.shows == "events":  # DETAILS shows an event (fathers#152): nothing loads
             return False
         item = found[self.state.selection.index]
         return _state.details_key(item, cast(Any, self.state.selection.key)) not in self.state.details
@@ -765,14 +764,14 @@ def once(width: int | None, height: int | None, colour: bool | None, interval: f
                         executable=lanes.executable,
                         cache=screen.show_cache,
                     )
-        state = _pages.open_page(_state.settle(_state.AppState(model=model, tools=tools), 0.0)[0], page)
+        state = _reducer.open_page(_state.settle(_state.AppState(model=model, tools=tools), 0.0)[0], page)
         ascii_only = "utf" not in (sys.stdout.encoding or "").lower()
         size_now = shutil.get_terminal_size((120, 40))
         canvas = Canvas(width or size_now.columns, height or size_now.lines, theme, _common.marks_for(ascii_only))
-        canvas.focus = state.focus
+        canvas.focus = state.ui.focus
         _overview.dashboard_draw(canvas, model, error=error, cwd=cwd, notice=screen.notice(),
-                                 moment=datetime.datetime.now(datetime.UTC), tools=tools, page=state.page,
-                                 page_row=_pages.page_index(state, state.page) if state.page != "overview" else None)
+                                 moment=datetime.datetime.now(datetime.UTC), tools=tools, page=state.ui.page,
+                                 page_row=_state.page_index(state, state.ui.page) if state.ui.page != "overview" else None)
     tty = sys.stdout.isatty() and not os.environ.get("NO_COLOR")
     print(canvas.render(colour if colour is not None else tty, ascii_only))
     return 1 if model is None else 0  # the frame says why: no tool, no contract, or a failed snapshot

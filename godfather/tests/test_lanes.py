@@ -22,7 +22,7 @@ import helpers
 from helpers import ROOT
 from test_state import entry, model
 
-from godfather import pages, app, reducer, sources, state as state_module, tui
+from godfather import app, reducer, sources, state as state_module, tui
 from godfather.adapters import lanefather
 from godfather.model import Dashboard, Lanes
 from godfather.views import overview
@@ -176,7 +176,7 @@ class Case(unittest.TestCase):
 
     def loaded(self, state: Any) -> Any:
         """The selected request's slow facts arrived (no lane from `show`, no holder directory)."""
-        item = pages.selected_item(state)
+        item = state_module.selected_item(state)
         if item is None:
             return state
         key = state_module.details_key(item, state.selection.key)
@@ -210,19 +210,19 @@ class Case(unittest.TestCase):
         raise AssertionError(f"{text!r} is not on screen")
 
     def picked(self, state: Any) -> Any:
-        rows = pages.page_rows(state, "lanes")
-        index = pages.page_index(state, "lanes")
+        rows = state_module.page_rows(state, "lanes")
+        index = state_module.page_index(state, "lanes")
         return rows[index]["key"] if index is not None else None
 
 
 class PageTests(Case):
     def test_2_opens_the_page_on_the_selected_requests_lane_and_esc_returns(self) -> None:
         state = self.keys(self.screen(), "2")
-        self.assertEqual(("lanes", "lanes"), (state.page, state.focus))
+        self.assertEqual(("lanes", "lanes"), (state.ui.page, state.ui.focus))
         self.assertEqual((STRAYLIGHT, "644-build-once"), self.picked(state))
         self.assertIn("LANE DETAILS", self.text())
         state = self.keys(state, "esc")
-        self.assertEqual(("overview", 0, "requests"), (state.page, state.selection.index, state.focus))
+        self.assertEqual(("overview", 0, "requests"), (state.ui.page, state.selection.index, state.ui.focus))
 
     def test_without_a_link_the_first_lane_and_arrows_skip_project_rows(self) -> None:
         state = self.keys(self.screen([entry(1)]), "2")
@@ -235,7 +235,7 @@ class PageTests(Case):
     def test_2_does_nothing_without_lanefather_and_the_hint_is_gone(self) -> None:
         self.tools = {}
         state = self.keys(self.screen(), "2")
-        self.assertEqual("overview", state.page)
+        self.assertEqual("overview", state.ui.page)
         self.assertNotIn("pages", self.text())
         self.tools = {"lanefather": state_module.Tool("lanefather", "ok", None, decoded())}
         self.screen()
@@ -245,7 +245,7 @@ class PageTests(Case):
         self.tools = {"lanefather": state_module.Tool("lanefather", "unsupported", "lanefather 0.3.0: no dashboard "
                                                                                   "contract; update lanefather")}
         state = self.keys(self.screen(), "2")
-        self.assertEqual("lanes", state.page)
+        self.assertEqual("lanes", state.ui.page)
         self.assertIn("update lanefather", self.text())
         self.assertNotIn("2 lanes", self.text().split("\n")[4], "no summary")
 
@@ -268,22 +268,22 @@ class LinkTests(Case):
         state = self.screen()
         self.assertIn("2 lanes 4 active · 1 planned · 1 review · 🔥 gate red", self.text())
         state = self.click(state, *self.at("2 lanes"))
-        self.assertEqual("lanes", state.page)
+        self.assertEqual("lanes", state.ui.page)
 
     def test_the_lane_row_in_details_opens_the_page_on_that_lane(self) -> None:
         state = self.screen([entry(1), request("644-build-once", GRID)])
         state = self.keys(state, "j")
         self.assertIn("644-build-once · data-grid", self.text())
         state = self.click(state, *self.at("644-build-once · data-grid"))
-        self.assertEqual(("lanes", (GRID, "644-build-once")), (state.page, self.picked(state)))
+        self.assertEqual(("lanes", (GRID, "644-build-once")), (state.ui.page, self.picked(state)))
         state = self.keys(state, "esc")
-        self.assertEqual(("overview", 1), (state.page, state.selection.index), "back, the request still selected")
+        self.assertEqual(("overview", 1), (state.ui.page, state.selection.index), "back, the request still selected")
 
     def test_a_lease_in_lane_details_links_back_to_the_request(self) -> None:
         state = self.keys(self.screen([entry(1), request("644-build-once", STRAYLIGHT, label="the-lease")]), "2")
         self.assertEqual((STRAYLIGHT, "644-build-once"), self.picked(state))
         state = self.click(state, *self.at("the-lease"))
-        self.assertEqual(("overview", 1), (state.page, state.selection.index))
+        self.assertEqual(("overview", 1), (state.ui.page, state.selection.index))
 
     def test_a_request_of_no_known_lane_is_no_link(self) -> None:
         state = self.screen([request("644-build-once")])

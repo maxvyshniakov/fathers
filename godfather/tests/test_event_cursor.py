@@ -65,14 +65,14 @@ class FocusTests(CursorCase):
         state = self.screen(runs(3))
         self.assertIn("LEASE DETAILS", self.plain(), "QUEUE focused: its entry")
         state = self.keys(state, "\t")  # QUEUE, EVENTS, DETAILS by columns
-        self.assertEqual(("events", "events"), (state.focus, state.shows))
+        self.assertEqual(("events", "events"), (state.ui.focus, state.ui.shows))
         self.assertIn("RUN DETAILS", self.plain())
         self.assertRegex(self.details_text(), r"label\s+run2")
         state = self.keys(state, "\t")  # DETAILS focused: it keeps showing the event, to scroll it
-        self.assertEqual(("details", "events"), (state.focus, state.shows))
+        self.assertEqual(("details", "events"), (state.ui.focus, state.ui.shows))
         self.assertIn("RUN DETAILS", self.plain())
         state = self.keys(state, "\t")
-        self.assertEqual("requests", state.shows)
+        self.assertEqual("requests", state.ui.shows)
         self.assertIn("LEASE DETAILS", self.plain())
 
     def test_arrows_move_the_cursor_and_details_show_its_row(self) -> None:
@@ -90,14 +90,14 @@ class FocusTests(CursorCase):
         state = self.screen(runs(3))
         view = self.canvas.tables["events"]
         state, _ = reducer.reduce(state, state_module.Mouse(0, view["x"] + 5, view["top"] + 2, True), 0.0)
-        self.assertEqual(("events", 2), (state.focus, state_module.event_index(state)))
+        self.assertEqual(("events", 2), (state.ui.focus, state_module.event_index(state)))
         self.draw(state)
         self.assertRegex(self.details_text(), r"label\s+run0")
 
     def test_one_column_without_events_shows_queues_entry(self) -> None:
         state = self.keys(self.screen(runs(3)), "\t")
         state = self.draw(state, 76, 40)
-        self.assertEqual("requests", state.shows)
+        self.assertEqual("requests", state.ui.shows)
 
 
 class NewRowsTests(CursorCase):

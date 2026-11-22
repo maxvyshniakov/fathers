@@ -74,10 +74,10 @@ class HelpTests(unittest.TestCase):
         self.assertNotIn("…", text, "help paragraphs wrap instead of truncating")
         for parts in view.help_lines(30):
             self.assertLessEqual(view.text_width("".join(text for text, _ in parts)), 30)
-        state = drawn_state(canvas, overlay=view.Help(), scroll={"requests": 4, "events": 2})
+        state = drawn_state(canvas, ui=view.UiState(modal=view.Help()), scroll={"requests": 4, "events": 2})
         state, _ = view.reduce(state, view.Key("end"), 0.0)
         canvas = view.Canvas(36, 14)
-        view.draw_help(canvas, state.overlay.scroll)
+        view.draw_help(canvas, state.ui.overlay.scroll)
         at_end = canvas.render(False)
         info = canvas.help_view
         self.assertIn(at_end.splitlines()[info.y + 1 + info.visible][info.x + info.width - 2], "┃╻╹",
@@ -111,23 +111,23 @@ class HelpTests(unittest.TestCase):
         view.draw_help(canvas)
         visible = canvas.help_view.visible
         model = {"holders": [dict(key=(n, None), kind="held") for n in range(10)], "waiters": []}
-        state = drawn_state(canvas, model, 7, overlay=view.Help(), scroll={"requests": 4, "events": 2})
+        state = drawn_state(canvas, model, 7, ui=view.UiState(modal=view.Help()), scroll={"requests": 4, "events": 2})
 
         def send(event: Any) -> tuple[Any, list[Any]]:
             return view.reduce(state, event, 0.0)
 
         for key, offset in (("down", 1), ("page_down", visible), ("page_up", 1), ("home", 0)):
             state, _ = send(view.Key(key))
-            self.assertEqual(offset, state.overlay.scroll, key)
+            self.assertEqual(offset, state.ui.overlay.scroll, key)
         state, _ = send(view.Mouse(65, 10, 5, True))
-        self.assertEqual(3, state.overlay.scroll, "the wheel inside scrolls it")
+        self.assertEqual(3, state.ui.overlay.scroll, "the wheel inside scrolls it")
         state, _ = send(view.Mouse(0, 10, 5, True))
         state, _ = send(view.Mouse(65, 0, 5, True))
-        self.assertEqual(3, state.overlay.scroll, "outside-modal input is ignored")
+        self.assertEqual(3, state.ui.overlay.scroll, "outside-modal input is ignored")
         for key in ("p", "m", "r", "unrecognized"):
             self.assertIs(state, send(view.Key(key))[0], f"{key} does nothing")
         for key in ("?", "esc"):
-            self.assertIsNone(send(view.Key(key))[0].overlay, f"{key} closes")
+            self.assertIsNone(send(view.Key(key))[0].ui.overlay, f"{key} closes")
         self.assertIn(view.QUIT, send(view.Key("q"))[1])
         self.assertEqual((7, {"requests": 4, "events": 2}), (state.selection.index, state.scroll))
 

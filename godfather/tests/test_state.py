@@ -1,7 +1,7 @@
-"""The app state and its one reducer (fathers#90): every mode's keys from the mode table, the overlay as one value
-(fathers#17), the selection by entry identity (fathers#21), the details' load states (fathers#23), notices apart from
-the refresh state (fathers#24), and the audit's repro cases: the focus while details load, a Settings conflict, Esc
-in a small panel."""
+"""The app state, consolidated UiState, and one reducer (fathers#90, fathers#225): every one of the 14 Mode values'
+keys from the mode table, UiState constructor invariants making illegal states unrepresentable, the overlay as one
+value (fathers#17), the selection by entry identity (fathers#21), the details' load states (fathers#23), notices
+apart from the refresh state (fathers#24), and the audit and UI state-machine regression cases."""
 from __future__ import annotations
 
 import dataclasses
@@ -13,8 +13,7 @@ import helpers  # noqa: F401 - src/ on sys.path
 import view as _view
 from test_settings import INTERVAL, SAFETY, SLOTS, THEME, PanelCase, Settings, idle
 
-from godfather import reducer, settings_model, state as state_module
-
+from godfather import actions, events as events_module, reducer, settings_model, state as state_module
 from godfather.layout import Rect
 
 
@@ -74,10 +73,13 @@ Row = tuple[set[str], list[str], Check]
 
 
 class ModeTableTests(Case):
-    """Each (mode, key) pair has exactly one handler, and this table says what each does and that nothing else
-    changes. A binding added to modes.TABLE without a row here fails test_every_binding_is_described."""
+    """Each (mode, key) pair across all 14 Mode values has a single dispatch entry, and this table says what each
+    does and that nothing else changes. A binding added to reducer.MODES without a row here fails
+    test_every_binding_is_described."""
 
-    def expected(self) -> dict[str, dict[str, Row]]:
+    def expected(self) -> dict[Any, dict[str, Row]]:
+        Mode = self.tool.Mode
+
         def selected(index: int) -> Check:
             return lambda state: state.selection.index == index
 
@@ -85,26 +87,34 @@ class ModeTableTests(Case):
             return True
 
         def overlay(kind: Optional[str], **fields: int) -> Check:
-            return lambda state: (state.overlay is None if kind is None else state.overlay.kind == kind
-                                  and all(getattr(state.overlay, name) == value for name, value in fields.items()))
+            return lambda state: (
+                state.ui.overlay is None
+                if kind is None
+                else state.ui.overlay is not None
+                and state.ui.overlay.kind == kind
+                and all(getattr(state.ui.overlay, name) == value for name, value in fields.items())
+            )
 
-        def focus(name: str) -> Check:
-            return lambda state: state.focus == name
+        def focus(name: str, shows: Optional[str] = None) -> Check:
+            return lambda state: state.ui.focus == name and (shows is None or state.ui.shows == shows)
 
         def scrolled_far(state: Any) -> object:
-            return state.overlay.scroll > 3
+            return state.ui.overlay.scroll > 3
 
         def in_changelog(state: Any) -> object:
-            return state.overlay.kind == "changelog"
+            return state.ui.overlay.kind == "changelog"
+
+        def no_actions(state: Any) -> object:
+            return state.notice is not None and state.notice.text == "no actions"
 
         quit_: Row = (set[str](), ["quit"], nothing)
         none: Row = (set[str](), [], nothing)
         main: dict[str, Row] = {
             "q": quit_, "Q": quit_,
-            # fathers#152: DETAILS follows the focus to EVENTS; to DETAILS it keeps showing QUEUE's entry
-            "\t": ({"focus", "shows"}, [], focus("events")), "back_tab": ({"focus"}, [], focus("details")),
-            "?": ({"overlay"}, [], overlay("help")), "v": ({"overlay"}, ["load-news"], overlay("changelog")),
+            "\t": ({"ui"}, [], focus("events", "events")), "back_tab": ({"ui"}, [], focus("details", "requests")),
+            "?": ({"ui"}, [], overlay("help")), "v": ({"ui"}, ["load-news"], overlay("changelog")),
             "s": (set[str](), ["open-settings"], nothing),
+            "\r": ({"notice"}, [], no_actions), "\n": ({"notice"}, [], no_actions), "a": ({"notice"}, [], no_actions),
             "j": ({"selection"}, [], selected(3)), "down": ({"selection"}, [], selected(3)),
             "k": ({"selection"}, [], selected(1)), "up": ({"selection"}, [], selected(1)),
             "g": ({"selection"}, [], selected(0)), "home": ({"selection"}, [], selected(0)),
@@ -112,120 +122,317 @@ class ModeTableTests(Case):
             "G": ({"selection"}, [], selected(4)), "end": ({"selection"}, [], selected(4)),
             "page_down": ({"selection"}, [], selected(4)),
             "esc": none, "x": none,
-            # fathers#84: f cycles EVENTS' sources (one here: nothing to cycle), / opens its text field
-            "f": none, "/": ({"events_filter"}, [], lambda state: state.events_filter.editing),
-            # fathers#152: r shows every event as logged
-            "r": ({"events_filter"}, [], lambda state: state.events_filter.raw),
-            # fathers#85: the page keys; no Lanefather or Junkfather here, so they do nothing
+            "f": none, "/": ({"ui"}, [], lambda state: state.ui.editing_filter),
+            "r": ({"ui"}, [], lambda state: state.ui.events_filter.raw),
             "1": none, "2": none, "3": none,
         }
-        events = self.start("panel").frame.tables["events"]
+        events = self.start(Mode.OVERVIEW_EVENTS).frame.tables["events"]
         page, last = events["visible"] - 1, events["count"] - events["visible"]
-        def cursor(index: int, offset: Optional[int]) -> Check:  # fathers#152: EVENTS' row cursor, the scroll after it
+
+        def cursor(index: int, offset: Optional[int]) -> Check:
             return lambda state: (self.tool.event_index(state), state.scroll.get("events")) == (index, offset)
 
-        panel: dict[str, Row] = {**main, "\t": ({"focus"}, [], focus("details")),
-                 "back_tab": ({"focus", "shows"}, [], focus("requests")),
-                 # fathers#152: ↑↓ move EVENTS' cursor (on its fourth row, scrolled to 3), the scroll follows it;
-                 # Home and the newest row pick nothing: the cursor stays on the newest
-                 **{key: ({"picked"}, [], cursor(4, 3)) for key in ("j", "down")},
-                 **{key: ({"picked", "scroll", "glow"}, [], cursor(2, 2)) for key in ("k", "up")},
-                 "page_down": ({"picked"}, [], cursor(3 + page, 3)),
-                 **{key: ({"picked", "scroll"}, [], cursor(0, None)) for key in ("page_up", "g", "home")},
-                 **{key: ({"picked", "scroll", "glow"}, [], cursor(39, last)) for key in ("G", "end")},
-                 # another list: the cursor goes back to its newest row, the view to its top (fathers#88 review 8)
-                 "r": ({"events_filter", "picked", "scroll"}, [], lambda state: state.events_filter.raw),
-                 # fathers#152: ← → switch EVENTS' log (one source here: nothing to switch)
-                 "left": none, "h": none, "right": none, "l": none}
-        overlay_scroll: dict[str, Row] = {key: ({"overlay", "glow"}, [], overlay("help", scroll=offset))
-                          for key, offset in (("j", 4), ("down", 4), ("k", 2), ("up", 2), ("g", 0), ("home", 0),
-                                              (" ", 3 + 35), ("page_down", 3 + 35), ("page_up", 0))}
+        overview_base = {key: value for key, value in main.items() if key not in ("\r", "\n", "a")}
+        overview_events: dict[str, Row] = {
+            **overview_base,
+            "\t": ({"ui"}, [], focus("details", "events")),
+            "back_tab": ({"ui"}, [], focus("requests", "requests")),
+            **{key: ({"picked"}, [], cursor(4, 3)) for key in ("j", "down")},
+            **{key: ({"picked", "scroll", "glow"}, [], cursor(2, 2)) for key in ("k", "up")},
+            "page_down": ({"picked"}, [], cursor(3 + page, 3)),
+            **{key: ({"picked", "scroll"}, [], cursor(0, None)) for key in ("page_up", "g", "home")},
+            **{key: ({"picked", "scroll", "glow"}, [], cursor(39, last)) for key in ("G", "end")},
+            "r": ({"ui", "picked", "scroll"}, [], lambda state: state.ui.events_filter.raw),
+            "left": none, "h": none, "right": none, "l": none,
+        }
+
+        def detail_scroll(offset: int) -> Check:
+            return lambda state: state.scroll.get("details") == offset
+
+        overview_details_view = self.start(Mode.OVERVIEW_DETAILS).frame.tables["details"]
+        ov_step = overview_details_view["visible"] - 1
+        ov_bottom = overview_details_view["count"] - overview_details_view["visible"]
+        overview_details: dict[str, Row] = {
+            **overview_base,
+            "\t": ({"ui"}, [], focus("requests", "requests")),
+            "back_tab": ({"ui"}, [], focus("events", "events")),
+            **{key: ({"scroll", "glow"}, [], detail_scroll(offset)) for key, offset in (
+                ("j", min(ov_bottom, 2)), ("down", min(ov_bottom, 2)), ("k", 0), ("up", 0),
+                ("page_down", min(ov_bottom, 1 + ov_step)), ("page_up", 0),
+                ("g", 0), ("home", 0), ("G", ov_bottom), ("end", ov_bottom))},
+        }
+
+        overlay_scroll: dict[str, Row] = {
+            key: ({"ui", "glow"}, [], overlay("help", scroll=offset))
+            for key, offset in (
+                ("j", 4), ("down", 4), ("k", 2), ("up", 2), ("g", 0), ("home", 0),
+                (" ", 3 + 35), ("page_down", 3 + 35), ("page_up", 0),
+            )
+        }
         help_: dict[str, Row] = {
-                 **overlay_scroll, "G": ({"overlay", "glow"}, [], scrolled_far),
-                 "end": ({"overlay", "glow"}, [], scrolled_far),
-                 "?": ({"overlay"}, [], overlay(None)), "esc": ({"overlay"}, [], overlay(None)),
-                 "v": ({"overlay"}, ["load-news"], overlay("changelog", scroll=0)), "q": quit_, "Q": quit_,
-                 "s": none, "\t": none, "x": none}
-        changelog: dict[str, Row] = {key: (fields, effects, in_changelog if fields else check)
-                                     for key, (fields, effects, check) in help_.items()}
-        changelog.update({  # closing what's new, to help too, marks everything read
-            "v": ({"overlay", "read"}, ["save-read"], overlay(None)),
-            "esc": ({"overlay", "read"}, ["save-read"], overlay(None)),
-            "?": ({"overlay", "read"}, ["save-read"], overlay("help", scroll=0)),
-            "left": ({"overlay"}, [], overlay("changelog", tab=1, scroll=0)),
-            "h": ({"overlay"}, [], overlay("changelog", tab=1, scroll=0)),
-            "back_tab": ({"overlay"}, [], overlay("changelog", tab=1, scroll=0)),
-            "right": ({"overlay"}, [], overlay("changelog", tab=1, scroll=0)),
-            "l": ({"overlay"}, [], overlay("changelog", tab=1, scroll=0)),
-            "\t": ({"overlay"}, [], overlay("changelog", tab=1, scroll=0)),
-            "q": ({"read"}, ["save-read", "quit"], nothing), "Q": ({"read"}, ["save-read", "quit"], nothing)})
-        # fathers#85: the Lanes page, its table focused on its second lane; and its DETAILS focused, scrolled to 1
-        lanes = [row["key"] for row in self.tool.page_rows(self.start("page"), "lanes") if row.get("key")]
+            **overlay_scroll,
+            "G": ({"ui", "glow"}, [], scrolled_far),
+            "end": ({"ui", "glow"}, [], scrolled_far),
+            "?": ({"ui"}, [], overlay(None)), "esc": ({"ui"}, [], overlay(None)),
+            "v": ({"ui"}, ["load-news"], overlay("changelog", scroll=0)),
+            "q": quit_, "Q": quit_,
+            "s": none, "\t": none, "x": none,
+        }
+        news: dict[str, Row] = {
+            key: (fields, effects, in_changelog if fields else check)
+            for key, (fields, effects, check) in help_.items()
+        }
+        news.update({
+            "v": ({"ui", "read"}, ["save-read"], overlay(None)),
+            "esc": ({"ui", "read"}, ["save-read"], overlay(None)),
+            "?": ({"ui", "read"}, ["save-read"], overlay("help", scroll=0)),
+            "left": ({"ui"}, [], overlay("changelog", tab=1, scroll=0)),
+            "h": ({"ui"}, [], overlay("changelog", tab=1, scroll=0)),
+            "back_tab": ({"ui"}, [], overlay("changelog", tab=1, scroll=0)),
+            "right": ({"ui"}, [], overlay("changelog", tab=1, scroll=0)),
+            "l": ({"ui"}, [], overlay("changelog", tab=1, scroll=0)),
+            "\t": ({"ui"}, [], overlay("changelog", tab=1, scroll=0)),
+            "q": ({"read"}, ["save-read", "quit"], nothing),
+            "Q": ({"read"}, ["save-read", "quit"], nothing),
+        })
+
+        lanes = [row["key"] for row in self.tool.page_rows(self.start(Mode.PAGE), "lanes") if row.get("key")]
 
         def lane(index: int) -> Check:
             return lambda state: state.picked.get("lanes") == lanes[index]
 
         def page_shown(name: str) -> Check:
-            return lambda state: state.page == name
-
-        def detail_scroll(offset: int) -> Check:
-            return lambda state: state.scroll.get("details") == offset
+            return lambda state: state.ui.page == name
 
         pages: dict[str, Row] = {
             "q": quit_, "Q": quit_, "?": main["?"], "v": main["v"], "s": main["s"],
-            "esc": ({"page", "focus"}, [], page_shown("overview")), "1": ({"page", "focus"}, [], page_shown("overview")),
-            "2": none, "3": none,  # Lanes already; no Junkfather here
+            "esc": ({"ui"}, [], page_shown("overview")),
+            "1": ({"ui"}, [], page_shown("overview")),
+            "2": none, "3": none,
         }
         page_table: dict[str, Row] = {
-            **pages, "\t": ({"focus"}, [], focus("events")), "back_tab": ({"focus"}, [], focus("details")),
+            **pages,
+            "\t": ({"ui"}, [], focus("events")),
+            "back_tab": ({"ui"}, [], focus("details")),
+            "\r": ({"ui"}, [], overlay("actions")),
+            "\n": ({"ui"}, [], overlay("actions")),
+            "a": ({"ui"}, [], overlay("actions")),
             **{key: ({"picked"}, [], lane(2)) for key in ("j", "down")},
             **{key: ({"picked"}, [], lane(0)) for key in ("k", "up", "g", "home", "page_up")},
-            **{key: ({"picked"}, [], lane(len(lanes) - 1)) for key in ("G", "end", "page_down")}}
-        view = self.start("page-panel").frame.tables["details"]
+            **{key: ({"picked"}, [], lane(len(lanes) - 1)) for key in ("G", "end", "page_down")},
+        }
+        view = self.start(Mode.PAGE_PANEL).frame.tables["details"]
         step, bottom = view["visible"] - 1, view["count"] - view["visible"]
         page_panel: dict[str, Row] = {
-            **pages, "esc": ({"page", "focus", "scroll"}, [], page_shown("overview")),
-            "1": ({"page", "focus", "scroll"}, [], page_shown("overview")),  # a page's scroll goes with it
-            "\t": ({"focus"}, [], focus("lanes")), "back_tab": ({"focus"}, [], focus("events")),
+            **pages,
+            "esc": ({"ui", "scroll"}, [], page_shown("overview")),
+            "1": ({"ui", "scroll"}, [], page_shown("overview")),
+            "\t": ({"ui"}, [], focus("lanes")),
+            "back_tab": ({"ui"}, [], focus("events")),
             **{key: ({"scroll", "glow"}, [], detail_scroll(offset)) for key, offset in (
                 ("j", min(bottom, 2)), ("down", min(bottom, 2)), ("k", 0), ("up", 0),
                 ("page_down", min(bottom, 1 + step)), ("page_up", 0),
-                ("g", 0), ("home", 0), ("G", bottom), ("end", bottom))}}
-        return {"main": main, "panel": panel, "help": help_, "changelog": changelog, "page": page_table,
-                "page-panel": page_panel}
+                ("g", 0), ("home", 0), ("G", bottom), ("end", bottom))},
+        }
 
-    def start(self, mode: str) -> Any:
-        """Each mode's state: QUEUE focused on the middle of five entries; EVENTS focused, scrolled to 3 of 40
-        events; help and what's new scrolled to 3 (what's new with one tool's entries: two filters)."""
+        filter_mode: dict[str, Row] = {
+            "esc": ({"ui"}, [], lambda state: not state.ui.editing_filter and state.ui.events_filter.text == ""),
+            "\r": ({"ui"}, [], lambda state: not state.ui.editing_filter and state.ui.events_filter.text == "71"),
+            "\n": ({"ui"}, [], lambda state: not state.ui.editing_filter and state.ui.events_filter.text == "71"),
+            "\x7f": ({"ui"}, [], lambda state: state.ui.editing_filter and state.ui.events_filter.text == "7"),
+            "\x08": ({"ui"}, [], lambda state: state.ui.editing_filter and state.ui.events_filter.text == "7"),
+            "0": ({"ui"}, [], lambda state: state.ui.editing_filter and state.ui.events_filter.text == "710"),
+            "q": ({"ui"}, [], lambda state: state.ui.editing_filter and state.ui.events_filter.text == "71q"),
+            "up": none,
+        }
+
+        def action_cancelled(state: Any) -> object:
+            return state.ui.modal is None and state.notice is not None and state.notice.text == "nothing run"
+
+        def action_started(state: Any) -> object:
+            return state.ui.modal is None and bool(state.acting)
+
+        actions_mode: dict[str, Row] = {
+            "q": quit_, "Q": quit_,
+            "esc": ({"ui", "notice"}, [], action_cancelled),
+            **{key: ({"ui"}, [], lambda state: state.ui.modal.cursor == 0) for key in ("k", "up", "g", "home")},
+            **{key: ({"ui"}, [], lambda state: state.ui.modal.cursor == 2) for key in ("j", "down", "G", "end")},
+            **{key: ({"ui", "notice", "acting"}, ["action"], action_started) for key in ("\r", "\n", " ")},
+            "x": none,
+        }
+
+        reason_mode: dict[str, Row] = {
+            "esc": ({"ui", "notice"}, [], action_cancelled),
+            "\r": ({"ui"}, [], lambda state: isinstance(state.ui.modal, self.tool.Confirm)
+                   and state.ui.modal.reason == "hi"),
+            "\n": ({"ui"}, [], lambda state: isinstance(state.ui.modal, self.tool.Confirm)
+                   and state.ui.modal.reason == "hi"),
+            "\x7f": ({"ui"}, [], lambda state: isinstance(state.ui.modal, self.tool.Reason)
+                     and state.ui.modal.text == "h"),
+            "\x08": ({"ui"}, [], lambda state: isinstance(state.ui.modal, self.tool.Reason)
+                     and state.ui.modal.text == "h"),
+            "q": ({"ui"}, [], lambda state: isinstance(state.ui.modal, self.tool.Reason)
+                  and state.ui.modal.text == "hiq"),
+            "up": none,
+        }
+
+        confirm_mode: dict[str, Row] = {
+            "y": ({"ui", "notice", "acting"}, ["action"], action_started),
+            "Y": ({"ui", "notice", "acting"}, ["action"], action_started),
+            "n": ({"ui", "notice"}, [], action_cancelled),
+            "N": ({"ui", "notice"}, [], action_cancelled),
+            "esc": ({"ui", "notice"}, [], action_cancelled),
+            "q": none, "\r": none,
+        }
+
+        settings_mode: dict[str, Row] = {
+            "esc": ({"ui"}, ["repaint"], overlay(None)),
+            "s": ({"ui"}, ["repaint"], overlay(None)),
+            "q": quit_, "Q": quit_,
+            **{key: ({"ui"}, [], lambda state: state.ui.modal.focus == ("godfather", "theme"))
+               for key in ("down", "j", "\t")},
+            **{key: ({"ui", "glow"}, [], lambda state: state.ui.modal.focus == ("slotfather", "order.limit"))
+               for key in ("up", "k", "back_tab", "end", "G")},
+            **{key: ({"ui", "glow"}, [], lambda state: state.ui.modal.focus == ("godfather", "interval")
+                     and state.ui.modal.offset == 1)
+               for key in ("home", "g")},
+            **{key: ({"ui"}, [], lambda state: state.ui.modal.pending is not None
+                     and state.ui.modal.pending.value == 1.0)
+               for key in ("left", "h", "-")},
+            **{key: ({"ui"}, [], lambda state: state.ui.modal.pending is not None
+                     and state.ui.modal.pending.value == 3.0)
+               for key in ("right", "l", "+")},
+            **{key: ({"ui"}, [], lambda state: state.ui.modal.editing and state.ui.modal.buffer == "2")
+               for key in ("\r", "\n", " ")},
+            **{digit: ({"ui"}, [], lambda state, d=digit: state.ui.modal.editing and state.ui.modal.buffer == d)
+               for digit in self.tool.DIGITS},
+            "d": ({"ui", "interval"}, ["remember"], lambda state: state.interval == 1.0),
+            "D": ({"ui"}, [], lambda state: state.ui.modal.armed is not None),
+            "page_up": ({"ui", "glow"}, [], lambda state: state.ui.modal.offset == 0),
+            "page_down": ({"ui", "glow"}, [], lambda state: state.ui.modal.offset > 2),
+        }
+
+        settings_edit_mode: dict[str, Row] = {
+            "esc": ({"ui"}, [], lambda state: not state.ui.modal.editing),
+            "\r": ({"ui", "interval"}, ["remember"], lambda state: not state.ui.modal.editing and state.interval == 3.0),
+            "\n": ({"ui", "interval"}, ["remember"], lambda state: not state.ui.modal.editing and state.interval == 3.0),
+            "\t": ({"ui", "interval"}, ["remember"], lambda state: not state.ui.modal.editing
+                   and state.ui.modal.focus == ("godfather", "theme")),
+            **{key: ({"ui"}, [], lambda state: state.ui.modal.buffer == "") for key in ("\x7f", "\b", "\x15")},
+            **{digit: ({"ui"}, [], lambda state, d=digit: state.ui.modal.buffer == "3" + d)
+               for digit in self.tool.DIGITS},
+            "q": none, "s": none,
+        }
+
+        settings_small_mode: dict[str, Row] = {
+            "esc": ({"ui"}, ["repaint"], overlay(None)),
+            "s": ({"ui"}, ["repaint"], overlay(None)),
+            "q": quit_, "Q": quit_,
+            "j": none, "\r": none, "5": none,
+        }
+
+        return {
+            Mode.MAIN: main,
+            Mode.OVERVIEW_EVENTS: overview_events,
+            Mode.OVERVIEW_DETAILS: overview_details,
+            Mode.PAGE: page_table,
+            Mode.PAGE_PANEL: page_panel,
+            Mode.FILTER: filter_mode,
+            Mode.ACTIONS: actions_mode,
+            Mode.REASON: reason_mode,
+            Mode.CONFIRM: confirm_mode,
+            Mode.HELP: help_,
+            Mode.NEWS: news,
+            Mode.SETTINGS: settings_mode,
+            Mode.SETTINGS_EDIT: settings_edit_mode,
+            Mode.SETTINGS_SMALL: settings_small_mode,
+        }
+
+    def start(self, mode: Any) -> Any:
+        """A canonical starting AppState for each of the 14 Mode values."""
         tool = self.tool
+        Mode = tool.Mode
         events = [dict(when=datetime.datetime(2026, 11, 12, tzinfo=datetime.UTC)
-                       + datetime.timedelta(seconds=n), verb="granted", count=1, label=f"e{n}", pid=n, delta=1)
+                       + datetime.timedelta(seconds=n), verb="granted", count=1,
+                       label=f"e{n} 710 71q" if n == 39 else f"e{n}", pid=n, delta=1)
                   for n in range(40)]
-        state = self.screen(model([entry(n) for n in range(3)], [entry(n, "waiting") for n in range(3, 5)],
+        tree = [(100 + n, 1.0, 1024, f"proc{n}") for n in range(25)]
+        state = self.screen(model([entry(n, tree=tree) for n in range(3)],
+                                  [entry(n, "waiting") for n in range(3, 5)],
                                   events=events), 156, 43)
         state = tool.move(state, 2)
         from godfather import news
         state = dataclasses.replace(state, news=news.News((), (news.Item("slotfather", "1.0.0", "2026-11-01", "Added",
                                                                          "a"),)))
-        if mode in ("page", "page-panel"):  # fathers#85: the Lanes page over the lanes fixture, short enough to scroll
+        if mode in (Mode.PAGE, Mode.PAGE_PANEL):
             from test_lanes import decoded
 
             state = dataclasses.replace(state, tools={"lanefather": tool.Tool("lanefather", "ok", None, decoded())})
+
             def second(_position: int, _count: int) -> int:
                 return 1
 
             state = tool.page_move(tool.open_page(self.draw(state, 156, 30), "lanes"), "lanes", second)
             state = self.draw(state, 156, 30)
-            if mode == "page-panel":
-                state = self.draw(dataclasses.replace(state, focus="details", scroll={"details": 1}), 156, 16)
-        if mode == "panel":
-            state = dataclasses.replace(state, focus="events", shows="events", scroll={"events": 3})
-            state = dataclasses.replace(state, picked={"events": tool.event_id(tool.event_rows(state)[3])})
-        elif mode == "help":  # at 100 columns: 156x43 shows the whole help in columns, with nothing to scroll
-            state = dataclasses.replace(self.draw(state, 100, 43), overlay=tool.Help(scroll=3))
-        elif mode == "changelog":
-            state = dataclasses.replace(state, overlay=tool.Changelog(scroll=3))
-        self.assertEqual(mode, tool.mode(state))
+            if mode == Mode.PAGE_PANEL:
+                ui = dataclasses.replace(state.ui, screen=dataclasses.replace(state.ui.screen, focus="details"))
+                state = self.draw(dataclasses.replace(state, ui=ui, scroll={"details": 1}), 156, 16)
+        elif mode == Mode.OVERVIEW_EVENTS:
+            ui = dataclasses.replace(state.ui, screen=tool.OverviewScreen("events", "events"))
+            state = dataclasses.replace(state, ui=ui, scroll={"events": 3},
+                                        picked={"events": tool.event_id(tool.event_rows(state)[3])})
+        elif mode == Mode.OVERVIEW_DETAILS:
+            item = state.model["holders"][2]
+            key = tool.details_key(item, state.selection.key)
+            state, _ = tool.reduce(state, tool.DetailsLoaded(key, None, "/work"), 0.0)
+            ui = dataclasses.replace(state.ui, screen=tool.OverviewScreen("details", "requests"))
+            state = self.draw(dataclasses.replace(state, ui=ui, scroll={"details": 1}), 156, 24)
+        elif mode == Mode.FILTER:
+            ui = dataclasses.replace(state.ui, modal=tool.FilterEdit(), filter=tool.Filter(text="71"))
+            state = dataclasses.replace(state, ui=ui)
+        elif mode == Mode.ACTIONS:
+            acts = tuple(
+                actions.Action("slotfather", f"Act {n}", ("reprioritize", "12", name),
+                               identity=("overview", (12, None), 12, "t0"))
+                for n, name in enumerate(("interactive", "normal", "batch"))
+            )
+            state = tool.with_modal(state, tool.ActionMenu(acts, cursor=1))
+        elif mode == Mode.REASON:
+            park = actions.Action("lanefather", "Park", ("park", "710"), confirm=True, reason=True,
+                                  identity=("overview", (12, None), 12, "t0"))
+            state = tool.with_modal(state, tool.Reason(park, text="hi"))
+        elif mode == Mode.CONFIRM:
+            reap = actions.Action("junkfather", "Reap", ("reap", "--id", "j1"), confirm=True,
+                                  identity=("overview", (12, None), 12, "t0"))
+            state = tool.with_modal(state, tool.Confirm(reap))
+        elif mode == Mode.HELP:
+            state = tool.with_modal(self.draw(state, 100, 43), tool.Help(scroll=3))
+        elif mode == Mode.NEWS:
+            state = tool.with_modal(state, tool.News(scroll=3))
+        elif mode in (Mode.SETTINGS, Mode.SETTINGS_EDIT, Mode.SETTINGS_SMALL):
+            rows = [
+                {"key": f"order.{name}", "label": name.capitalize(), "type": "duration", "value": 60,
+                 "writable": True, "revision": "r1", "step": 30, "min": 0}
+                for name in ("safety", "fallback", "overrun", "limit")
+            ]
+            section = settings_model.Section(
+                "slotfather",
+                reply={"v": 1, "tool": "slotfather", "writable": True, "status": [{"label": "queue", "value": "/q"}],
+                       "sections": [{"id": "order", "settings": rows}]},
+            )
+            state = dataclasses.replace(state, interval=2.0, frame= dataclasses.replace(state.frame, width=90, height=16))
+            panel = settings_model.Panel(
+                sections=(section,),
+                focus=("godfather", "interval"),
+                offset=2,
+                reveal=False,
+            )
+            if mode == Mode.SETTINGS_EDIT:
+                panel = dataclasses.replace(panel, editing=True, buffer="3", replace=False)
+            elif mode == Mode.SETTINGS_SMALL:
+                state = dataclasses.replace(state, frame=dataclasses.replace(state.frame, width=20, height=8))
+            state = tool.with_modal(state, panel)
+        self.assertEqual(mode, tool.mode_of(state))
         return state
 
     def test_each_mode_and_key_does_one_thing_and_nothing_else(self) -> None:
@@ -240,24 +447,209 @@ class ModeTableTests(Case):
 
     def test_every_binding_is_described(self) -> None:
         expected = self.expected()
-        for mode, table in self.tool.TABLE.items():
+        self.assertEqual(set(self.tool.Mode), set(expected), "all 14 Mode values are tested")
+        self.assertEqual(set(self.tool.Mode), set(self.tool.MODES), "all 14 Mode values are in reducer.MODES")
+        for mode, table in self.tool.MODES.items():
             with self.subTest(mode=mode):
                 self.assertLessEqual(set(table), set(expected[mode]), "a binding the table above does not describe")
 
     def test_hotkeys_by_position_in_every_mode(self) -> None:
-        for mode, key, meant in (("main", "й", "q"), ("main", "о", "j"), ("help", ",", "?"), ("changelog", "м", "v")):
+        Mode = self.tool.Mode
+        for mode, key, meant in ((Mode.MAIN, "й", "q"), (Mode.MAIN, "о", "j"), (Mode.HELP, ",", "?"),
+                                 (Mode.NEWS, "м", "v")):
             with self.subTest(mode=mode, key=key):
                 state = self.start(mode)
                 self.assertEqual(self.send(state, self.tool.Key(meant))[1], self.send(state, self.tool.Key(key))[1])
                 self.assertEqual(self.send(state, self.tool.Key(meant))[0], self.send(state, self.tool.Key(key))[0])
 
     def test_a_click_on_a_footer_hint_is_its_key_in_every_mode(self) -> None:
-        state = self.start("main")
+        state = self.start(self.tool.Mode.MAIN)
         canvas = self.tool.Canvas(156, 43)
         self.tool.render(canvas, state, 0.0)
         row, start, _, _ = next(hint for hint in canvas.hint_hits if hint[3] == "?")
         after, _ = self.send(state, self.tool.Mouse(0, start, row, True))
-        self.assertEqual("help", after.overlay.kind)
+        self.assertEqual("help", after.ui.overlay.kind)
+
+
+class UiStateInvariantTests(unittest.TestCase):
+    """Constructor invariants on OverviewScreen, PageScreen, modals, and UiState raise ValueError on impossible
+    states (fathers#225)."""
+
+    def test_overview_screen_invariants(self) -> None:
+        self.assertEqual(("requests", "requests"),
+                         (state_module.OverviewScreen().focus, state_module.OverviewScreen().shows))
+        self.assertEqual(("events", "events"),
+                         (state_module.OverviewScreen("events").focus, state_module.OverviewScreen("events").shows))
+        self.assertEqual(("details", "events"),
+                         (state_module.OverviewScreen("details", "events").focus,
+                          state_module.OverviewScreen("details", "events").shows))
+        for bad_focus in ("lanes", "procs", "machine", ""):
+            with self.subTest(focus=bad_focus), self.assertRaises(ValueError):
+                state_module.OverviewScreen(bad_focus)
+        with self.assertRaises(ValueError):
+            state_module.OverviewScreen("details", "details")
+        with self.assertRaises(ValueError):
+            state_module.OverviewScreen("requests", "events")
+        with self.assertRaises(ValueError):
+            state_module.OverviewScreen("events", "requests")
+
+    def test_page_screen_invariants(self) -> None:
+        self.assertEqual(("lanes", "lanes"),
+                         (state_module.PageScreen("lanes").page, state_module.PageScreen("lanes").focus))
+        self.assertEqual(("processes", "procs"),
+                         (state_module.PageScreen("processes").page, state_module.PageScreen("processes").focus))
+        for bad_page in ("overview", "unknown", ""):
+            with self.subTest(page=bad_page), self.assertRaises(ValueError):
+                state_module.PageScreen(bad_page)
+        for page, bad_focus in (("lanes", "requests"), ("lanes", "procs"), ("processes", "requests"),
+                                ("processes", "lanes")):
+            with self.subTest(page=page, focus=bad_focus), self.assertRaises(ValueError):
+                state_module.PageScreen(page, bad_focus)
+        with self.assertRaises(ValueError):
+            state_module.PageScreen("lanes", came_from=("nowhere",))
+
+    def test_modal_and_uistate_invariants(self) -> None:
+        req_act = actions.Action("slotfather", "Reprioritize", ("reprioritize",), identity=("overview", ("k", 0)))
+        lane_park = actions.Action("lanefather", "Park", ("park", "l1"), confirm=True, reason=True,
+                                   identity=("lanes", ("/s", "l1")))
+        proc_reap = actions.Action("junkfather", "Reap", ("reap", "--id", "j1"), confirm=True,
+                                   identity=("processes", ("entry", "j1")))
+
+        # Two simultaneous modals
+        with self.assertRaises(ValueError):
+            state_module.UiState(modal=state_module.FilterEdit(), overlay=state_module.Help())
+        with self.assertRaises(ValueError):
+            state_module.UiState(modal=state_module.Help(), filter=events_module.Filter(editing=True))
+        with self.assertRaises(ValueError):
+            state_module.UiState(filter=events_module.Filter(editing=True))
+
+        # FilterEdit on a PageScreen
+        with self.assertRaises(ValueError):
+            state_module.UiState(state_module.PageScreen("lanes"), state_module.FilterEdit())
+
+        # Action modals with empty actions, out-of-range cursor, wrong focus, or wrong page
+        with self.assertRaises(ValueError):
+            state_module.ActionMenu(())
+        with self.assertRaises(ValueError):
+            state_module.ActionMenu((req_act,), cursor=1)
+        with self.assertRaises(ValueError):
+            state_module.Reason(req_act)
+        with self.assertRaises(ValueError):
+            state_module.Confirm(req_act)
+        with self.assertRaises(ValueError):
+            state_module.Confirm(lane_park, "")
+        with self.assertRaises(ValueError):
+            state_module.Confirm(proc_reap, "unexpected reason")
+        with self.assertRaises(ValueError):
+            state_module.UiState(state_module.OverviewScreen("events"), state_module.ActionMenu((req_act,)))
+        with self.assertRaises(ValueError):
+            state_module.UiState(state_module.OverviewScreen("requests"), state_module.ActionMenu((lane_park,)))
+        with self.assertRaises(ValueError):
+            state_module.UiState(state_module.PageScreen("lanes"), state_module.Confirm(proc_reap))
+
+
+class UiBugRegressionTests(Case):
+    """Regression tests for the 6 concrete UI state-machine bugs fixed in fathers#225."""
+
+    def test_resizing_below_83_cols_while_in_filter_edit_exits_filter_mode_so_q_quits(self) -> None:
+        state = self.screen(width=156, height=43)
+        state, _ = self.keys(state, "/", "a", "b")
+        self.assertEqual(self.tool.Mode.FILTER, self.tool.mode_of(state))
+        state = self.draw(state, 82, 40)
+        self.assertFalse(state.ui.editing_filter)
+        self.assertEqual("ab", state.ui.events_filter.text)
+        self.assertEqual(self.tool.Mode.MAIN, self.tool.mode_of(state))
+        _, effects = self.keys(state, "q")
+        self.assertEqual(["quit"], effects)
+
+    def test_clicking_main_footer_q_while_reason_is_open_cancels_reason_instead_of_typing_q(self) -> None:
+        from test_lanes import decoded
+
+        state = dataclasses.replace(
+            self.screen(),
+            tools={"lanefather": self.tool.Tool("lanefather", "ok", None, decoded(), actions=("park",))},
+        )
+        state = self.draw(self.tool.open_page(state, "lanes"))
+        state, _ = self.keys(state, "\r", "G", "\r")
+        state = self.draw(state)
+        self.assertEqual(self.tool.Mode.REASON, self.tool.mode_of(state))
+        row, start, _, _ = next(hint for hint in state.frame.hints if hint[3] == "q")
+        after, effects = self.send(state, self.tool.Mouse(0, start, row, True), now=2.0)
+        self.assertEqual([], effects)
+        self.assertIsNone(after.ui.modal, "clicking outside Reason on the main footer cancels Reason")
+        self.assertEqual("nothing run", after.notice.text)
+
+    def test_russian_hotkeys_close_and_quit_settings_small_even_when_editing_is_true(self) -> None:
+        panel = settings_model.Panel(focus=("godfather", "interval"), editing=True, buffer="2", replace=False)
+        small_state = dataclasses.replace(
+            self.screen(width=20, height=8),
+            ui=self.tool.UiState(modal=panel),
+        )
+        self.assertEqual(self.tool.Mode.SETTINGS_SMALL, self.tool.mode_of(small_state))
+        closed, effects = self.keys(small_state, "ы")  # Russian s
+        self.assertIsNone(closed.ui.modal)
+        self.assertIn("repaint", effects)
+        _, quit_effects = self.keys(small_state, "й")  # Russian q
+        self.assertIn("quit", quit_effects)
+
+    def test_go_back_skips_an_absent_intermediate_page_in_came_from(self) -> None:
+        from test_lanes import decoded as lanes_decoded
+        from test_procs import decoded as procs_decoded
+
+        state = dataclasses.replace(
+            self.screen(),
+            tools={
+                "lanefather": self.tool.Tool("lanefather", "ok", None, lanes_decoded()),
+                "junkfather": self.tool.Tool("junkfather", "ok", None, procs_decoded()),
+            },
+        )
+        state = self.tool.follow_link(state, ("lanes", ("/fixture/straylight/lanes", "710-speech-paste-phase")))
+        state = self.tool.follow_link(state, ("processes", ("entry", "j3f9a1c")))
+        self.assertEqual(("processes", ("overview", "lanes")), (state.ui.page, state.ui.came_from))
+        # Lanefather disappears while the user is on Processes
+        state, _ = self.send(state, self.tool.ToolLoaded(self.tool.Tool("lanefather", "absent")))
+        self.assertEqual("processes", state.ui.page)
+        state, _ = self.keys(state, "esc")
+        self.assertEqual(("overview", ()), (state.ui.page, state.ui.came_from))
+
+    def test_leave_absent_dismisses_an_open_action_modal_for_the_departed_page(self) -> None:
+        from test_lanes import decoded as lanes_decoded
+        from test_procs import decoded as procs_decoded
+
+        base = dataclasses.replace(
+            self.screen(),
+            tools={
+                "lanefather": self.tool.Tool("lanefather", "ok", None, lanes_decoded(), actions=("park",)),
+                "junkfather": self.tool.Tool("junkfather", "ok", None, procs_decoded(), actions=("reap",)),
+            },
+        )
+        # ActionMenu and Reason on Lanes
+        lanes_state = self.tool.open_page(base, "lanes")
+        menu_state, _ = self.keys(lanes_state, "\r")
+        self.assertIsInstance(menu_state.ui.modal, self.tool.ActionMenu)
+        reason_state, _ = self.keys(menu_state, "G", "\r")
+        self.assertIsInstance(reason_state.ui.modal, self.tool.Reason)
+        confirm_state, _ = self.keys(reason_state, "w", "h", "y", "\r")
+        self.assertIsInstance(confirm_state.ui.modal, self.tool.Confirm)
+        for active in (menu_state, reason_state, confirm_state):
+            after, _ = self.send(active, self.tool.ToolLoaded(self.tool.Tool("lanefather", "absent")))
+            self.assertEqual("overview", after.ui.page)
+            self.assertIsNone(after.ui.modal)
+
+    def test_slash_then_esc_on_an_empty_filter_preserves_events_scroll_picked_and_fresh_events(self) -> None:
+        when = datetime.datetime(2026, 11, 12, tzinfo=datetime.UTC)
+        events = [dict(when=when + datetime.timedelta(seconds=n), verb="granted", count=1, label=f"e{n}", pid=n,
+                       delta=1) for n in range(40)]
+        state = self.screen(model([entry(0)], events=events))
+        picked_id = self.tool.event_id(self.tool.event_rows(state)[5])
+        state = dataclasses.replace(state, scroll={"events": 5}, picked={"events": picked_id}, fresh_events=3)
+        state, _ = self.keys(state, "/")
+        self.assertTrue(state.ui.editing_filter)
+        state, _ = self.keys(state, "esc")
+        self.assertFalse(state.ui.editing_filter)
+        self.assertEqual(5, state.scroll.get("events"))
+        self.assertEqual(picked_id, state.picked.get("events"))
+        self.assertEqual(3, state.fresh_events)
 
 
 class SettingsModeTableTests(PanelCase):
@@ -265,16 +657,14 @@ class SettingsModeTableTests(PanelCase):
     a panel taking only the ways out; and a click on a footer hint is the hint's key there too."""
 
     def test_the_mode_follows_the_panel(self) -> None:
-        from godfather import modes
-
         settings = Settings(self.clock)
-        self.assertEqual("settings", modes.mode(settings.state))
+        self.assertEqual(reducer.Mode.SETTINGS, reducer.mode_of(settings.state))
         settings.select(SAFETY)
         settings.key("\r")
-        self.assertEqual("settings-edit", modes.mode(settings.state))
+        self.assertEqual(reducer.Mode.SETTINGS_EDIT, reducer.mode_of(settings.state))
         settings.key("esc")
         settings.show(width=20, height=8)
-        self.assertEqual("settings-small", modes.mode(settings.state))
+        self.assertEqual(reducer.Mode.SETTINGS_SMALL, reducer.mode_of(settings.state))
 
     def test_keys_are_hotkeys_unless_a_value_is_typed(self) -> None:
         settings = Settings(self.clock)
@@ -291,7 +681,7 @@ class SettingsModeTableTests(PanelCase):
             settings.state.frame, hints=tuple(canvas.hint_hits)))
         row, start, _, _ = next(hint for hint in canvas.hint_hits if hint[3] == "esc")
         self.assertIn("repaint", settings.click(start, row))
-        self.assertIsNone(settings.state.overlay)
+        self.assertIsNone(settings.state.ui.overlay)
 
 
 class MouseTableTests(Case):
@@ -307,8 +697,8 @@ class MouseTableTests(Case):
         queue, details, evs = (base.frame.tables[name] for name in ("requests", "details", "events"))
         version = base.frame.version_at
         gap = queue["top"] + 3  # the row between running and waiting
-        help_ = dataclasses.replace(self.draw(base, 100, 43), overlay=tool.Help(scroll=3))  # one column: it scrolls
-        box = tool.overlay_box(help_, help_.overlay)
+        help_ = tool.with_modal(self.draw(base, 100, 43), tool.Help(scroll=3))  # one column: it scrolls
+        box = tool.overlay_box(help_, help_.ui.overlay)
         inside, outside = (box.x + 3, box.y + 3), (0, 0)
         cases: list[tuple[str, Any, tuple[int, int, int, bool], Callable[[Any], object]]] = [
             ("a click on a running row selects it", base, (0, 10, queue["top"], True),
@@ -320,7 +710,7 @@ class MouseTableTests(Case):
              lambda state: state.selection.index == 2),
             ("a release does nothing", base, (0, 10, queue["top"], False), lambda state: state == base),
             ("a click on DETAILS focuses it", base, (0, details["x"] + 5, details["y"] + 5, True),
-             lambda state: state.focus == "details" and state.selection.index == 2),
+             lambda state: state.ui.focus == "details" and state.selection.index == 2),
             ("the wheel on EVENTS scrolls it, not the selection", base, (65, 10, evs["y"] + 3, True),
              lambda state: state.scroll.get("events") == 3 and state.selection.index == 2
              and "events" in state.glow),
@@ -329,10 +719,10 @@ class MouseTableTests(Case):
             ("Ctrl+wheel is the wheel", base, (65 | 16, 10, evs["y"] + 3, True),
              lambda state: state.scroll.get("events") == 3),
             ("what's new in the footer opens it", base, (0, version[1], version[0], True),
-             lambda state: state.overlay == tool.Changelog()),
-            ("the wheel in help scrolls it", help_, (65, *inside, True), lambda state: state.overlay.scroll == 6),
+             lambda state: state.ui.overlay == tool.Changelog()),
+            ("the wheel in help scrolls it", help_, (65, *inside, True), lambda state: state.ui.overlay.scroll == 6),
             ("a click in help does nothing", help_, (0, *inside, True), lambda state: state == help_),
-            ("a click outside help closes it", help_, (0, *outside, True), lambda state: state.overlay is None),
+            ("a click outside help closes it", help_, (0, *outside, True), lambda state: state.ui.overlay is None),
             ("the wheel outside help does nothing", help_, (65, *outside, True), lambda state: state == help_),
             ("a release outside help does nothing", help_, (0, *outside, False), lambda state: state == help_),
         ]
@@ -347,25 +737,25 @@ class OverlayTests(Case):
     def test_question_mark_and_v_switch_between_help_and_the_changelog(self) -> None:
         state = self.screen()
         state, _ = self.keys(state, "?")
-        self.assertEqual("help", state.overlay.kind)
+        self.assertEqual("help", state.ui.overlay.kind)
         state, _ = self.keys(state, "v")
-        self.assertEqual("changelog", state.overlay.kind, "v in help: the changelog")
+        self.assertEqual("changelog", state.ui.overlay.kind, "v in help: the changelog")
         state, _ = self.keys(state, "?")
-        self.assertEqual("help", state.overlay.kind, "? in the changelog: help")
+        self.assertEqual("help", state.ui.overlay.kind, "? in the changelog: help")
         state, _ = self.keys(state, "?")
-        self.assertIsNone(state.overlay)
+        self.assertIsNone(state.ui.overlay)
 
     def test_keys_after_v_in_the_same_batch_scroll_the_changelog(self) -> None:
         for opener, kind in (("v", "changelog"), ("?", "help")):
             with self.subTest(opener=opener):
                 state, _ = self.keys(self.screen(width=100), opener, "j", "j")  # never drawn between them
-                self.assertEqual((kind, 2), (state.overlay.kind, state.overlay.scroll))
+                self.assertEqual((kind, 2), (state.ui.overlay.kind, state.ui.overlay.scroll))
 
     def test_with_one_filter_the_tab_keys_go_back_to_its_top(self) -> None:
         from godfather import news
         state = dataclasses.replace(self.screen(), news=news.News((), ()))
         state, _ = self.keys(state, "v", "j", "j", "right")
-        self.assertEqual(self.tool.Changelog(tab=0, scroll=0), state.overlay)
+        self.assertEqual(self.tool.Changelog(tab=0, scroll=0), state.ui.overlay)
 
 
 class WhatsNewTests(Case):
@@ -380,10 +770,10 @@ class WhatsNewTests(Case):
 
     def test_opening_asks_for_the_news_and_a_reply_replaces_it(self) -> None:
         state, effects = self.keys(self.screen(), "v")
-        self.assertEqual((self.tool.Changelog(), ["load-news"]), (state.overlay, effects))
+        self.assertEqual((self.tool.Changelog(), ["load-news"]), (state.ui.overlay, effects))
         found = self.news()
         state, effects = self.send(state, self.tool.NewsLoaded(found))
-        self.assertEqual((found, [], self.tool.Changelog()), (state.news, effects, state.overlay))
+        self.assertEqual((found, [], self.tool.Changelog()), (state.news, effects, state.ui.overlay))
         self.assertTrue(self.tool.unread(state), "nothing read yet")
 
     def test_the_filter_steps_through_all_and_each_tool_with_entries(self) -> None:
@@ -391,11 +781,11 @@ class WhatsNewTests(Case):
         tabs: list[int] = []
         for key in ("v", "right", "right", "right", "left"):
             state, _ = self.keys(state, key)
-            tabs.append(state.overlay.tab)
+            tabs.append(state.ui.overlay.tab)
         self.assertEqual([0, 1, 2, 0, 2], tabs, "all, slotfather, junkfather, then round")
         state, _ = self.keys(state, "j")
         state, _ = self.keys(state, "\t")
-        self.assertEqual(self.tool.Changelog(tab=0, scroll=0), state.overlay, "a new filter starts at its top")
+        self.assertEqual(self.tool.Changelog(tab=0, scroll=0), state.ui.overlay, "a new filter starts at its top")
 
     def test_closing_marks_everything_read_and_saves_it_once(self) -> None:
         for close in ("esc", "v", "?"):
@@ -420,12 +810,12 @@ class WhatsNewTests(Case):
         from godfather import news
         state = dataclasses.replace(self.screen(), news=self.news())
         state, _ = self.keys(state, "v", "right", "right")
-        self.assertEqual(2, state.overlay.tab, "Junkfather")
+        self.assertEqual(2, state.ui.overlay.tab, "Junkfather")
         fewer = news.News((), tuple(item for item in self.news().items if item.tool == "junkfather"))
         state, _ = self.send(state, self.tool.NewsLoaded(fewer))
-        self.assertEqual(1, state.overlay.tab, "still Junkfather, now the second filter")
+        self.assertEqual(1, state.ui.overlay.tab, "still Junkfather, now the second filter")
         state, _ = self.send(state, self.tool.NewsLoaded(news.News((), ())))
-        self.assertEqual(0, state.overlay.tab, "gone: back to all")
+        self.assertEqual(0, state.ui.overlay.tab, "gone: back to all")
 
     def opened(self) -> tuple[Any, Any]:
         """What's new open over the overview, drawn: the state and the canvas it drew."""
@@ -462,13 +852,14 @@ class WhatsNewTests(Case):
         for _, _, end, tab in filters[::-1]:
             clicked, effects = self.send(state, self.tool.Mouse(0, end - 1, canvas.help_view.y, True))
             self.assertEqual([], effects, "a filter click neither closes nor saves")
-            clicks.append(clicked.overlay)
-            arrows, _ = self.keys(state, *(["right"] * tab)) if tab else (dataclasses.replace(
-                state, overlay=self.tool.Changelog(0)), [])
-            self.assertEqual(arrows.overlay, clicked.overlay, "the same as ←→, from the filter's top")
+            clicks.append(clicked.ui.overlay)
+            arrows, _ = self.keys(state, *(["right"] * tab)) if tab else (
+                self.tool.with_modal(state, self.tool.Changelog(0)), []
+            )
+            self.assertEqual(arrows.ui.overlay, clicked.ui.overlay, "the same as ←→, from the filter's top")
         self.assertEqual([self.tool.Changelog(2), self.tool.Changelog(1), self.tool.Changelog(0)], clicks)
         released, _ = self.send(state, self.tool.Mouse(0, filters[1][1], canvas.help_view.y, False))
-        self.assertEqual(state.overlay, released.overlay, "a release does nothing")
+        self.assertEqual(state.ui.overlay, released.ui.overlay, "a release does nothing")
 
     def test_a_click_on_the_footers_whats_new_opens_it(self) -> None:
         state = dataclasses.replace(self.screen(), news=self.news())
@@ -476,13 +867,13 @@ class WhatsNewTests(Case):
         self.assertEqual((42, 1, 1 + len("Godfather what's new?")), (row, begin, end))
         for x in (begin, end - 1):
             opened, effects = self.send(state, self.tool.Mouse(0, x, row, True))
-            self.assertEqual((self.tool.Changelog(), ["load-news"]), (opened.overlay, effects))
+            self.assertEqual((self.tool.Changelog(), ["load-news"]), (opened.ui.overlay, effects))
 
     def test_a_click_outside_closes_and_marks_read_too(self) -> None:
         state = dataclasses.replace(self.screen(), news=self.news())
         state, _ = self.keys(state, "v")
         state, effects = self.send(state, self.tool.Mouse(0, 0, 0, True))
-        self.assertEqual((None, ["save-read"]), (state.overlay, effects))
+        self.assertEqual((None, ["save-read"]), (state.ui.overlay, effects))
         self.assertFalse(self.tool.unread(state))
 
     def test_news_arriving_after_it_closed_is_unread_again(self) -> None:
@@ -507,33 +898,33 @@ class WhatsNewTests(Case):
     def test_each_overlay_owns_its_scroll_and_the_panels_keep_theirs(self) -> None:
         state = dataclasses.replace(self.screen(), scroll={"events": 2})
         state, _ = self.keys(state, "?", "j", "j", "j", "v")
-        self.assertEqual(0, state.overlay.scroll, "the changelog opens at its top")
+        self.assertEqual(0, state.ui.overlay.scroll, "the changelog opens at its top")
         state, _ = self.keys(state, "?")
-        self.assertEqual(0, state.overlay.scroll, "help opens at its top again")
+        self.assertEqual(0, state.ui.overlay.scroll, "help opens at its top again")
         self.assertEqual({"events": 2}, state.scroll)
 
     def test_s_v_and_a_version_click_while_settings_is_open(self) -> None:
         tool = self.tool
         state = self.screen()
         version = state.frame.version_at
-        state = dataclasses.replace(state, overlay=tool.SettingsOverlay())
+        state = tool.with_modal(state, tool.SettingsOverlay())
         after, kinds = self.keys(state, "v")
-        self.assertEqual((state.overlay, []), (after.overlay, kinds), "v does nothing in Settings")
+        self.assertEqual((state.ui.overlay, []), (after.ui.overlay, kinds), "v does nothing in Settings")
         after, kinds = self.keys(state, "s")
-        self.assertIsNone(after.overlay, "s closes Settings, as Esc does")
+        self.assertIsNone(after.ui.overlay, "s closes Settings, as Esc does")
         self.assertIn("repaint", kinds)
         after, _ = self.send(state, tool.Mouse(0, version[1], version[0], True))
-        self.assertIsNone(after.overlay, "a click on the version is a click outside: it closes Settings")
+        self.assertIsNone(after.ui.overlay, "a click on the version is a click outside: it closes Settings")
 
     def test_a_click_outside_help_closes_it_and_the_wheel_inside_scrolls_it(self) -> None:
         state, _ = self.keys(self.screen(width=100), "?")  # one column: it scrolls
-        view = self.tool.overlay_box(state, state.overlay)
+        view = self.tool.overlay_box(state, state.ui.overlay)
         after, _ = self.send(state, self.tool.Mouse(65, view.x + 3, view.y + 3, True))
-        self.assertEqual(3, after.overlay.scroll)
+        self.assertEqual(3, after.ui.overlay.scroll)
         after, _ = self.send(state, self.tool.Mouse(0, 0, 0, True))
-        self.assertIsNone(after.overlay)
+        self.assertIsNone(after.ui.overlay)
         after, _ = self.send(state, self.tool.Mouse(0, 0, 0, False))
-        self.assertEqual(state.overlay, after.overlay, "a release outside does nothing")
+        self.assertEqual(state.ui.overlay, after.ui.overlay, "a release outside does nothing")
 
 
 class SelectionTests(Case):
@@ -639,11 +1030,12 @@ class DetailsTests(Case):
         self.assertEqual([((11, None), 0)], [key[0] for key in state.details], "a's left with it")
 
     def test_the_focus_on_details_while_they_load_keeps_their_keys(self) -> None:
-        state = dataclasses.replace(self.screen(), focus="details")  # the audit's probe: j moved QUEUE's selection
+        base = self.screen()
+        state = dataclasses.replace(base, ui=self.tool.UiState(self.tool.OverviewScreen("details")))
         self.assertEqual({}, state.details, "still loading")
         for key in ("j", "k", "down", "page_down", "home", "G"):
             after, _ = self.keys(state, key)
-            self.assertEqual((state.selection, "details"), (after.selection, after.focus), key)
+            self.assertEqual((state.selection, "details"), (after.selection, after.ui.focus), key)
 
 
 class NoticeTests(Case):
@@ -680,16 +1072,16 @@ class NoticeTests(Case):
         self.addCleanup(live.close)
         live.state = self.screen()
         live.send(tool.Key("s"))
-        self.assertEqual("settings", live.state.overlay.kind, "open at once")
-        self.assertTrue(live.state.overlay.loading)
+        self.assertEqual("settings", live.state.ui.overlay.kind, "open at once")
+        self.assertTrue(live.state.ui.overlay.loading)
         deadline = time.monotonic() + 30
-        while live.state.overlay.loading and time.monotonic() < deadline:
+        while live.state.ui.overlay.loading and time.monotonic() < deadline:
             live.read(0.1)
             live.take()
         self.assertEqual(1, len(asked))
         self.assertNotIn(threading.current_thread(), asked, "nothing read on the screen's thread")
         self.assertIn("capacity.json is unreadable", " ".join(
-            part[1] for line in settings_model.lines(live.state.overlay, state_module.settings_context(live.state))
+            part[1] for line in settings_model.lines(live.state.ui.overlay, state_module.settings_context(live.state))
             for part in line.parts))
 
     def test_settings_whose_tools_cannot_be_read_says_why(self) -> None:
@@ -704,8 +1096,8 @@ class NoticeTests(Case):
         live.state = self.screen()
         live.send(tool.Key("s"))
         live.send(live.settings_work(settings_model.Request("open")))
-        self.assertFalse(live.state.overlay.loading)
-        self.assertIn("too many open files", live.state.overlay.flash.text)
+        self.assertFalse(live.state.ui.overlay.loading)
+        self.assertIn("too many open files", live.state.ui.overlay.flash.text)
 
     def test_a_failed_refresh_is_stale_and_keeps_the_model(self) -> None:
         tool = self.tool
@@ -722,9 +1114,10 @@ class NoticeTests(Case):
 
 class FrameTests(Case):
     def test_a_focus_whose_panel_is_not_drawn_goes_back_to_queue(self) -> None:
-        state = dataclasses.replace(self.screen(width=156), focus="events")
-        self.assertEqual("requests", self.draw(state, 82, 40).focus, "EVENTS is not drawn under 83 columns")
-        self.assertEqual("events", self.draw(state, 156, 43).focus)
+        base = self.screen(width=156)
+        state = dataclasses.replace(base, ui=self.tool.UiState(self.tool.OverviewScreen("events")))
+        self.assertEqual("requests", self.draw(state, 82, 40).ui.focus, "EVENTS is not drawn under 83 columns")
+        self.assertEqual("events", self.draw(state, 156, 43).ui.focus)
 
 
 class SettingsModeTests(PanelCase):
@@ -741,7 +1134,7 @@ class SettingsModeTests(PanelCase):
         kinds += settings.tick(0.5)
         self.assertNotIn("load-model", kinds, "nothing was saved")
         self.assertEqual({"slots": 6}, self.saved_capacity(), "the other client's change stands")
-        self.assertIsNotNone(settings.state.overlay, "the panel stays open")
+        self.assertIsNotNone(settings.state.ui.overlay, "the panel stays open")
         self.assertIn("changed elsewhere", settings.text(idle()))
 
     def test_esc_in_a_small_panel_cancels_first_and_then_closes(self) -> None:
@@ -751,10 +1144,10 @@ class SettingsModeTests(PanelCase):
         settings.key("right")
         settings.show(width=20, height=8)
         settings.key("esc")
-        self.assertIsNotNone(settings.state.overlay, "the first Esc cancels the pending change")
+        self.assertIsNotNone(settings.state.ui.overlay, "the first Esc cancels the pending change")
         self.assertIsNone(settings.panel.pending)
         self.assertIn("repaint", settings.key("esc"))
-        self.assertIsNone(settings.state.overlay)
+        self.assertIsNone(settings.state.ui.overlay)
         self.assertEqual({"slots": 4}, self.saved_capacity())
 
     def test_the_wheel_in_settings_flashes_its_thumb(self) -> None:
