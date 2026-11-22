@@ -255,16 +255,18 @@ def reap(store: Store, entry_id: str, reason: str, grace: Optional[float] = None
     is not running (someone else reaped it, it exited, it is still starting) or the guard no longer holds,
     "would-stop" in a dry run. `table` serves the first read only; every later round reads the machine again
     (`reader`). `report_failure` False: a failure is recorded on the entry (`last_error`) but writes no
-    `entry.reap_failed` event (a retry in a streak)."""
+    `entry.reap_failed` event (a retry in a streak). A lifecycle reap (`lifecycle` with `owner`, and `agent` for a
+    SubagentStop) rechecks that selector under the store lock as it marks the entry, together with `allowed` when
+    both are given, so an entry handed to another owner after selection is skipped (fathers#189)."""
     reader = reader or _procs.Table.read
     grace = _settings.value("reap.grace", store.root) if grace is None else grace
     stopper = stopper or stop
     guard = allowed
-    if guard is None and lifecycle is not None and owner is not None:
-        owner_id = owner
+    if lifecycle is not None and owner is not None:
+        owner_id, extra = owner, allowed
 
         def matching(e: Entry) -> bool:
-            return matches_owner(e, owner_id, agent, lifecycle=lifecycle)
+            return matches_owner(e, owner_id, agent, lifecycle=lifecycle) and (extra is None or extra(e))
         guard = matching
     entry = store.load(entry_id)
     if entry is None:

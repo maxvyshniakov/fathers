@@ -280,7 +280,9 @@ def noted_error(store: Store, entry_id: str, error: Dict[str, Any], now: Optiona
 def begin_reap(store: Store, entry_id: str, reason: str, table: Optional[_procs.Table] = None,
                allowed: Optional[Callable[[Entry], bool]] = None) -> Optional[int]:
     """running -> reaping, held by this process; its pid, or None when the entry no longer runs, `allowed` no longer
-    holds, or another reaper has it."""
+    holds, or another reaper has it. `allowed` is checked under the store lock with the state, so a predicate on
+    the owner (a lifecycle reap's, fathers#189) and a handoff (`handed`) cannot interleave: whichever writes first
+    wins, and `handed` refuses an entry already reaping."""
     me = os.getpid()
     if table is None:
         try:

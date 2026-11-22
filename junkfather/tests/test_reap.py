@@ -383,6 +383,52 @@ class LifecycleHandoffRaceTests(Case):
                                  (result["result"], result["pids"], handed_while_reaping))
                 self.assertEqual("reaped", self.state_of("jtest"))
 
+    def test_a_matching_resource_owner_still_reaps_and_a_mark_before_handoff_refuses_the_handoff(self):
+        from unittest import mock
+        from junkfather import entry as entry_module, resources
+        for lifecycle, agent in ((reap.Lifecycle.SUBAGENT_STOP, "a1"), (reap.Lifecycle.SESSION_END, None)):
+            with self.subTest(lifecycle=lifecycle.value):
+                self.make_resource()
+                handed_while_reaping: List[Any] = []
+
+                def stop(_resource: Any, _grace: float, _alive: Any,
+                         calls: List[Any] = handed_while_reaping) -> Dict[str, Any]:
+                    calls.append(entry_module.handed(self.store, "jres", {"kind": "claude", "session": "s2"}))
+                    return {"result": "stopped", "steps": []}
+
+                with mock.patch.object(resources, "stop", side_effect=stop):
+                    result = reap.reap(self.store, "jres", lifecycle.value, lifecycle=lifecycle,
+                                       owner="s1", agent=agent)
+                self.assertEqual(("stopped", [None]), (result["result"], handed_while_reaping))
+                loaded = self.loaded("jres")
+                self.assertEqual(("reaped", "s1"), (loaded["state"], loaded["owner"]["session"]))
+
+    def test_an_extra_guard_keeps_the_lifecycle_owner_check(self):
+        from junkfather import entry as entry_module
+        for lifecycle, agent in ((reap.Lifecycle.SUBAGENT_STOP, "a1"), (reap.Lifecycle.SESSION_END, None)):
+            with self.subTest(lifecycle=lifecycle.value):
+                self.make_process()  # expires 0: due, so `allowed` alone would still hold after the handoff
+                stopped: List[Any] = []
+                reads: List[int] = []
+
+                def hand_before_mark(calls: List[int] = reads) -> procs.Table:
+                    if not calls:  # the first read, between selection and the mark
+                        self.assertIsNotNone(entry_module.handed(self.store, "jtest",
+                                                                 {"kind": "claude", "session": "s2"}))
+                    calls.append(1)
+                    return table(proc(100, cmd="node server.js"))
+
+                def stopper(targets: List[procs.Proc], _grace: float,
+                            calls: List[Any] = stopped) -> Dict[str, Any]:
+                    calls.append(targets)
+                    return {"result": "stopped"}
+
+                result = reap.reap(self.store, "jtest", lifecycle.value, reader=hand_before_mark, stopper=stopper,
+                                   lifecycle=lifecycle, owner="s1", agent=agent, allowed=entry_module.due)
+                self.assertEqual(("skipped", "owner changed", []), (result["result"], result["reason"], stopped))
+                loaded = self.loaded("jtest")
+                self.assertEqual(("running", "s2"), (loaded["state"], loaded["owner"]["session"]))
+
     def test_cli_lifecycle_reap_paused_at_barrier_skips_after_real_store_handoff(self):
         child = self.spawn("sleep", "600", start_new_session=True)
         claude = self.fake_claude("s1")
