@@ -35,11 +35,13 @@ class TreeUsage:
     memory is the sum over the tree's processes (shared pages count once per process)."""
 
     def __init__(self, root: int, since: float, marked: Callable[[list[int]], set[int]] | None = None,
-                 uid: int | None = None) -> None:
+                 uid: int | None = None,
+                 attributed: Callable[[list[int], dict[int, tuple[Any, ...]]], set[int]] | None = None) -> None:
         self.root, self.since = root, since
         def _none_marked(pids: list[int]) -> set[int]:
             return set()
         self.marked: Callable[[list[int]], set[int]] = marked or _none_marked
+        self.attributed = attributed
         self.uid = os.getuid() if uid is None else uid
         self.root_start: str | None = None
         self.root_gone = False  # set once wait4 has reaped the command: its pid may then be another process
@@ -71,6 +73,10 @@ class TreeUsage:
             fresh = self.candidates(table)
             empty_adopted: set[int] = set()
             adopted = self.marked(fresh) if fresh else empty_adopted
+            if fresh and self.attributed is not None:
+                remaining = [pid for pid in fresh if pid not in adopted]
+                if remaining:
+                    adopted = adopted | self.attributed(remaining, table)
         for key in list(self.members):
             row = table.get(key[0])
             if row is None or row[1] != key[1]:
@@ -142,6 +148,10 @@ class Watch(threading.Thread):
             fresh = self.usage.candidates(table)
         empty_adopted: set[int] = set()
         adopted = self.usage.marked(fresh) if fresh else empty_adopted
+        if fresh and self.usage.attributed is not None:
+            remaining = [pid for pid in fresh if pid not in adopted]
+            if remaining:
+                adopted = adopted | self.usage.attributed(remaining, table)
         with self.lock:
             self.usage.observe(moment, table, adopted)
 

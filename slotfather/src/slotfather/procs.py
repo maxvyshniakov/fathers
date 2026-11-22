@@ -252,8 +252,43 @@ def query(pid: int | None = None, cwd: str | None = None, directory: Path | None
         selected = [number for number in selected if processes[number].uid == os.geteuid() and number not in own
                     and number in cwds and (cwds[number] == cwd or cwds[number].startswith(cwd.rstrip("/") + "/"))]
     parents = {number: process.ppid for number, process in processes.items()}
-    membership = _process.lease_membership(parents, [_process.Lease(str(lease["lease"]), lease["pid"])
-                                                     for lease in leases], selected, detached_only=True)
+    lease_specs = [_process.Lease(str(lease["lease"]), lease["pid"]) for lease in leases]
+    entry_by_path = {str(path): entry for path, entry, _ in entries}
+    lease_since = [_process.lease_started_epoch(entry_by_path.get(str(lease["lease"]), {})) for lease in leases]
+    if sys.platform == "darwin" and pid is None:
+        membership = _process.lease_membership(
+            parents, lease_specs, selected, detached_only=True,
+            commands={number: process.cmd for number, process in processes.items()},
+            uids={number: process.uid for number, process in processes.items()},
+            starts={number: platform.started_at(process.start) for number, process in processes.items()},
+            lease_since=lease_since,
+        )
+    else:
+        membership = _process.lease_membership(parents, lease_specs, selected, detached_only=True)
+        if sys.platform == "darwin" and pid in processes and leases \
+                and not membership.leases.get(pid) and _process.is_detached_browser_helper(processes[pid].cmd):
+            helper_ctx = _process.helper_snapshot()
+            if helper_ctx is not None and pid in helper_ctx.raw_starts and platform.same_holder(
+                    processes[pid].start, None, pid, helper_ctx.raw_starts[pid]):
+                valid_holders: list[object] = [
+                    lease.pid if (type(lease.pid) is int and lease.pid in helper_ctx.raw_starts
+                                  and lease.pid in processes
+                                  and platform.same_holder(processes[lease.pid].start, None, lease.pid,
+                                                           helper_ctx.raw_starts[lease.pid]))
+                    else None
+                    for lease in lease_specs
+                ]
+                attributed = _process.detached_browser_helpers(
+                    helper_ctx.parents, helper_ctx.commands, valid_holders,
+                    uids=helper_ctx.uids, starts=helper_ctx.starts, lease_since=lease_since,
+                )
+                matched = [(index, "helper") for index, helper_pids in sorted(attributed.items())
+                           if lease_specs[index].by_environment and pid in helper_pids]
+                if matched:
+                    membership = _process.Membership(
+                        {**membership.leases, pid: matched},
+                        [item_pid for item_pid in membership.unknown if item_pid != pid],
+                    )
     unknown, lease_unknown, named = recheck(processes, unknown, membership.unknown)
     records: list[dict[str, Any]] = []
     for number in selected:

@@ -14,8 +14,9 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import sys
 import time
-from typing import Any, cast
+from typing import Any, Iterable, cast
 
 from . import config as _config
 from . import entry as _entry
@@ -84,9 +85,11 @@ def process_usage() -> tuple[dict[int, tuple[float, int, str]], dict[int, list[i
 
 
 def process_tree(pid: object, own: dict[int, tuple[float, int, str]],
-                 children: dict[int, list[int]]) -> list[tuple[int, float, int, str]]:
-    """(pid, CPU percent, resident KB, name) for pid and all its descendants: a lease's whole command."""
-    return [(member, *own[member]) for member in _lineage.tree(children, [pid], own.__contains__)]
+                 children: dict[int, list[int]],
+                 extra: Iterable[int] = ()) -> list[tuple[int, float, int, str]]:
+    """(pid, CPU percent, resident KB, name) for pid, any attributed detached helpers, and all their descendants."""
+    roots: list[object] = [pid, *extra]
+    return [(member, *own[member]) for member in _lineage.tree(children, roots, own.__contains__)]
 
 
 def macos_used_memory(text: str) -> float | None:
@@ -474,8 +477,9 @@ def dashboard_model(look: _query.Look | None = None) -> dict[str, Any]:
                     return round(peak, 1), "history"
         return round(default_mem_mb, 1), "default"
 
-    def item(entry: dict[str, Any], kind: str, count: int, queue: str = "") -> dict[str, Any]:
-        tree = process_tree(entry.get("pid"), own, children) if kind != "waiting" else []
+    def item(entry: dict[str, Any], kind: str, count: int, queue: str = "",
+             extra: Iterable[int] = ()) -> dict[str, Any]:
+        tree = process_tree(entry.get("pid"), own, children, extra) if kind != "waiting" else []
         foreseen: dict[str, Any] = expected.get(id(entry)) or {}  # query.outlook(): its class and expected start
         est_mb, est_src = est_memory_of(entry)
         # The yield request on this entry's own marker, read under the queue lock (#20: by entry, not by pid)
@@ -516,8 +520,19 @@ def dashboard_model(look: _query.Look | None = None) -> dict[str, Any]:
         expected = _query.outlook(directory, live, slots, other, settings=look.settings)
     # An `-n all` lease holds the whole capacity, also one grown under it (#7).
     held, live_waiters = _entry.split(live)
-    holders = [item(e, "held", _entry.holds(e, slots)) for e in held]
-    holders += [item(e, "legacy", count, str(path.parent.parent)) for path, e, count in legacy]
+    active_entries = [*held, *(e for _, e, _ in legacy)]
+    detached: dict[int, set[int]] = {}
+    context = _process.helper_snapshot() if sys.platform == "darwin" and active_entries else None
+    if context is not None and active_entries:
+        detached = _process.detached_browser_helpers(
+            context.parents, context.commands, [e.get("pid") for e in active_entries],
+            uids=context.uids, starts=context.starts,
+            lease_since=[_process.lease_started_epoch(e) for e in active_entries],
+        )
+    holders = [item(e, "held", _entry.holds(e, slots), extra=detached.get(index, ()))
+               for index, e in enumerate(held)]
+    holders += [item(e, "legacy", count, str(path.parent.parent), extra=detached.get(len(held) + index, ()))
+                for index, (path, e, count) in enumerate(legacy)]
     settings = look.settings or _settings.order_settings(directory)  # the look's (fathers#36)
     start: datetime.datetime | None = None
     reserved: datetime.datetime | None = None

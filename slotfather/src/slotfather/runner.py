@@ -46,14 +46,21 @@ def execute(argv: list[str], environment: dict[str, str], background: bool = Fal
         print(f"slot: {error}", file=sys.stderr)
         return 127, None
     began = time.monotonic()
+    started = time.time() - 1
     watch = None
+    attributed = None
+    if sys.platform == "darwin":
+        def _attributed(pids: list[int], table: dict[int, tuple[Any, ...]]) -> set[int]:
+            return _process.attributed_browser_helpers(pids, table, child.pid, started)
+        attributed = _attributed
     if marker is not None:
         text = str(marker)
         def carrying(pids: list[int]) -> set[int]:
             return _process.carrying(pids, text)
-        watch = _usage.Watch(_usage.TreeUsage(child.pid, time.time() - 1, carrying), marker.parent.parent, entry=marker)
+        watch = _usage.Watch(_usage.TreeUsage(child.pid, started, carrying, attributed=attributed),
+                             marker.parent.parent, entry=marker)
     elif directory is not None:
-        watch = _usage.Watch(_usage.TreeUsage(child.pid, time.time() - 1), directory)
+        watch = _usage.Watch(_usage.TreeUsage(child.pid, started, attributed=attributed), directory)
     if watch is not None:
         with contextlib.suppress(RuntimeError):
             watch.start()

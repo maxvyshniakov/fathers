@@ -42,7 +42,7 @@ from pathlib import Path
 import plistlib
 import sys
 import time
-from typing import Any, cast
+from typing import Any, Mapping, cast
 
 from . import config as _config
 from . import events as _events
@@ -79,30 +79,40 @@ def leases(directory: Path) -> tuple[dict[int, int], Labelled]:
     not the snapshot's, which is read without it. A table ps could not give raises (fathers#121): this sweep stops
     nothing."""
     look = _query.look(directory, log=True)  # the one look every reader takes (fathers#36)
-    found: Labelled = [(_process.Lease(str(path), entry.get("pid")), str(entry.get("label") or path.stem))
+    found: Labelled = [(_process.Lease(str(path), entry.get("pid"), since=_process.lease_started_epoch(entry)),
+                        str(entry.get("label") or path.stem))
                        for path, entry in look.found]
-    found += [(_process.Lease(str(path), entry.get("pid")), str(entry.get("label") or path.stem))
+    found += [(_process.Lease(str(path), entry.get("pid"), since=_process.lease_started_epoch(entry)),
+               str(entry.get("label") or path.stem))
               for path, entry, _ in look.legacy]
     return _lineage.parents_of(look.table), found
 
 
-def protection(parents: dict[int, int], found: Labelled) -> tuple[dict[int, str], Carriers | None]:
+def protection(parents: dict[int, int], found: Labelled,
+               procs: Mapping[int, sweep_plan.Proc] | None = None) -> tuple[dict[int, str], Carriers | None]:
     """What the leases protect, by the rule `status --json --pid` and `procs` follow (process.lease_membership()):
     pid -> the label of the live lease whose holder's tree it is in, and `carriers(pids)`, which gives those of
-    pids outside every tree whose environment carries a live lease's SLOTFATHER_LEASE (pid -> its label) or cannot
+    pids outside every tree whose environment carries a live lease's SLOTFATHER_LEASE or that are unambiguously
+    attributed as detached macOS browser/XPC helpers of a live lease (pid -> its label), or whose environment cannot
     be read (pid -> None: unknown, so spared)."""
     held = [lease for lease, _ in found]
     labels = [label for _, label in found]
     trees = _process.lease_membership(parents, held, parents, markers=None)
     protected = {pid: labels[member[-1][0]] for pid, member in trees.leases.items() if member}
+    helper_commands = {pid: proc.cmd for pid, proc in procs.items()} if procs is not None and sys.platform == "darwin" else None
+    helper_uids = {pid: proc.uid for pid, proc in procs.items()} if helper_commands is not None and procs is not None else None
+    helper_starts = {pid: proc.started for pid, proc in procs.items()} if helper_commands is not None and procs is not None else None
 
     def carriers(pids: list[int]) -> dict[int, str | None]:
-        membership = _process.lease_membership(parents, held, pids, detached_only=True)
+        membership = _process.lease_membership(
+            parents, held, pids, detached_only=True,
+            commands=helper_commands, uids=helper_uids, starts=helper_starts,
+        )
         marked: dict[int, str | None] = {}
         for pid, member in membership.leases.items():
-            env = [index for index, via in member if via == "env"]
-            if env:
-                marked[pid] = labels[env[0]]
+            matched = [index for index, via in member if via in ("env", "helper")]
+            if matched:
+                marked[pid] = labels[matched[0]]
         marked.update((pid, None) for pid in membership.unknown if pid not in marked)
         return marked
     return protected, (carriers if found else None)
@@ -170,7 +180,7 @@ def sweep(directory: Path, live: bool = False, dev_servers: bool = False, only: 
     if refused:
         live = False  # settings that cannot be read stop nothing: the sweep reports what it would do
     snap = sweep_os.snapshot()
-    protected, carriers = protection(*leases(directory))
+    protected, carriers = protection(*leases(directory), procs=snap.procs)
     before = read_state(directory).get("gone_since", {})
     items = sweep_plan.plan(snap, found_settings, protected, carriers, only, live, dev_servers, before)
     if live:

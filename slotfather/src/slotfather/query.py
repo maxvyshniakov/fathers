@@ -509,9 +509,36 @@ def status_json(directory: Path | None = None, pid: int | None = None, look: Loo
     if pid is not None:
         # The one membership rule (process.lease_membership(), fathers#38): `procs` and the sweep decide the same way.
         both: list[dict[str, Any]] = [*entries_found, *legacy]
-        membership = _process.lease_membership(_lineage.parents_of(table),
-                                               [_process.Lease(str(item["lease"]), item["pid"], n < len(entries_found))
-                                                for n, item in enumerate(both)], [pid])
+        lease_specs = [_process.Lease(str(item["lease"]), item["pid"], n < len(entries_found))
+                       for n, item in enumerate(both)]
+        parents = _lineage.parents_of(table)
+        membership = _process.lease_membership(parents, lease_specs, [pid])
+        if sys.platform == "darwin" and both and parents.get(pid) == 1 and not membership.leases.get(pid):
+            targeted = _process.commands([pid]).get(pid, "")
+            if targeted and _process.is_detached_browser_helper(targeted):
+                helper_ctx = _process.helper_snapshot()
+                if helper_ctx is not None and pid in helper_ctx.raw_starts and _platform.same_holder(
+                        table[pid][1], None, pid, helper_ctx.raw_starts[pid]):
+                    valid_holders: list[object] = [
+                        lease.pid if (type(lease.pid) is int and lease.pid in helper_ctx.raw_starts
+                                      and lease.pid in table
+                                      and _platform.same_holder(table[lease.pid][1], None, lease.pid,
+                                                                helper_ctx.raw_starts[lease.pid]))
+                        else None
+                        for lease in lease_specs
+                    ]
+                    attributed = _process.detached_browser_helpers(
+                        helper_ctx.parents, helper_ctx.commands, valid_holders,
+                        uids=helper_ctx.uids, starts=helper_ctx.starts,
+                        lease_since=[_process.lease_started_epoch(item) for item in both],
+                    )
+                    matched = [(index, "helper") for index, helper_pids in sorted(attributed.items())
+                               if lease_specs[index].by_environment and pid in helper_pids]
+                    if matched:
+                        membership = _process.Membership(
+                            {**membership.leases, pid: matched},
+                            [item_pid for item_pid in membership.unknown if item_pid != pid],
+                        )
         via = dict(membership.leases.get(pid, []))
         mine = [(n < len(entries_found), {**item, "via": via[n]}) for n, item in enumerate(both) if n in via]
         entries_found = [item for current, item in mine if current]
