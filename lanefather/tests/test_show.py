@@ -4,13 +4,18 @@ from __future__ import annotations
 import json
 import unittest
 
-from support import RUST_STUB, LaneCase
+from support import RUST_STUB, LaneCase, ScratchCase
+
+
+class ShowScratchTests(ScratchCase):
+    def test_missing_state_and_invalid_ids_do_not_create_files(self) -> None:
+        missing = self.tmp / 'missing-state'
+        self.assertIn('no lane', self.lane('show', 'missing', '--json', '--state-dir', str(missing), ok=False))
+        self.assertFalse(missing.exists())
+        self.assertIn('lane id', self.lane('show', '../outside', '--json', ok=False))
 
 
 class ShowTests(LaneCase):
-    # End to end: every command as its own process (fathers#95).
-    process_cli = True
-
     def test_show_exports_project_ticket_checks_and_review_without_mutation(self):
         worktree = self.created('context', 'lib/**')
         self.git(self.repo, 'remote', 'add', 'origin', 'git@github.com:example/project.with-dots.git')
@@ -57,12 +62,6 @@ class ShowTests(LaneCase):
         self.assertTrue(shown['checks']['tree_match'])
         self.assertFalse(marker.exists(), 'read-only dashboard never executes the project resolver')
         self.assertEqual(before, {str(p): p.read_bytes() for p in self.state.rglob('*') if p.is_file()})
-
-    def test_missing_state_and_invalid_ids_do_not_create_files(self):
-        missing = self.tmp / 'missing-state'
-        self.assertIn('no lane', self.lane('show', 'missing', '--json', '--state-dir', str(missing), ok=False))
-        self.assertFalse(missing.exists())
-        self.assertIn('lane id', self.lane('show', '../outside', '--json', ok=False))
 
     def test_project_lookup_refuses_a_lane_from_another_repository(self):
         self.created('same-id', 'lib/**')

@@ -13,7 +13,7 @@ from typing import Any
 import unittest
 import unittest.mock
 
-from support import FAKE_PLAN, FAKE_VERIFY, LaneCase, close_process
+from support import FAKE_PLAN, FAKE_VERIFY, LaneCase, ScratchCase, close_process
 
 PACKAGE_DIR = pathlib.Path(__file__).resolve().parent.parent / "lanefather"
 
@@ -407,7 +407,9 @@ class VerifyProgressHeartbeatTests(LaneCase):
         self.assertTrue(any("slotfather waiting" in line for line in queued_lines), queued_lines)
         self.assertEqual(self.receipt("queued")["status"], "green")
 
-    def test_tracker_identifies_setup_state_and_observed_unittest_name_without_fabricating(self):
+
+class ProgressTrackerUnitTests(ScratchCase):
+    def test_tracker_identifies_setup_state_and_observed_unittest_name_without_fabricating(self) -> None:
         from lanefather import verify
         log = self.tmp / "progress.log"
         tracker = verify._ProgressTracker(log, verify.Selection.checks(["lib-check", "native-check"]))  # pyright: ignore[reportPrivateUsage]

@@ -15,7 +15,7 @@ from typing import Any
 import unittest
 from unittest.mock import patch
 
-from support import ROOT, LaneCase, project
+from support import FIXTURE_CONFIG, ROOT, LaneCase, ScratchCase, project
 
 from lanefather import wait
 
@@ -119,8 +119,11 @@ class WaitTests(LaneCase):
         self.assertIn("lane a is done without landing", done.stderr)
         self.assertIn("Lane a is done", self.lane("wait", "a", "--for", "done"))
 
-    def test_wait_sleeps_with_a_growing_pause_until_the_state_arrives(self):
-        self.start("old", "native/**")
+
+class WaitUnitTests(ScratchCase):
+    def test_wait_sleeps_with_a_growing_pause_until_the_state_arrives(self) -> None:
+        self.write(self.tmp, ".lanefather.toml", FIXTURE_CONFIG)
+        self.state.mkdir(parents=True)
         record_path = self.state / "b.json"
         naps: list[float] = []
         now = [0.0]
@@ -129,22 +132,21 @@ class WaitTests(LaneCase):
             naps.append(seconds)
             now[0] += seconds
             if len(naps) == 4:  # the coordinator registers the lane meanwhile
-                saved: dict[str, Any] = dict(json.loads((self.state / "old.json").read_text()), id="b",
-                                             status="planned", created="later")
+                saved: dict[str, Any] = {"id": "b", "status": "planned", "created": "later", "claims": ["native/**"]}
                 record_path.write_text(json.dumps(saved))
 
-        with patch.dict("os.environ", self.env, clear=True), project(self.integration):
+        with patch.dict("os.environ", self.env, clear=True), project(self.tmp):
             outcome, record = wait.wait_for("b", "registered", 600, sleep=nap, clock=lambda: now[0])
         self.assertEqual((outcome, record and record["status"]), (True, "planned"))
         self.assertEqual(len(naps), 4)
         self.assertEqual(naps, sorted(naps), "the pause grows")
         self.assertLessEqual(max(naps), wait.LONGEST)
-        with patch.dict("os.environ", self.env, clear=True), project(self.integration):
+        with patch.dict("os.environ", self.env, clear=True), project(self.tmp):
             outcome, _ = wait.wait_for("c", "registered", 3, sleep=nap, clock=lambda: now[0])
         self.assertFalse(outcome)
         self.assertLessEqual(now[0] - sum(naps[:4]), 3, "never sleeps past the timeout")
 
-    def test_registered_waits_for_a_new_lane_after_a_done_one_of_the_same_id(self):
+    def test_registered_waits_for_a_new_lane_after_a_done_one_of_the_same_id(self) -> None:
         done_before = {"id": "r", "status": "done", "created": "2026-11-01T00:00:00Z"}
         self.assertFalse(wait.reached(done_before, "registered", done_before))
         self.assertTrue(wait.reached(dict(done_before, created="2026-11-16T00:00:00Z"), "registered", done_before))

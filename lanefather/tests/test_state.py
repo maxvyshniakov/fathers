@@ -206,6 +206,19 @@ class CutShortRecordTests(unittest.TestCase):
         self.assertEqual(state.load("a")["status"], "planned")
         self.assertEqual(sorted(p.name for p in self.state.iterdir()), ["a.json"])
 
+    def test_a_newer_schema_is_refused_rather_than_rewritten(self):
+        import json
+
+        from lanefather import state
+        from lanefather.errors import LaneError
+        future = {"schema": 2, "id": "future", "status": "planned", "claims": ["docs/**"]}
+        (self.state / "future.json").write_text(json.dumps(future))
+        for action in (lambda: state.load("future"), lambda: state.lanes()):
+            with self.assertRaises(LaneError) as caught:
+                action()
+            self.assertIn("schema 2, newer than this lanefather's 1", str(caught.exception))
+        self.assertEqual(json.loads((self.state / "future.json").read_text())["schema"], 2)
+
 
 class CutShortStartTests(LaneCase):
     def test_start_refuses_over_a_cut_short_record_and_keeps_its_bytes(self):

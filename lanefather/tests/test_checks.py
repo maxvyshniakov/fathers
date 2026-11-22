@@ -14,7 +14,7 @@ from typing import Any
 import unittest
 import unittest.mock
 
-from support import RUST_STUB, LaneCase, load_lane, project
+from support import FIXTURE_CONFIG, RUST_STUB, LaneCase, ScratchCase, load_lane, project
 
 
 class ClaimsFollowTheDiffTests(LaneCase):
@@ -217,24 +217,6 @@ class LoadThrottleTests(LaneCase):
         self.enterContext(project(self.integration))
         return lane
 
-    def test_a_run_starts_once_load15_drops_under_the_limit(self):
-        lane = self.in_process(LANEFATHER_LOAD_POLL="0.06")
-        loads = iter([20.0, 12.0, 8.9])
-        with unittest.mock.patch.object(lane.host, "load15", side_effect=lambda: next(loads)), \
-                contextlib.redirect_stdout(io.StringIO()) as printed:
-            wait = lane.host.wait_for_load("lane-a")
-        self.assertIn("lane-a starts after 0 s at load15 8.9", printed.getvalue())
-        self.assertEqual((wait["load15_before"], wait["load15"], wait["limit"]), (20.0, 8.9, 9.0))
-        self.assertNotIn("gave_up", wait)
-        self.assertGreater(wait["seconds"], 0)
-
-    def test_a_run_under_a_lease_it_already_holds_does_not_wait(self):
-        # #568's rerun alone holds every slot: a wait there would hold them idle while the load can only drop.
-        lane = self.in_process(SLOTFATHER_LEASE=str(self.tmp / "lease"), LANEFATHER_LOAD15="30")
-        wait = lane.host.wait_for_load("lane-a-alone")
-        self.assertEqual(wait["seconds"], 0.0)
-        self.assertIn("slot lease", wait["skipped"])
-
     def test_the_batch_gate_sizes_its_jobs_after_the_load_wait(self):
         """Review of #599: the gate's job count comes from the load once its wait is over, not before it."""
         tip = self.tip()
@@ -259,6 +241,36 @@ class LoadThrottleTests(LaneCase):
         gate = self.receipt(f"promote-{tip[:10]}.gate")
         self.assertTrue(gate["load_wait"]["gave_up"])
         self.assertEqual(gate["results"][0]["load_wait"], gate["load_wait"])
+
+
+class LoadThrottleUnitTests(ScratchCase):
+    def in_process_scratch(self, **env: str) -> Any:
+        self.write(self.tmp, ".lanefather.toml", FIXTURE_CONFIG)
+        lane = load_lane()
+        patcher = unittest.mock.patch.dict(os.environ, {**self.env, "LANEFATHER_LOAD_THROTTLE": "1",
+                                                        "LANEFATHER_LOAD_POLL": "0.01", **env}, clear=True)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.enterContext(project(self.tmp))
+        return lane
+
+    def test_a_run_starts_once_load15_drops_under_the_limit(self) -> None:
+        lane = self.in_process_scratch(LANEFATHER_LOAD_POLL="0.06")
+        loads = iter([20.0, 12.0, 8.9])
+        with unittest.mock.patch.object(lane.host, "load15", side_effect=lambda: next(loads)), \
+                contextlib.redirect_stdout(io.StringIO()) as printed:
+            wait = lane.host.wait_for_load("lane-a")
+        self.assertIn("lane-a starts after 0 s at load15 8.9", printed.getvalue())
+        self.assertEqual((wait["load15_before"], wait["load15"], wait["limit"]), (20.0, 8.9, 9.0))
+        self.assertNotIn("gave_up", wait)
+        self.assertGreater(wait["seconds"], 0)
+
+    def test_a_run_under_a_lease_it_already_holds_does_not_wait(self) -> None:
+        # #568's rerun alone holds every slot: a wait there would hold them idle while the load can only drop.
+        lane = self.in_process_scratch(SLOTFATHER_LEASE=str(self.tmp / "lease"), LANEFATHER_LOAD15="30")
+        wait = lane.host.wait_for_load("lane-a-alone")
+        self.assertEqual(wait["seconds"], 0.0)
+        self.assertIn("slot lease", wait["skipped"])
 
 
 class RedCheckClassificationTests(LaneCase):
@@ -1073,7 +1085,9 @@ class MinSlotsTests(LaneCase):
         self.assertEqual(receipt["jobs_decision"]["min_slots"], 2)
         self.assertEqual(receipt["jobs_decision"]["min_slots_for"], ["lib-check"])
 
-    def test_min_slots_is_capped_at_machine_total_slot_capacity(self):
+
+class MinSlotsUnitTests(unittest.TestCase):
+    def test_min_slots_is_capped_at_machine_total_slot_capacity(self) -> None:
         from lanefather import host, slots
         with unittest.mock.patch.object(slots, "advise", return_value={"jobs": 1, "slots": 1, "held": 0, "free": 1}):
             decision = host.check_jobs({"disk_free_gb": 500, "load15": 0.1, "cores": 2}, minimum=2,

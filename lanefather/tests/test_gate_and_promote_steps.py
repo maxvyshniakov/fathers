@@ -4,16 +4,17 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 import subprocess
+import tomllib
 import unittest
 from unittest import mock
 
-from support import LaneCase
+from support import FIXTURE_CONFIG, LaneCase
 
 from lanefather import config, gate, gitops, promote
 
 
-class PromoteStepsTests(LaneCase):
-    def test_lanes_does_not_import_promote(self):
+class PromoteStepsTests(unittest.TestCase):
+    def test_lanes_does_not_import_promote(self) -> None:
         lanes_path = Path(__file__).resolve().parent.parent / "lanefather" / "lanes.py"
         tree = ast.parse(lanes_path.read_text(), filename=str(lanes_path))
         imported: set[str] = set()
@@ -29,10 +30,12 @@ class PromoteStepsTests(LaneCase):
         self.assertNotIn("promote", imported)
         self.assertNotIn("lanefather.promote", imported)
 
-    def test_promote_steps_order_without_and_with_install_deploy(self):
+    def test_promote_steps_order_without_and_with_install_deploy(self) -> None:
+        config.use(config.Config())
+        self.addCleanup(config.use, None)
         run = promote.PromoteRun(
-            cwd=str(self.repo),
-            common=str(self.repo / ".git"),
+            cwd="/repo",
+            common="/repo/.git",
             sha="deadbeef" * 5,
             branches=["dev"],
             remote="origin",
@@ -55,11 +58,10 @@ class PromoteStepsTests(LaneCase):
             ],
         )
 
-        config.use(config.load(config.find(self.repo)))
-        self.addCleanup(config.use, None)
+        config.use(config.parse(tomllib.loads(FIXTURE_CONFIG)))
         run_install = promote.PromoteRun(
-            cwd=str(self.repo),
-            common=str(self.repo / ".git"),
+            cwd="/repo",
+            common="/repo/.git",
             sha="deadbeef" * 5,
             branches=["dev", "main"],
             remote="origin",
@@ -73,10 +75,10 @@ class PromoteStepsTests(LaneCase):
             ["step:install", "step:check-installed", "step:link-package", "step:deploy", "install_summary"],
         )
 
-    def test_promote_sha_stops_on_nonzero_step_return(self):
+    def test_promote_sha_stops_on_nonzero_step_return(self) -> None:
         run = promote.PromoteRun(
-            cwd=str(self.repo),
-            common=str(self.repo / ".git"),
+            cwd="/repo",
+            common="/repo/.git",
             sha="deadbeef" * 5,
             branches=["dev"],
             remote="origin",
@@ -101,6 +103,18 @@ class PromoteStepsTests(LaneCase):
             rc = promote.promote_sha(run)
         self.assertEqual(rc, 1)
         self.assertEqual(called, ["ok", "fail"])
+
+    def test_gate_format_bisect_lines_separates_merges_and_direct(self) -> None:
+        lines = gate._format_bisect_lines(  # pyright: ignore[reportPrivateUsage]
+            [("1111111111abcdef", "Merge lane a")],
+            [("2222222222abcdef", "Direct commit")],
+            "Header:",
+            "Other:",
+        )
+        self.assertEqual(lines[0], "Header:")
+        self.assertIn("1111111111 Merge lane a", lines[1])
+        self.assertEqual(lines[2], "Other:")
+        self.assertIn("2222222222 Direct commit", lines[3])
 
 
 class MoveBranchAndBisectTests(LaneCase):
@@ -129,18 +143,6 @@ class MoveBranchAndBisectTests(LaneCase):
         err2 = gitops.move_branch(str(self.repo), "side", new_sha, base, None, "reset move", reset=True)
         self.assertIsNone(err2)
         self.assertEqual(self.git(self.repo, "rev-parse", "side"), base)
-
-    def test_gate_format_bisect_lines_separates_merges_and_direct(self):
-        lines = gate._format_bisect_lines(  # pyright: ignore[reportPrivateUsage]
-            [("1111111111abcdef", "Merge lane a")],
-            [("2222222222abcdef", "Direct commit")],
-            "Header:",
-            "Other:",
-        )
-        self.assertEqual(lines[0], "Header:")
-        self.assertIn("1111111111 Merge lane a", lines[1])
-        self.assertEqual(lines[2], "Other:")
-        self.assertIn("2222222222 Direct commit", lines[3])
 
 
 if __name__ == "__main__":

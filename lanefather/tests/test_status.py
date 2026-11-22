@@ -3,19 +3,29 @@ from __future__ import annotations
 
 import datetime
 import json
+import os
 import pathlib
 import shutil
 import subprocess
 import sys
 from typing import Any
 
-from support import LaneCase
+from support import LaneCase, ScratchCase, run_in_process
+
+
+class StatusScratchTests(ScratchCase):
+    def test_a_command_outside_a_repository_registers_nothing(self) -> None:
+        outside = self.tmp / "outside"
+        outside.mkdir()
+        self.lane("list", cwd=outside)
+        self.assertFalse(pathlib.Path(self.env["LANEFATHER_REGISTRY"]).exists())
+
+    def test_the_capabilities_advertise_the_snapshot(self) -> None:
+        block = json.loads(self.lane("capabilities", "--json"))["dashboard"]
+        self.assertEqual(block["snapshot"], {"argv": ["status", "--json"], "versions": [1], "poll": 5})
 
 
 class StatusTests(LaneCase):
-    # End to end: every command as its own process (fathers#95).
-    process_cli = True
-
     def status(self) -> dict[str, Any]:
         return json.loads(self.lane("status", "--json", cwd=self.tmp))
 
@@ -36,8 +46,12 @@ class StatusTests(LaneCase):
         self.git(other, "remote", "add", "origin", "git@github.com:fixture/other.git")
         environment = dict(self.env)
         del environment["LANEFATHER_STATE"]
-        subprocess.run([sys.executable, "-m", "lanefather", "start", "a", "--ticket", "7", "--claims", "lib/**"], cwd=other,
-                       env=environment, check=True, capture_output=True)
+        if os.environ.get("LANEFATHER_TEST_PROCESS"):
+            subprocess.run([sys.executable, "-m", "lanefather", "start", "a", "--ticket", "7", "--claims", "lib/**"],
+                           cwd=other, env=environment, check=True, capture_output=True)
+        else:
+            code, output = run_in_process(["start", "a", "--ticket", "7", "--claims", "lib/**"], other, environment)
+            self.assertEqual(code, 0, output)
         return other, self.tmp / "other-state"
 
     def test_two_registered_projects_are_reported_and_a_lane_id_in_both_stays_distinct(self):
@@ -110,16 +124,6 @@ class StatusTests(LaneCase):
         self.assertFalse(pathlib.Path(self.env["LANEFATHER_REGISTRY"]).exists())
         self.assertFalse(self.state.exists())
         self.assertEqual(self.status()["projects"], [])
-
-    def test_a_command_outside_a_repository_registers_nothing(self):
-        outside = self.tmp / "outside"
-        outside.mkdir()
-        self.lane("list", cwd=outside)
-        self.assertFalse(pathlib.Path(self.env["LANEFATHER_REGISTRY"]).exists())
-
-    def test_the_capabilities_advertise_the_snapshot(self):
-        block = json.loads(self.lane("capabilities", "--json"))["dashboard"]
-        self.assertEqual(block["snapshot"], {"argv": ["status", "--json"], "versions": [1], "poll": 5})
 
     def test_the_newest_batch_gate_is_reported(self):
         self.start("a", "lib/**")

@@ -113,7 +113,7 @@ def main(argv):
                     pass
         if not os.environ.get("FAKE_SLOTFATHER_BYPASS"):
             os.environ.update(SLOTFATHER_LEASE=f"fake-lease-{os.getpid()}", SLOTFATHER_COUNT=str(count),
-                              SLOTFATHER_SLOTS=",".join(str(i + 1) for i in range(count)))
+                              SLOTFATHER_SLOTS=str(count))
             if yieldable:
                 os.environ["SLOTFATHER_YIELD"] = yield_path()
         os.execvp(rest[0], rest)
@@ -142,9 +142,10 @@ def main(argv):
         busy = unleased + (0.0 if exclusive else held * per_slot)
         capacity = max(0, math.floor((total * per_slot - busy) / per_slot + 0.5))
         free = total if exclusive else max(0, total - held)
-        print(json.dumps({"jobs": max(1, min(maximum, capacity, free)), "maximum": maximum, "exclusive": exclusive,
-                          "total": total, "held": held, "free": free, "load": load, "unleased_load": unleased,
-                          "cores_per_slot": per_slot, "capacity": capacity, "waiting": False}))
+        print(json.dumps({"v": 1, "jobs": max(1, min(maximum, capacity, free)), "maximum": maximum,
+                          "exclusive": exclusive, "cores": int(total * per_slot), "total": total, "held": held,
+                          "free": free, "load": load, "unleased_load": unleased, "cores_per_slot": per_slot,
+                          "capacity": capacity, "waiting": False}))
         return 0
     if command == "slots":
         if os.environ.get("FAKE_SLOTFATHER_SLOTS_FAIL"):
@@ -168,7 +169,8 @@ def main(argv):
                     })
                 except (OSError, ValueError):
                     pass
-            answer = {"v": 2, "slots": total, "held": held, "free": total - held, "legacy": [], "entries": entries}
+            answer = {"v": 2, "slots": total, "held": held, "free": max(0, total - held),
+                      "draining": max(0, held - total), "legacy": [], "entries": entries}
             if rest[1:2] == ["--pid"] and rest[2:3]:
                 start = subprocess.run(["ps", "-o", "lstart=", "-p", rest[2]], capture_output=True, text=True,
                                        env={**os.environ, "LC_ALL": "C"}).stdout.strip()

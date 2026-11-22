@@ -11,7 +11,7 @@ import sys
 import time
 import unittest
 
-from support import LaneCase, close_process
+from support import FIXTURE_CONFIG, LaneCase, ScratchCase, close_process
 
 from lanefather import config, github
 
@@ -43,8 +43,8 @@ def _imported_internal_modules(path: Path) -> tuple[set[str], set[str]]:
     return top, local
 
 
-class Tidy6ArchitectureTests(LaneCase):
-    def test_no_gh_subprocess_outside_github_module(self):
+class Tidy6ArchitectureTests(unittest.TestCase):
+    def test_no_gh_subprocess_outside_github_module(self) -> None:
         for py_file in sorted(PKG_DIR.glob("*.py")):
             if py_file.name == "github.py":
                 continue
@@ -139,11 +139,18 @@ class Tidy6ArchitectureTests(LaneCase):
                                 writers.append((py_file.name, node.name))
         self.assertEqual(writers, [("postmerge.py", "_write_receipt")])
 
-    def test_github_adapter_origin_repo_and_gh_command(self):
-        config.use(config.load(config.find(self.repo)))
+
+class GitHubAdapterTests(ScratchCase):
+    def test_github_adapter_origin_repo_and_gh_command(self) -> None:
+        repo = self.tmp / "repo"
+        repo.mkdir()
+        subprocess.run(["git", "init", "-q", str(repo)], check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(repo), "remote", "add", "origin", "git@github.com:example/widgets.git"],
+                       check=True, capture_output=True)
+        cfg = self.write(repo, ".lanefather.toml", FIXTURE_CONFIG)
+        config.use(config.load(cfg))
         self.addCleanup(config.use, None)
-        common = str(self.repo / ".git")
-        self.git(self.repo, "remote", "add", "origin", "git@github.com:example/widgets.git")
+        common = str(repo / ".git")
         self.assertEqual(github.origin_repo(common), "example/widgets")
         self.assertEqual(github.repo_args(common), ["-R", "example/widgets"])
         self.assertEqual(github.repository(common), "example/widgets")

@@ -12,7 +12,33 @@ from typing import Any
 import unittest
 import unittest.mock
 
-from support import TWO_FINDINGS, LaneCase, close_process, project, template_repository
+from support import TWO_FINDINGS, LaneCase, ScratchCase, close_process, project, template_repository
+
+
+class DiskFloorUnitTests(ScratchCase):
+    def test_the_floor_is_the_reserve_plus_the_cap_times_the_largest_recent_lane(self) -> None:
+        from lanefather import config, host
+        records = [{"status": "done", "done": f"2026-11-{day:02d}T00:00:00Z", "freed_bytes": size}
+                   for day, size in ((1, 9 * 10**9), *((d, 2 * 10**9) for d in range(2, 22)), (22, 3 * 10**9))]
+        saved = self.tmp / "machine-settings.json"  # the machine's own settings stay out
+        with unittest.mock.patch.dict(os.environ, {"LANEFATHER_MIN_DISK_GB": "", "LANEFATHER_SETTINGS": str(saved)}):
+            floor = host.disk_floor(config.Config(), 10, records)
+            # The 9 GB lane is older than the 20 most recent: the peak is 3 GB.
+            self.assertEqual((floor.gb, floor.peak, floor.source), (70.0, 3.0, "derived"))
+            self.assertEqual(floor.words(), "70 GB (10^9) = 40 reserve + 10 x 3.0 GB lane peak")
+            self.assertEqual(host.disk_floor(config.Config(), 4, []).gb, 40 + 4 * host.DEFAULT_LANE_PEAK_GB)
+            # fathers#163: the machine setting sets it, and the derivation stays beside it.
+            saved.write_text(json.dumps({"v": 1, "settings": {"host.min_disk_gb": 90.5}}))
+            floor = host.disk_floor(config.Config(), 10, records)
+            self.assertEqual(floor.words(), "90.5 GB (10^9; lanefather settings host.min_disk_gb)")
+            self.assertEqual(floor.derivation(), "70 GB (10^9) = 40 reserve + 10 x 3.0 GB lane peak")
+        with unittest.mock.patch.dict(os.environ, {"LANEFATHER_MIN_DISK_GB": "25", "LANEFATHER_SETTINGS": str(saved)}):
+            self.assertEqual(host.disk_floor(config.Config(), 10, records).words(),
+                             "25 GB (10^9; LANEFATHER_MIN_DISK_GB)")
+        with unittest.mock.patch.dict(os.environ, {"LANEFATHER_MIN_DISK_GB": "lots", "LANEFATHER_SETTINGS": str(saved)}):
+            self.assertEqual(host.disk_floor(config.Config(), 10, records).gb, 90.5)
+        with unittest.mock.patch.dict(os.environ, {"LANEFATHER_MIN_DISK_GB": "auto", "LANEFATHER_SETTINGS": str(saved)}):
+            self.assertEqual(host.disk_floor(config.Config(), 10, records).gb, 70.0)
 
 
 class FinishedLaneTests(LaneCase):
@@ -254,30 +280,6 @@ class FinishedLaneTests(LaneCase):
         self.assertTrue(scratch.exists())
 
     # Review of fathers#157 (P2).
-
-    def test_the_floor_is_the_reserve_plus_the_cap_times_the_largest_recent_lane(self):
-        from lanefather import config, host
-        records = [{"status": "done", "done": f"2026-11-{day:02d}T00:00:00Z", "freed_bytes": size}
-                   for day, size in ((1, 9 * 10**9), *((d, 2 * 10**9) for d in range(2, 22)), (22, 3 * 10**9))]
-        saved = self.tmp / "machine-settings.json"  # the machine's own settings stay out
-        with unittest.mock.patch.dict(os.environ, {"LANEFATHER_MIN_DISK_GB": "", "LANEFATHER_SETTINGS": str(saved)}):
-            floor = host.disk_floor(config.Config(), 10, records)
-            # The 9 GB lane is older than the 20 most recent: the peak is 3 GB.
-            self.assertEqual((floor.gb, floor.peak, floor.source), (70.0, 3.0, "derived"))
-            self.assertEqual(floor.words(), "70 GB (10^9) = 40 reserve + 10 x 3.0 GB lane peak")
-            self.assertEqual(host.disk_floor(config.Config(), 4, []).gb, 40 + 4 * host.DEFAULT_LANE_PEAK_GB)
-            # fathers#163: the machine setting sets it, and the derivation stays beside it.
-            saved.write_text(json.dumps({"v": 1, "settings": {"host.min_disk_gb": 90.5}}))
-            floor = host.disk_floor(config.Config(), 10, records)
-            self.assertEqual(floor.words(), "90.5 GB (10^9; lanefather settings host.min_disk_gb)")
-            self.assertEqual(floor.derivation(), "70 GB (10^9) = 40 reserve + 10 x 3.0 GB lane peak")
-        with unittest.mock.patch.dict(os.environ, {"LANEFATHER_MIN_DISK_GB": "25", "LANEFATHER_SETTINGS": str(saved)}):
-            self.assertEqual(host.disk_floor(config.Config(), 10, records).words(),
-                             "25 GB (10^9; LANEFATHER_MIN_DISK_GB)")
-        with unittest.mock.patch.dict(os.environ, {"LANEFATHER_MIN_DISK_GB": "lots", "LANEFATHER_SETTINGS": str(saved)}):
-            self.assertEqual(host.disk_floor(config.Config(), 10, records).gb, 90.5)
-        with unittest.mock.patch.dict(os.environ, {"LANEFATHER_MIN_DISK_GB": "auto", "LANEFATHER_SETTINGS": str(saved)}):
-            self.assertEqual(host.disk_floor(config.Config(), 10, records).gb, 70.0)
 
     def test_a_disk_refusal_states_the_derived_floor(self):
         from lanefather import host

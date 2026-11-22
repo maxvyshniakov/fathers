@@ -7,7 +7,7 @@ import json
 from typing import Any
 import unittest
 
-from support import TWO_FINDINGS, LaneCase
+from support import FIXTURE_CONFIG, TWO_FINDINGS, LaneCase, ScratchCase, project
 
 
 class FixLaneTests(LaneCase):
@@ -151,21 +151,6 @@ class FixLaneCapTests(LaneCase):
         self.assertEqual(json.loads((self.state / "a-review-fixes.json").read_text())["cap_source"],
                          "fix-lane of a")
 
-    def test_only_a_landed_parent_holding_the_worktree_exempts_a_lane(self):
-        from unittest.mock import patch
-
-        from support import project
-
-        from lanefather import lanes
-        self.state.mkdir(parents=True)
-        worktree = str(self.tmp / "kept")
-        for status, expected in (("landed", "p"), ("released", "p"), ("active", None), ("done", None)):
-            with self.subTest(status):
-                (self.state / "p.json").write_text(json.dumps({"id": "p", "status": status, "worktree": worktree}))
-                with patch.dict("os.environ", self.env, clear=True), project(self.integration):
-                    self.assertEqual(lanes.fix_parent({"review_fix_of": "p", "worktree": worktree}), expected)
-                    self.assertIsNone(lanes.fix_parent({"review_fix_of": "p", "worktree": str(self.tmp / "x")}))
-
     def test_another_repositorys_claim_keeps_no_file_out_of_the_fix_lane(self):
         self.landed_with_findings()
         (self.state / "dg-1.json").write_text(json.dumps({
@@ -175,6 +160,22 @@ class FixLaneCapTests(LaneCase):
         output = self.lane("review", "a", "--fix-lane")
         self.assertNotIn("stays out of the fix lane's claims", output)
         self.assertIn("lib/api.txt", json.loads((self.state / "a-review-fixes.json").read_text())["claims"])
+
+
+class FixParentUnitTests(ScratchCase):
+    def test_only_a_landed_parent_holding_the_worktree_exempts_a_lane(self) -> None:
+        from unittest.mock import patch
+
+        from lanefather import lanes
+        self.write(self.tmp, ".lanefather.toml", FIXTURE_CONFIG)
+        self.state.mkdir(parents=True)
+        worktree = str(self.tmp / "kept")
+        for status, expected in (("landed", "p"), ("released", "p"), ("active", None), ("done", None)):
+            with self.subTest(status):
+                (self.state / "p.json").write_text(json.dumps({"id": "p", "status": status, "worktree": worktree}))
+                with patch.dict("os.environ", self.env, clear=True), project(self.tmp):
+                    self.assertEqual(lanes.fix_parent({"review_fix_of": "p", "worktree": worktree}), expected)
+                    self.assertIsNone(lanes.fix_parent({"review_fix_of": "p", "worktree": str(self.tmp / "x")}))
 
 
 if __name__ == "__main__":

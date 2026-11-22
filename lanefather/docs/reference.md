@@ -426,8 +426,7 @@ older Slotfather).
 
 Records are schema 1, the format written by `tools/lane`, the project-local tool Lanefather was extracted from.
 lanefather writes nothing an older `tools/lane` cannot read, and reads everything it wrote: lanes on older branches,
-each running its own branch's `tools/lane`, share the state directory with an installed lanefather. `tests/test_compat.py` proves it in both
-directions against that tool (`tests/fixtures/legacy-lane`). A record of a newer schema is refused, never rewritten.
+each running its own branch's `tools/lane`, share the state directory with an installed lanefather. A record of a newer schema is refused, never rewritten.
 
 Records, receipts, the settings, the registry and the installed command are written whole: each write goes through
 its own temporary file beside the target, synced before the rename, and the directory after it. A lane record that is empty

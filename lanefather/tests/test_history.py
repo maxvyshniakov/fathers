@@ -6,7 +6,7 @@ import pathlib
 from typing import Any
 import unittest
 
-from support import LaneCase
+from support import LaneCase, ScratchCase
 
 
 class HistoryTests(LaneCase):
@@ -81,7 +81,9 @@ class HistoryTests(LaneCase):
         flakes = self.lines("flake")
         self.assertEqual([(f["check"], f["how"]) for f in flakes], [("lib-check", "later-run")])
 
-    def test_a_flake_names_the_failed_junit_tests(self):
+
+class JunitFailuresTests(ScratchCase):
+    def test_a_flake_names_the_failed_junit_tests(self) -> None:
         from lanefather import history
         report = self.tmp / "junit.xml"
         report.write_text('<testsuite><testcase classname="grid" name="scrolls"><failure/></testcase>'

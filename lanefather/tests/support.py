@@ -669,11 +669,9 @@ class InProcessTimeout(Exception):
     """A command run in process outlived its timeout, as subprocess.run(timeout=) would raise."""
 
 
-def run_in_process(argv: list[str], cwd: Any, env: dict[str, str], timeout: float = 120) -> tuple[int, str]:
-    """`python -m lanefather ARGV` in this process (fathers#95): the same environment, working directory and
-    file descriptors 1 and 2, so the output of the commands lanefather starts is captured as a process's would be.
-    Returns (exit status, stdout followed by stderr). The run's configuration, modules and sys.path do not outlive
-    it, and a run past `timeout` seconds raises InProcessTimeout (a SIGALRM in the main thread)."""
+def run_in_process_streams(argv: list[str], cwd: Any, env: dict[str, str],
+                           timeout: float = 120) -> tuple[int, str, str]:
+    """`python -m lanefather ARGV` in this process, returning `(exit status, stdout, stderr)`."""
     import signal
 
     from lanefather import claims, cli, config
@@ -735,7 +733,16 @@ def run_in_process(argv: list[str], cwd: Any, env: dict[str, str], timeout: floa
         for handle in outputs:
             handle.seek(0)
             texts.append(handle.read().decode(errors="replace"))
-        return code, texts[0] + texts[1]
+        return code, texts[0], texts[1]
+
+
+def run_in_process(argv: list[str], cwd: Any, env: dict[str, str], timeout: float = 120) -> tuple[int, str]:
+    """`python -m lanefather ARGV` in this process (fathers#95): the same environment, working directory and
+    file descriptors 1 and 2, so the output of the commands lanefather starts is captured as a process's would be.
+    Returns (exit status, stdout followed by stderr). The run's configuration, modules and sys.path do not outlive
+    it, and a run past `timeout` seconds raises InProcessTimeout (a SIGALRM in the main thread)."""
+    code, stdout, stderr = run_in_process_streams(argv, cwd, env, timeout)
+    return code, stdout + stderr
 
 
 def close_process(process: subprocess.Popen[Any]) -> None:
@@ -748,6 +755,63 @@ def close_process(process: subprocess.Popen[Any]) -> None:
         for stream in (process.stdin, process.stdout, process.stderr):
             if stream is not None:
                 stream.close()
+
+
+class ScratchCase(unittest.TestCase):
+    """Lightweight scratch directory and isolated CLI environment for tests that do not need a Git repository."""
+
+    process_cli = False
+
+    def setUp(self) -> None:
+        self.tmp = pathlib.Path(tempfile.mkdtemp(prefix="lane-scratch-"))
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.state = self.tmp / "state" / "lanes"
+        self.events = self.tmp / "machine" / "events.jsonl"
+        (self.tmp / "bin").mkdir()
+        shutil.copy2(FIXTURES / "slotfather", self.tmp / "bin" / "slotfather")
+        self.env: dict[str, str] = {
+            k: v for k, v in os.environ.items()
+            if not k.startswith(("STRAYLIGHT_", "LANEFATHER_", "SLOTFATHER_", "GIT_", "FIXTURE_",
+                                 "ANTIGRAVITY_", "AGY_", "T3_", "CLAUDE_", "CODEX_"))
+            and k not in ("CODEX_CLI_PATH", "PYTHONPATH", "ANTHROPIC_MODEL", "AGENT_TRANSCRIPT_PATH",
+                          "THOUGHT_LEVEL")
+            and not k.startswith("MASTACK_")
+        }
+        self.env.update({name: str(self.tmp / "machine" / file) for name, file in MACHINE_FILES.items()})
+        self.env.update(
+            PATH=f"{self.tmp / 'bin'}{os.pathsep}{os.environ.get('PATH', '')}",
+            PYTHONPATH=str(ROOT),
+            GIT_CEILING_DIRECTORIES=str(self.tmp.parent),
+            LANEFATHER_REVIEW_START="manual",
+            LANEFATHER_MODELS=str(self.tmp / "no-mastack" / "models.toml"),
+            LANEFATHER_STATE=str(self.state),
+            LANEFATHER_DISK_FREE_GB="500",
+            LANEFATHER_LOAD15="0.1",
+            LANEFATHER_CORES="6",
+            LANEFATHER_MEMORY_GB="20",
+            SLOTFATHER_LOADAVG="0.1",
+            FAKE_SLOTFATHER_LOG=str(self.tmp / "slotfather.log"),
+        )
+
+    def write(self, base: Any, name: str, text: str) -> pathlib.Path:
+        path = pathlib.Path(base) / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+        return path
+
+    def lane(self, *args: str, cwd: Any = None, ok: bool | None = True, timeout: float = 120,
+             process: bool | None = None) -> str:
+        if process is None:
+            process = self.process_cli or bool(os.environ.get("LANEFATHER_TEST_PROCESS"))
+        if process:
+            proc = subprocess.run([sys.executable, "-m", "lanefather", *args], cwd=cwd or self.tmp,
+                                  env=self.env, capture_output=True, text=True, timeout=timeout)
+            code, output = proc.returncode, proc.stdout + proc.stderr
+        else:
+            code, output = run_in_process(list(args), cwd or self.tmp, self.env, timeout)
+        if ok is not None:
+            self.assertEqual(code == 0, ok, f"lane {' '.join(args)} exit {code}:\n{output}")
+        return output
 
 
 class LaneCase(unittest.TestCase):

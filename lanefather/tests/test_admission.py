@@ -1,37 +1,22 @@
 """Lifetime admission at the workflow CLI and explicit Project interface."""
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import subprocess
 import sys
-import time
 from typing import Any
 import unittest
 from unittest.mock import patch
 
-from support import LaneCase, close_process
+from support import FIXTURE_CONFIG, LaneCase, ScratchCase, close_process
 
-from lanefather import config
+from lanefather import admission, config
 from lanefather.errors import LaneError
 from lanefather.project import Project
 
-
-class AdmissionTests(LaneCase):
-    def test_legacy_readiness_and_registration_allow_exact_load_boundary(self):
-        self.env.update(LANEFATHER_LOAD15="9", LANEFATHER_CORES="6")
-        self.write(self.state.parent, "queue/queue.toml", '[[lane]]\nid="next"\nticket=2\nclaims=["other/**"]\n')
-        project = config.load(self.integration / ".lanefather.toml")
-        with patch.dict("os.environ", self.env, clear=True):
-            readiness = Project(project).readiness()
-        self.assertTrue(readiness.can_start, readiness.blocked)
-        self.start("first", "src/**")
-
-    def provider(self, script: str | None = None):
-        path = self.integration / ".lanefather.toml"
-        path.write_text(path.read_text() + '\n[admission]\nprovider="slotfather"\n')
-        binary = self.tmp / "bin" / "slotfather"
-        binary.write_text(script or '''#!/usr/bin/env python3
+PROVIDER_SCRIPT = '''#!/usr/bin/env python3
 import json, os, sys, threading
 request=json.load(sys.stdin)
 if os.environ.get("ADMISSION_HANG"):
@@ -48,7 +33,118 @@ answer.update(json.loads(os.environ.get("ADMISSION_PATCH","{}")))
 if os.environ.get("ADMISSION_REQUEST_LOG"):
     with open(os.environ["ADMISSION_REQUEST_LOG"],"w") as log: json.dump(request, log)
 print(json.dumps(answer))
-''')
+'''
+
+
+class AdmissionWireTests(ScratchCase):
+    def provider(self, script: str | None = None) -> None:
+        cfg = self.write(self.tmp, ".lanefather.toml", FIXTURE_CONFIG + '\n[admission]\nprovider="slotfather"\n')
+        self.env["LANEFATHER_CONFIG"] = str(cfg)
+        binary = self.tmp / "bin" / "slotfather"
+        binary.write_text(script or PROVIDER_SCRIPT)
+        binary.chmod(0o755)
+
+    def floor_report(self) -> tuple[float, dict[str, Any]]:
+        capabilities = json.loads(self.lane("capabilities", "--json"))["host"]["min_disk_gb"]
+        settings = json.loads(self.lane("settings", "--json"))
+        row = next(item for section in settings["sections"] for item in section["settings"]
+                   if item["key"] == "host.min_disk_gb")
+        return capabilities, row
+
+    def test_without_the_providers_answer_the_row_says_the_cap_is_unknown(self) -> None:
+        self.provider()
+        self.env["ADMISSION_PATCH"] = json.dumps({"available": False})
+        gb, row = self.floor_report()
+        self.assertEqual(gb, 49, "the local cap's floor stands in for the number")
+        self.assertNotIn("effective", row, "no applied floor is claimed")
+        self.assertIn("auto: cap unknown (lifetime admission unavailable", row["description"])
+        self.assertIn("local cap 3 gives 49 GB (10^9) = 40 reserve + 3 x 3.0 GB lane peak", row["description"])
+
+    def test_a_provider_that_never_answers_reports_the_cap_unknown_within_the_reporting_deadline(self) -> None:
+        """Review of fathers#163 (P2): capabilities and settings reads ask Slotfather with a deadline inside
+        Godfather's (2 s for capabilities, 5 s for a settings call), not start's."""
+        self.assertEqual((admission.TIMEOUT, admission.REPORT_TIMEOUT), (5.0, 1.0))
+        self.provider()
+        self.env["ADMISSION_HANG"] = "1"
+        short_report = (contextlib.nullcontext() if os.environ.get("LANEFATHER_TEST_PROCESS")
+                        else patch.object(admission, "REPORT_TIMEOUT", 0.2))
+        with short_report:
+            gb, row = self.floor_report()
+        self.assertEqual(gb, 49)
+        self.assertIn("auto: cap unknown (lifetime admission unavailable: query timed out); local cap 3 gives 49 GB",
+                      row["description"])
+        self.assertNotIn("effective", row)
+        seen: list[float] = []
+
+        def transport(command: str, request: dict[str, Any], timeout: float = admission.TIMEOUT) -> bytes:
+            del command, request
+            seen.append(timeout)
+            raise TimeoutError("query timed out")
+
+        with patch.dict("os.environ", self.env, clear=True), patch.object(admission, "transport", transport):
+            project = config.load(self.tmp / ".lanefather.toml")
+            self.assertIn("timed out", admission.start_cap(project, [])[1])
+            with self.assertRaises(LaneError):
+                admission.evaluate(project, [])
+        self.assertEqual(seen, [admission.REPORT_TIMEOUT, admission.TIMEOUT], "start keeps its own deadline")
+        self.assertLessEqual(admission.REPORT_TIMEOUT, 1.0)
+
+    def test_missing_provider_and_unknown_configuration_fail_without_a_fallback(self) -> None:
+        self.assertEqual("legacy", config.parse({}).admission_provider)
+        for raw in ({"provider": "typo"}, {"provider": True}, {"provider": "slotfather", "command": ["checkout.py"]}):
+            with self.subTest(raw=raw), self.assertRaises(LaneError):
+                config.parse({"admission": raw})
+        self.provider()
+        self.write(self.state.parent, "queue/queue.toml", '[[lane]]\nid="next"\nticket=2\nclaims=["src/**"]\n')
+        project = config.load(self.tmp / ".lanefather.toml")
+        with patch.dict("os.environ", {**self.env, "PATH": str(self.tmp / "empty")}, clear=True), \
+                self.assertRaisesRegex(LaneError, "slotfather is not on PATH"):
+            Project(project).readiness()
+        self.assertFalse(self.state.exists())
+
+    def test_valid_invalid_and_whitespace_cap_controls_match_the_wire_contract(self) -> None:
+        self.provider()
+        self.write(self.state.parent, "queue/queue.toml", '[[lane]]\nid="next"\nticket=2\nclaims=["src/**"]\n')
+        project = config.load(self.tmp / ".lanefather.toml")
+        for raw, cap, source, warnings in (
+                (None, 6, "derived", []), ("", 6, "derived", []),
+                ("1", 1, "LANEFATHER_CAP", []), (" 1 ", 1, "LANEFATHER_CAP", []),
+                ("01", 1, "LANEFATHER_CAP", []), ("١", 1, "LANEFATHER_CAP", []),
+                (" ", 6, "derived", ["invalid_cap_override"]),
+                ("0", 6, "derived", ["invalid_cap_override"]),
+                ("-1", 6, "derived", ["invalid_cap_override"]),
+                ("+1", 6, "derived", ["invalid_cap_override"]),
+                ("1.0", 6, "derived", ["invalid_cap_override"]),
+                ("typo", 6, "derived", ["invalid_cap_override"]),
+                ("²", 6, "derived", ["invalid_cap_override"])):
+            with self.subTest(raw=raw):
+                self.env.pop("LANEFATHER_CAP", None)
+                if raw is not None:
+                    self.env["LANEFATHER_CAP"] = raw
+                self.env["ADMISSION_PATCH"] = json.dumps({"cap": cap, "cap_source": source, "warnings": warnings})
+                with patch.dict("os.environ", self.env, clear=True):
+                    snapshot = Project(project).readiness()
+                self.assertTrue(snapshot.can_start, snapshot.blocked)
+                self.assertEqual(cap, snapshot.cap)
+                self.assertIn(source, snapshot.cap_source)
+        self.assertFalse(self.state.exists(), "wire controls stay read-only")
+
+
+class AdmissionTests(LaneCase):
+    def test_legacy_readiness_and_registration_allow_exact_load_boundary(self):
+        self.env.update(LANEFATHER_LOAD15="9", LANEFATHER_CORES="6")
+        self.write(self.state.parent, "queue/queue.toml", '[[lane]]\nid="next"\nticket=2\nclaims=["other/**"]\n')
+        project = config.load(self.integration / ".lanefather.toml")
+        with patch.dict("os.environ", self.env, clear=True):
+            readiness = Project(project).readiness()
+        self.assertTrue(readiness.can_start, readiness.blocked)
+        self.start("first", "src/**")
+
+    def provider(self, script: str | None = None):
+        path = self.integration / ".lanefather.toml"
+        path.write_text(path.read_text() + '\n[admission]\nprovider="slotfather"\n')
+        binary = self.tmp / "bin" / "slotfather"
+        binary.write_text(script or PROVIDER_SCRIPT)
         binary.chmod(0o755)
 
     def test_opt_in_uses_provider_cap_not_duplicate_local_formula(self):
@@ -81,41 +177,6 @@ print(json.dumps(answer))
         self.env["LANEFATHER_DISK_FREE_GB"] = "55"
         self.assertIn("under the floor of 58 GB (10^9) = 40 reserve + 6 x 3.0 GB lane peak",
                       self.start("first", "src/**", ok=False))
-
-    def test_without_the_providers_answer_the_row_says_the_cap_is_unknown(self):
-        self.provider()
-        self.env["ADMISSION_PATCH"] = json.dumps({"available": False})
-        gb, row = self.floor_report()
-        self.assertEqual(gb, 49, "the local cap's floor stands in for the number")
-        self.assertNotIn("effective", row, "no applied floor is claimed")
-        self.assertIn("auto: cap unknown (lifetime admission unavailable", row["description"])
-        self.assertIn("local cap 3 gives 49 GB (10^9) = 40 reserve + 3 x 3.0 GB lane peak", row["description"])
-
-    def test_a_provider_that_never_answers_reports_the_cap_unknown_within_the_reporting_deadline(self):
-        """Review of fathers#163 (P2): capabilities and settings reads ask Slotfather with a deadline inside
-        Godfather's (2 s for capabilities, 5 s for a settings call), not start's."""
-        self.provider()
-        self.env["ADMISSION_HANG"] = "1"
-        gb, row = self.floor_report()
-        self.assertEqual(gb, 49)
-        self.assertIn("auto: cap unknown (lifetime admission unavailable: query timed out); local cap 3 gives 49 GB",
-                      row["description"])
-        self.assertNotIn("effective", row)
-        from lanefather import admission
-        seen: list[float] = []
-
-        def transport(command: str, request: dict[str, Any], timeout: float = admission.TIMEOUT) -> bytes:
-            del command, request
-            seen.append(timeout)
-            raise TimeoutError("query timed out")
-
-        with patch.dict("os.environ", self.env, clear=True), patch.object(admission, "transport", transport):
-            project = config.load(self.integration / ".lanefather.toml")
-            self.assertIn("timed out", admission.start_cap(project, [])[1])
-            with self.assertRaises(LaneError):
-                admission.evaluate(project, [])
-        self.assertEqual(seen, [admission.REPORT_TIMEOUT, admission.TIMEOUT], "start keeps its own deadline")
-        self.assertLessEqual(admission.REPORT_TIMEOUT, 1.0)
 
     def test_corrupt_registry_cannot_be_bypassed_with_force(self):
         self.state.mkdir(parents=True)
@@ -197,6 +258,8 @@ print(json.dumps(answer))
 
 
     def test_transport_failure_and_resource_bounds_never_register(self):
+        self.assertEqual(admission.TIMEOUT, 5.0)
+        self.assertEqual(admission.ask.__defaults__, (5.0,))
         scripts = {
             "bad-json": "print('{')",
             "duplicate": "print('{\"v\":1,\"v\":1}')",
@@ -208,16 +271,32 @@ print(json.dumps(answer))
             "descendant-pipe": "import subprocess,sys; subprocess.Popen([sys.executable,'-c','import time; time.sleep(30)'])",
         }
         self.provider()
-        for name, script in scripts.items():
-            with self.subTest(name=name):
-                binary = self.tmp / "bin" / "slotfather"
-                binary.write_text("#!/usr/bin/env python3\n"+script+"\n")
-                started = time.monotonic()
-                output = self.start(name, "src/**", extra=("--force-reason","override"), ok=False)
-                self.assertLess(time.monotonic()-started,8)
-                self.assertIn("lifetime admission unavailable", output)
-                self.assertNotIn("Traceback", output)
-                self.assertFalse((self.state / (name+".json")).exists())
+
+        @contextlib.contextmanager
+        def short_timeout() -> Any:
+            if os.environ.get("LANEFATHER_TEST_PROCESS"):
+                yield
+                return
+            previous_defaults = admission.ask.__defaults__
+            admission.ask.__defaults__ = (0.25,)
+            try:
+                with patch.object(admission, "TIMEOUT", 0.25):
+                    yield
+            finally:
+                admission.ask.__defaults__ = previous_defaults
+
+        with short_timeout():
+            for name, script in scripts.items():
+                with self.subTest(name=name):
+                    binary = self.tmp / "bin" / "slotfather"
+                    binary.write_text("#!/usr/bin/env python3\n" + script + "\n")
+                    output = self.lane("start", name, "--ticket", "404", "--base", "integrate/q", "--claims", "src/**",
+                                       "--force-reason", "override", ok=False, timeout=10)
+                    self.assertIn("lifetime admission unavailable", output)
+                    if name in ("timeout", "descendant-pipe"):
+                        self.assertIn("query timed out", output)
+                    self.assertNotIn("Traceback", output)
+                    self.assertFalse((self.state / (name + ".json")).exists())
 
     def test_alias_provenance_and_conflicts_use_the_explicit_project(self):
         self.provider()
@@ -265,19 +344,6 @@ print(json.dumps(answer))
             self.assertEqual(6,Project(project).readiness().cap)
 
 
-    def test_missing_provider_and_unknown_configuration_fail_without_a_fallback(self):
-        self.assertEqual("legacy",config.parse({}).admission_provider)
-        for raw in ({"provider":"typo"},{"provider":True},{"provider":"slotfather","command":["checkout.py"]}):
-            with self.subTest(raw=raw), self.assertRaises(LaneError):
-                config.parse({"admission":raw})
-        self.provider()
-        self.write(self.state.parent,"queue/queue.toml",'[[lane]]\nid="next"\nticket=2\nclaims=["src/**"]\n')
-        project = config.load(self.integration / ".lanefather.toml")
-        with patch.dict("os.environ",{**self.env,"PATH":str(self.tmp / "empty")},clear=True), \
-                self.assertRaisesRegex(LaneError,"slotfather is not on PATH"):
-            Project(project).readiness()
-        self.assertFalse(self.state.exists())
-
     def test_invalid_status_cannot_silently_undercount(self):
         self.state.mkdir(parents=True)
         (self.state / "unknown.json").write_text(json.dumps({"id":"unknown","status":"typo"}))
@@ -307,33 +373,6 @@ print(json.dumps(answer))
         output = self.start("ignored", "other/**", extra=("--force-reason", "owner decision"), ok=False)
         self.assertIn("lifetime admission unavailable", output)
         self.assertFalse((self.state / "ignored.json").exists())
-
-    def test_valid_invalid_and_whitespace_cap_controls_match_the_wire_contract(self):
-        self.provider()
-        self.write(self.state.parent, "queue/queue.toml", '[[lane]]\nid="next"\nticket=2\nclaims=["src/**"]\n')
-        project = config.load(self.integration / ".lanefather.toml")
-        for raw, cap, source, warnings in (
-                (None, 6, "derived", []), ("", 6, "derived", []),
-                ("1", 1, "LANEFATHER_CAP", []), (" 1 ", 1, "LANEFATHER_CAP", []),
-                ("01", 1, "LANEFATHER_CAP", []), ("١", 1, "LANEFATHER_CAP", []),
-                (" ", 6, "derived", ["invalid_cap_override"]),
-                ("0", 6, "derived", ["invalid_cap_override"]),
-                ("-1", 6, "derived", ["invalid_cap_override"]),
-                ("+1", 6, "derived", ["invalid_cap_override"]),
-                ("1.0", 6, "derived", ["invalid_cap_override"]),
-                ("typo", 6, "derived", ["invalid_cap_override"]),
-                ("²", 6, "derived", ["invalid_cap_override"])):
-            with self.subTest(raw=raw):
-                self.env.pop("LANEFATHER_CAP", None)
-                if raw is not None:
-                    self.env["LANEFATHER_CAP"] = raw
-                self.env["ADMISSION_PATCH"] = json.dumps({"cap": cap, "cap_source": source, "warnings": warnings})
-                with patch.dict("os.environ", self.env, clear=True):
-                    snapshot = Project(project).readiness()
-                self.assertTrue(snapshot.can_start, snapshot.blocked)
-                self.assertEqual(cap, snapshot.cap)
-                self.assertIn(source, snapshot.cap_source)
-        self.assertFalse(self.state.exists(), "wire controls stay read-only")
 
     def test_wrong_override_source_cap_or_warnings_are_technical_not_forceable(self):
         self.provider()

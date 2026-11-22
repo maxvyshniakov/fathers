@@ -6,7 +6,7 @@ import json
 import re
 import unittest
 
-from support import ROOT, LaneCase
+from support import ROOT, ScratchCase
 
 SECTIONS = ["Breaking", "Added", "Changed", "Deprecated", "Removed", "Fixed", "Security"]
 FIXTURE = """# Tool Changelog
@@ -105,7 +105,7 @@ class ChangelogParseTests(unittest.TestCase):
                 section.append(line[4:])
 
 
-class ChangelogCommandTests(LaneCase):
+class ChangelogCommandTests(ScratchCase):
     def test_the_command_answers_the_contract_and_refuses_a_bad_since(self):
         from lanefather import __version__
         answer = json.loads(self.lane("changelog", "--json"))

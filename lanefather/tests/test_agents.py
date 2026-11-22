@@ -109,6 +109,8 @@ class AgentAttributionTests(LaneCase):
         self.assertEqual({"tier": "fast"}, entry["options"])
         self.assertEqual(["start", "adopt", "check"], entry["events"])
 
+
+class AgentContextUnitTests(unittest.TestCase):
     def test_explicit_agent_kind_does_not_leak_other_provider_env_vars(self) -> None:
         from lanefather import events
         env = {

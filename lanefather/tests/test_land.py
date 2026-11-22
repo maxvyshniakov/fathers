@@ -10,7 +10,7 @@ from typing import Any
 import unittest
 import unittest.mock
 
-from support import RUST_STUB, LaneCase, load_lane, project
+from support import FAKE_PLAN, FIXTURE_CONFIG, RUST_STUB, LaneCase, ScratchCase, load_lane, project
 
 
 class CheckAndLandTests(LaneCase):
@@ -352,24 +352,31 @@ class CheckAndLandTests(LaneCase):
         self.assertEqual(self.verify_runs()[-1], "checks structure-check,lib-check")
         self.assertEqual(self.stamps(), [])
 
-    def test_failed_checks_map_to_the_plan_modules_suites(self):
+
+class PlanModuleUnitTests(ScratchCase):
+    def setUp(self) -> None:
+        super().setUp()
+        self.write(self.tmp, ".lanefather.toml", FIXTURE_CONFIG)
+        self.write(self.tmp, "tools/verification_plan.py", FAKE_PLAN)
+
+    def test_failed_checks_map_to_the_plan_modules_suites(self) -> None:
         lane = load_lane()
-        with project(self.integration):
-            self.assertEqual(lane.plan.suites_for_checks(self.integration, ["lib-check"], ["structure", "lib"]),
+        with project(self.tmp):
+            self.assertEqual(lane.plan.suites_for_checks(self.tmp, ["lib-check"], ["structure", "lib"]),
                              ["lib"])
-            self.assertEqual(lane.plan.suites_for_checks(self.integration, ["native-check", "structure-check"],
+            self.assertEqual(lane.plan.suites_for_checks(self.tmp, ["native-check", "structure-check"],
                                                          ["structure", "native", "lib"]), ["structure", "native"])
 
-    def test_the_smoke_comes_from_the_plan_module(self):
+    def test_the_smoke_comes_from_the_plan_module(self) -> None:
         lane = load_lane()
-        with project(self.integration):
-            self.assertEqual(lane.plan.smoke_checks(self.integration), ["structure-check", "lib-check"])
-            self.assertEqual(lane.plan.known_checks(self.integration),
+        with project(self.tmp):
+            self.assertEqual(lane.plan.smoke_checks(self.tmp), ["structure-check", "lib-check"])
+            self.assertEqual(lane.plan.known_checks(self.tmp),
                              {"structure-check", "lib-check", "schema-check", "native-check", "host-journeys-check"})
         # A project without a plan module answers None, and lanefather falls back to whole suites.
         lane.config.use(lane.config.Config())
         self.addCleanup(lane.config.use, None)
-        self.assertIsNone(lane.plan.smoke_checks(self.integration))
+        self.assertIsNone(lane.plan.smoke_checks(self.tmp))
 
 
 class OverlappingLandTests(LaneCase):

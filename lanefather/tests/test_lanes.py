@@ -8,7 +8,32 @@ import sys
 import textwrap
 import unittest
 
-from support import LaneCase, load_lane
+from support import LaneCase, ScratchCase, load_lane
+
+
+class ListAndCapScratchTests(ScratchCase):
+    def test_a_bad_cap_falls_back_to_the_derived_cap_with_a_warning(self) -> None:
+        # #454: int() at import crashed every tools/lane command on a bad LANEFATHER_CAP.
+        for value in ("many", "0", "-2", "2.5"):
+            self.env["LANEFATHER_CAP"] = value
+            output = self.lane("list")
+            self.assertIn("0 of 3 lanes planned or active", output, value)
+            self.assertIn(f"LANEFATHER_CAP={value!r} is not a positive whole number; the cap is 3", output)
+        self.env["LANEFATHER_CAP"] = ""
+        self.assertNotIn("LANEFATHER_CAP", self.lane("list"), "an empty value is the default")
+
+    def test_list_shows_each_runs_effective_slot_priority_and_its_source(self) -> None:
+        # lanefather#24: an orchestrator demoted to batch sees it before its runs queue.
+        self.assertIn("slot priorities: check normal, post-merge interactive, gate interactive, rerun interactive, "
+                      "perf batch\n", self.lane("list"))
+        self.env.update(LANEFATHER_PRIORITY="batch", LANEFATHER_PRIORITY_PERF="normal")
+        self.assertIn("slot priorities: check batch (LANEFATHER_PRIORITY), post-merge batch (LANEFATHER_PRIORITY), "
+                      "gate batch (LANEFATHER_PRIORITY), rerun batch (LANEFATHER_PRIORITY), "
+                      "perf normal (LANEFATHER_PRIORITY_PERF)", self.lane("list"))
+        listed = json.loads(self.lane("list", "--json"))
+        self.assertEqual(listed["priorities"]["gate"], {"priority": "batch", "source": "LANEFATHER_PRIORITY"})
+        self.env["LANEFATHER_PRIORITY"] = "urgent"
+        self.assertIn("LANEFATHER_PRIORITY='urgent' is not a Slotfather priority", self.lane("list", ok=False))
 
 
 class StartTests(LaneCase):
@@ -56,16 +81,6 @@ class StartTests(LaneCase):
             self.start(f"l{index}", claim)
         self.assertIn("6 lanes are planned or active", self.start("l6", "g/**", ok=False))
         self.assertIn("cap=6 (derived from 12 cores and 32 GB of memory)", (self.state / "ledger.log").read_text())
-
-    def test_a_bad_cap_falls_back_to_the_derived_cap_with_a_warning(self):
-        # #454: int() at import crashed every tools/lane command on a bad LANEFATHER_CAP.
-        for value in ("many", "0", "-2", "2.5"):
-            self.env["LANEFATHER_CAP"] = value
-            output = self.lane("list")
-            self.assertIn("0 of 3 lanes planned or active", output, value)
-            self.assertIn(f"LANEFATHER_CAP={value!r} is not a positive whole number; the cap is 3", output)
-        self.env["LANEFATHER_CAP"] = ""
-        self.assertNotIn("LANEFATHER_CAP", self.lane("list"), "an empty value is the default")
 
     def test_low_disk_refuses_registration_and_high_load_is_advisory(self):
         self.env["LANEFATHER_DISK_FREE_GB"] = "20"
@@ -313,19 +328,6 @@ class AdoptAndListTests(LaneCase):
         output = self.lane("list")
         for text in ("a", "lib/**", "green", "b", "planned", "docs/**", "disk", "load15"):
             self.assertIn(text, output)
-
-    def test_list_shows_each_runs_effective_slot_priority_and_its_source(self):
-        # lanefather#24: an orchestrator demoted to batch sees it before its runs queue.
-        self.assertIn("slot priorities: check normal, post-merge interactive, gate interactive, rerun interactive, "
-                      "perf batch\n", self.lane("list"))
-        self.env.update(LANEFATHER_PRIORITY="batch", LANEFATHER_PRIORITY_PERF="normal")
-        self.assertIn("slot priorities: check batch (LANEFATHER_PRIORITY), post-merge batch (LANEFATHER_PRIORITY), "
-                      "gate batch (LANEFATHER_PRIORITY), rerun batch (LANEFATHER_PRIORITY), "
-                      "perf normal (LANEFATHER_PRIORITY_PERF)", self.lane("list"))
-        listed = json.loads(self.lane("list", "--json"))
-        self.assertEqual(listed["priorities"]["gate"], {"priority": "batch", "source": "LANEFATHER_PRIORITY"})
-        self.env["LANEFATHER_PRIORITY"] = "urgent"
-        self.assertIn("LANEFATHER_PRIORITY='urgent' is not a Slotfather priority", self.lane("list", ok=False))
 
 
 class QueueTests(LaneCase):
