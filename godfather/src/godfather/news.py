@@ -12,7 +12,7 @@ import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, NamedTuple, Optional, cast
+from typing import Any, Mapping, NamedTuple, Optional, cast
 
 from fathers_common.atomic import atomic_write
 from fathers_common.changelog import RELEASE, UNRELEASED, entries as _changelog_entries
@@ -186,32 +186,78 @@ def from_reply(tool: str, value: Any) -> Optional[tuple[str, list[Item]]]:
     return str(reply["version"]), items
 
 
-def tool(name: str) -> tuple[Installed, list[Item]]:
+def _extract_discovered(name: str, discovered: Any) -> tuple[bool, Optional[str], Optional[str]]:
+    """Extract (was_provided, executable, version) from a ToolState, ToolClient, Discovery or mapping."""
+    if discovered is None:
+        return False, None, None
+    if isinstance(discovered, Mapping):
+        disc_map = cast(Mapping[str, Any], discovered)
+        known: Any = disc_map.get(name) if name in disc_map else disc_map
+    else:
+        known = discovered
+    if known is None:
+        return False, None, None
+    state_fn = getattr(known, "state", None)
+    if callable(state_fn):
+        known = state_fn()
+    if isinstance(known, Mapping):
+        known_map = cast(Mapping[str, Any], known)
+        state: Any = known_map.get("state")
+        executable: Any = known_map.get("executable")
+        version: Any = known_map.get("version")
+        caps: Any = known_map.get("capabilities")
+        if not version and isinstance(caps, Mapping):
+            version = cast(Mapping[str, Any], caps).get("version")
+    else:
+        state = getattr(known, "state", None)
+        executable = getattr(known, "executable", None)
+        version = getattr(known, "version", None)
+        caps = getattr(known, "capabilities", None)
+        if not version and isinstance(caps, Mapping):
+            version = cast(Mapping[str, Any], caps).get("version")
+    if state == "absent" or not isinstance(executable, str) or not executable:
+        return True, None, None
+    ver = str(version) if isinstance(version, str) and version and version != "?" else None
+    return True, executable, ver
+
+
+def tool(name: str, discovered: Any = None,
+         runner: Optional[_sources.Runner] = None) -> tuple[Installed, list[Item]]:
     """One tool's row and entries: `changelog --json`, else its version alone from `version --json` or
-    `capabilities --json`."""
-    executable = _sources.which(name)
+    `capabilities --json` (reusing already-discovered executable/version when given)."""
+    active_runner = runner if runner is not None else _sources.default_runner()
+    provided, executable, known_version = _extract_discovered(name, discovered)
+    if not provided:
+        executable = active_runner.which(name)
     if executable is None:
         return Installed(name, None, "absent"), []
-    code, value, _ = _sources.run_json(name, ["changelog", "--json"], TIMEOUT, executable)
+    code, value, _ = active_runner.run_json(name, ["changelog", "--json"], TIMEOUT, executable)
     found = from_reply(name, value) if code == 0 else None
     if found is not None:
         return Installed(name, found[0], "ok"), found[1]
     problem = f"{name} changelog --json exited {code}" if code else f"{name} changelog --json: not the contract"
-    for argv in (["version", "--json"], ["capabilities", "--json"]):
-        code, value, _ = _sources.run_json(name, argv, TIMEOUT, executable)
+    if known_version:
+        return Installed(name, known_version, "versions", problem), []
+    fallbacks: tuple[list[str], ...] = (["version", "--json"],) if provided else (
+        ["version", "--json"], ["capabilities", "--json"]
+    )
+    for argv in fallbacks:
+        code, value, _ = active_runner.run_json(name, argv, TIMEOUT, executable)
         version = cast(dict[str, Any], value).get("version") if code == 0 and isinstance(value, dict) else None
         if isinstance(version, str) and version:
             return Installed(name, version, "versions", problem), []
     return Installed(name, None, "failed", problem), []
 
 
-def load(text: Optional[str] = None, stale: Optional[bool] = None, commit: Optional[str] = None) -> News:
+def load(text: Optional[str] = None, stale: Optional[bool] = None, commit: Optional[str] = None,
+         discovered: Any = None, runner: Optional[_sources.Runner] = None) -> News:
     """Every tool's news, Godfather's first: what the overlay and the footer show; `commit` stands in for the running
     one (the goldens and the demo, so a commit changes no picture)."""
     row, items = own(text, stale, commit)
     rows = [row]
     for name in TOOLS[1:]:
-        found, more = tool(name)
+        known: Any = cast(Mapping[str, Any], discovered).get(name) if isinstance(discovered, Mapping) else discovered
+        found, more = tool(name, discovered=known, runner=runner)
         rows.append(found)
         items += more
     return News(tuple(rows), ordered(items))

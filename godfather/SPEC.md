@@ -269,8 +269,8 @@ Godfather is one Python package, standard library only, Python 3.9+, installed b
 - **theme**: Slotfather's theme module moved whole: tokens, terminal colour queries (OSC 10/11/4, mode 2031), muted
   and surface mixing, holder fills and inks, the chart ramp, the three modes. Source colours for the EVENTS tag are
   new tokens chosen by the same rules as holder fills.
-- **sources**: discovery, and one `Source` per tool: capabilities, the snapshot worker, the event tailer, the
-  settings client and the action runner. All tool I/O is here; everything else reads `Source` state.
+- **sources**: discovery, and one `ToolClient` per tool: capabilities, the snapshot worker, the event tailer, the
+  settings client and the action runner. All tool I/O is here; everything else reads `ToolState`.
 - **events**: the schema version, the tail reader (inode and offset, rotation to `.1`, partial last lines), the
   merged feed and per-source formatters that turn a kind and its details into the event and detail columns.
 - **eventcheck**: the validator, one file with no imports outside the standard library, meant to be vendored.
@@ -339,9 +339,9 @@ class Source(Protocol):
     def run(self, action: Action) -> Result: ...
 ```
 
-That interface is the plan's. As built, `sources.Source` holds discovery, the state and the last good snapshot; the
-event, settings and action calls are `events.Feed`, `adapters.settings.SettingsClient` and `sources.act`, and the
-actions a row offers come from `actions.offered`.
+That interface is the plan's. As built, `sources.ToolClient` holds discovery, the state (`ToolState`) and the last good
+snapshot; the event, settings and action calls are `events.Feed`, `adapters.settings.SettingsClient` and `sources.act`,
+and the actions a row offers come from `actions.offered`.
 
 Slotfather keeps building the dashboard's model, because it is scheduler logic (plan, admission, reserved start,
 served class, draining, occupancy); it prints it as JSON. Godfather only renders it. Rejected: Godfather importing

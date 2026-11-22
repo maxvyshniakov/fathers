@@ -53,14 +53,10 @@ class FrameTests(Case):
         self.addCleanup(os.close, self.out)
         tool = self.tool
 
-        class Screen(tool.Screen):
-            def notice(self) -> None:  # Slotfather found: the overview, not the list of tools looked for
-                return None
-
         keys, self.typist = os.pipe()  # keys that never come: the loop waits on them, as on a quiet terminal
         self.addCleanup(os.close, keys)
         self.addCleanup(os.close, self.typist)
-        self.live: Any = tool.Live(keys, self.out, Screen(), 1.0, "auto")
+        self.live: Any = tool.Live(keys, self.out, tool.Screen(), 1.0, "auto")
         self.addCleanup(self.live.close)
         # The scene's times are the test's too: granted five minutes before its moment, so each idle second moves
         # the running times on whatever the wall clock says (test_state's entries are stamped with the real now,

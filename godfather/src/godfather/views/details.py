@@ -326,12 +326,25 @@ def clip_start(path: str, width: int) -> str:
     return path if text_width(path) <= width else "…" + path[-max(0, width - 1):]
 
 
-def enrich_details(item: Item, capabilities: Optional[dict[str, Any]] = None) -> None:
+def enrich_details(
+    item: Item,
+    capabilities: Optional[dict[str, Any]] = None,
+    executable: Optional[str] = None,
+    runner: Optional[Any] = None,
+    cache: Optional[_lanefather.ShowCache] = None,
+) -> None:
     """A request's lane summary from `lanefather show`, asked only of a Lanefather whose capabilities advertise it
     (fathers#85); `lanefather too old` otherwise."""
     context: dict[str, str] = item.get("context") or {}
     if context.get("lane"):
-        item["lane"] = _lanefather.fetch(context, item.get("workdir") or "", capabilities)
+        item["lane"] = _lanefather.fetch(
+            context,
+            item.get("workdir") or "",
+            capabilities,
+            executable=executable,
+            runner=runner,
+            cache=cache,
+        )
 
 
 # An event or run (fathers#152): DETAILS while EVENTS was focused last

@@ -16,6 +16,7 @@ import datetime
 import json
 import math
 import os
+from pathlib import Path
 import select
 import shutil
 import signal
@@ -23,8 +24,7 @@ import subprocess
 import sys
 import threading
 import time
-from pathlib import Path
-from typing import Any, cast
+from typing import Any, Mapping, cast
 
 from fathers_common.atomic import atomic_write
 from fathers_common.errors import Refused, Usage, refuse, say
@@ -32,22 +32,21 @@ from fathers_common.errors import Refused, Usage, refuse, say
 from . import actions as _actions
 from . import entries as _entries
 from . import events as _events
-from . import settings_model as _settings_model
 from . import news as _news
+from . import pages as _pages
+from . import reducer as _reducer
+from . import settings_model as _settings_model
 from . import sources as _sources
+from . import state as _state
 from . import theme as _theme
 from . import version as _version
 from .adapters import junkfather as _junkfather
 from .adapters import lanefather as _lanefather
-from .adapters import settings as _settings_adapter
 from .adapters import slotfather as _slotfather
 from .adapters.settings import Conflict, ReadOnly, SettingsClient, SettingsError
 from .adapters.slotfather import Unsupported
 from .model import Dashboard, PsRow, Request, TreeRow
-from .sources import SnapshotError, Source
-from . import pages as _pages
-from . import reducer as _reducer
-from . import state as _state
+from .sources import SnapshotError, ToolClient, ToolState
 from .tui import Canvas, Jobs, Loader, full_screen, read_keys, suspended
 from .views import common as _common
 from .views import details as _details
@@ -103,32 +102,43 @@ def starting_choices(interval: float | None) -> tuple[float, str]:
     return interval, theme
 
 
-class Screen:
-    """The overview's data: the Slotfather source, rediscovered as SPEC's discovery rules say, polled one call at
-    a time on the model loader's thread; the last good model stays, marked stale, after a failed poll."""
+ALL_ADAPTERS: dict[str, Any] = {
+    "slotfather": _slotfather,
+    "lanefather": _lanefather,
+    "junkfather": _junkfather,
+}
+TOOL_ADAPTERS: dict[str, Any] = {"lanefather": _lanefather, "junkfather": _junkfather}  # the other tools, by name
 
-    def __init__(self, source: Source | None = None, others: list[Source] | None = None) -> None:
-        self.source = source or Source("slotfather", _slotfather)
-        # The other tools EVENTS reads (fathers#84): only their event logs, until their pages come
-        self.others = others if others is not None else [Source(name, _events.EventsContract(name))
-                                                         for name in _sources.TOOLS if name != "slotfather"]
+
+class Screen:
+    """The overview's data: one thread-safe ToolClient per tool, rediscovered as SPEC's discovery rules say, polled
+    one call at a time on each loader's thread; the last good model stays, marked stale, after a failed poll."""
+
+    def __init__(
+        self,
+        clients: Mapping[str, ToolClient] | None = None,
+        *,
+        runner: _sources.Runner | None = None,
+        show_cache: _lanefather.ShowCache | None = None,
+    ) -> None:
+        self._runner = runner
+        self.clients: dict[str, ToolClient] = dict(clients) if clients is not None else {
+            name: ToolClient(name, adapter, runner=runner) for name, adapter in ALL_ADAPTERS.items()
+        }
+        self.show_cache = show_cache if show_cache is not None else _lanefather.ShowCache()
         self.feed = _events.Feed()
         self.lock = threading.Lock()
         self.closed = False
-        # Settings' own view of the tools (fathers#87 review): discovered and read on Settings' worker alone, never on
-        # the screen's thread nor on the Source objects the model loader uses
-        self.settings_found = [Source(name, _settings_adapter.Contract(name)) for name in _sources.TOOLS]
         self.rows: list[dict[str, Any]] = []
         self.followed: tuple[tuple[str, str], ...] = ()
         self.skipped: dict[str, dict[str, int]] = {}
-        # The other tools as sources (fathers#85): each polled on its own worker, on Source objects of its own
-        self.tool_sources = {name: Source(name, adapter) for name, adapter in TOOL_ADAPTERS.items()}
-        # The action worker's own view of every tool (fathers#88 review): its re-checks never touch the loaders'
-        self.action_sources = {"slotfather": Source("slotfather", _slotfather),
-                               **{name: Source(name, adapter) for name, adapter in TOOL_ADAPTERS.items()}}
         self.fresh: set[str] = set()  # the sources whose log gained a line in the last load: polled again soon
         self.table: list[PsRow] | None = None  # the machine's processes, read while unleased load is high
         self.table_at = -math.inf
+
+    @property
+    def runner(self) -> _sources.Runner:
+        return self._runner if self._runner is not None else _sources.default_runner()
 
     def close(self) -> None:
         """Closes every followed event-log handle; an in-flight load cannot reopen or read one after this."""
@@ -144,37 +154,31 @@ class Screen:
 
     def _follow_locked(self) -> tuple[tuple[str, str], ...]:
         found: list[tuple[str, str]] = []
-        for source in [self.source, *self.others]:
-            log = _events.log_path(source.capabilities) if source.state in ("ok", "stale") else None
-            self.feed.follow(source.name, str(_sources.event_log(source.name, log)) if log else None)
+        runner = self.runner
+        for name in _sources.TOOLS:
+            client = self.clients.get(name)
+            if client is None:
+                continue
+            state = client.state()
+            log = state.event_log
+            self.feed.follow(name, str(runner.event_log(name, log)) if log else None)
             if log:
-                found.append((source.name, source.tag))
+                found.append((name, state.tag))
         return tuple(found)
-
-    def follow(self) -> tuple[tuple[str, str], ...]:
-        """Every present source with an event log followed, the others not: (name, tag) each, in TOOLS order."""
-        if self.closed:
-            return ()
-        for source in self.others:
-            if self.closed:
-                return ()
-            if source.due():
-                source.discover()
-        with self.lock:
-            if self.closed:
-                return ()
-            return self._follow_locked()
 
     def events(self) -> list[dict[str, Any]]:
         """EVENTS' rows from every followed log, built again only when a log gained a line or a source came or
         went."""
         if self.closed:
             return self.rows
-        for source in self.others:
+        for name in _sources.TOOLS:
+            if name == "slotfather":
+                continue
             if self.closed:
                 return self.rows
-            if source.due():
-                source.discover()
+            client = self.clients.get(name)
+            if client is not None:
+                client.discover()
         with self.lock:
             if self.closed:
                 return self.rows
@@ -191,18 +195,12 @@ class Screen:
         """(the model to draw, the refresh error for the footer); discovery first when it is due."""
         if self.closed:
             return None, None
-        source = self.source
-        if source.due():
-            source.discover()
-        if self.closed or source.state in ("absent", "unsupported"):
+        state = self.clients["slotfather"].refresh()
+        if self.closed or state.state in ("absent", "unsupported"):
             return None, None
-        try:
-            source.took(_slotfather.decode(source.poll()), None)
-        except (SnapshotError, Unsupported) as error:
-            source.took(None, str(error))
-        if source.snapshot is None:
-            return None, source.problem
-        model = cast(Dashboard, dict(source.snapshot))  # decode() made it (fathers#142); a copy to add this load's
+        if state.snapshot is None:
+            return None, state.problem
+        model = cast(Dashboard, dict(state.snapshot))  # decode() made it (fathers#142); a copy to add this load's
         model["installed"] = _version.installed_source()
         # EVENTS (fathers#84): every source's log, never the snapshot's described events; a Slotfather whose
         # capabilities name no log shows none and says why
@@ -211,9 +209,9 @@ class Screen:
         model["events_skipped"] = dict(self.skipped)
         model["fresh_sources"] = sorted(self.fresh)  # an event polls its source at once, debounced (SPEC 9)
         model["uid"] = os.geteuid()  # whose requests can be reprioritized (fathers#88)
-        model["actions"] = list(_actions.offered(_lanefather.dashboard_block(source.capabilities).get("actions")))
-        if not _events.log_path(source.capabilities):  # no event log of a version this Godfather reads: why
-            named = isinstance(_events.dashboard_block(source.capabilities).get("events"), dict)
+        model["actions"] = list(_actions.offered(state.actions))
+        if not state.event_log:  # no event log of a version this Godfather reads: why
+            named = isinstance(_events.dashboard_block(state.capabilities).get("events"), dict)
             model["events_note"] = _events_view.TOO_NEW if named else _events_view.TOO_OLD
         # This frame's colours and lanes stay off the cached snapshot
         model["holders"] = [item.copy() for item in model["holders"]]
@@ -221,9 +219,9 @@ class Screen:
         top = self.unleased(model)
         if top is not None:
             model["unleased_top"] = top
-        if source.state == "stale" and source.failed_at is not None:
-            model["stale_since"] = datetime.datetime.fromtimestamp(source.failed_at, datetime.timezone.utc)
-        return model, source.problem if source.state == "stale" else None
+        if state.state == "stale" and state.failed_at is not None:
+            model["stale_since"] = datetime.datetime.fromtimestamp(state.failed_at, datetime.timezone.utc)
+        return model, state.problem if state.state == "stale" else None
 
     def unleased(self, model: Dashboard) -> list[TreeRow] | None:
         """MACHINE's top unleased processes (fathers#203), on the model loader's thread: the machine's process table
@@ -236,46 +234,37 @@ class Screen:
             return None
         now = time.monotonic()
         if now - self.table_at >= UNLEASED_EVERY:
-            self.table, self.table_at = _sources.process_table(), now
+            table = self._runner.process_table() if self._runner is not None else _sources.process_table()
+            self.table, self.table_at = table, now
         if self.table is None:
             return None
         return _machine.unleased_top(self.table, model["holders"])
 
     def load_tool(self, name: str) -> _state.Tool:
         """Another tool's snapshot, polled once (discovery first when it is due): its Tool for the reducer."""
-        source = self.tool_sources[name]
-        if source.due():
-            source.discover()
-        adapter = TOOL_ADAPTERS[name]
-        if source.state == "absent":
+        state = self.clients[name].refresh()
+        if state.state == "absent":
             return _state.Tool(name)
-        if source.state == "unsupported":
-            return _state.Tool(name, "unsupported", source.problem)
-        try:
-            source.took(adapter.decode(source.poll()), None)
-        except SnapshotError as error:
-            source.took(None, str(error))
-        since = datetime.datetime.fromtimestamp(source.failed_at, datetime.timezone.utc) \
-            if source.state == "stale" and source.failed_at is not None else None
-        return _state.Tool(name, source.state, source.problem, source.snapshot, since,
-                           adapter.actions(source.capabilities), adapter.show_supported(source.capabilities))
+        if state.state == "unsupported":
+            return _state.Tool(name, "unsupported", state.problem)
+        since = datetime.datetime.fromtimestamp(state.failed_at, datetime.timezone.utc) \
+            if state.state == "stale" and state.failed_at is not None else None
+        return _state.Tool(name, state.state, state.problem, state.snapshot, since,
+                           state.actions, state.show_supported)
 
     def revalidated(self, action: _actions.Action) -> _actions.Action | None:
-        """The action as its row offers it in a fresh snapshot of its source (SPEC 23, step 3), read on the action
-        worker's own Source objects, never the loaders' (fathers#88 review); None where the row is gone, changed or
+        """The action as its row offers it in a fresh snapshot of its source (SPEC 23, step 3), read via
+        ToolClient.poll_fresh() without touching the cached snapshot; None where the row is gone, changed or
         no longer in the state the action needs."""
         page = action.identity[0] if action.identity else ""
         name = {"overview": "slotfather", "processes": "junkfather", "lanes": "lanefather"}.get(page)
         if name is None:
             return None
-        source = self.action_sources[name]
-        if source.due():
-            source.discover()
-        if source.state in ("absent", "unsupported"):
+        client = self.clients.get(name)
+        if client is None:
             return None
         try:
-            adapter = _slotfather if name == "slotfather" else TOOL_ADAPTERS[name]
-            return _actions.revalidate(action, adapter.decode(source.poll()), os.geteuid())
+            return _actions.revalidate(action, client.poll_fresh(), os.geteuid())
         except (SnapshotError, Unsupported):
             return None
 
@@ -290,9 +279,10 @@ class Screen:
                                      key)
         if fresh.kind == "pager":
             return _state.HandOff(fresh, key)
-        executable = self.action_sources[fresh.tool].executable if fresh.tool in self.action_sources else None
+        client = self.clients.get(fresh.tool)
+        executable = client.state().executable if client is not None else None
         argv = list(fresh.command(reason)[1:] if fresh.tool else fresh.command(reason))
-        reply = _sources.act(fresh.tool, argv, ACTOR, executable, detach=fresh.kind == "open")
+        reply = self.runner.act(fresh.tool, argv, ACTOR, executable, detach=fresh.kind == "open")
         first = next((line for line in (reply.stdout if reply.code == 0 else reply.stderr).splitlines()
                       if line.strip()), "")
         if reply.code != 0:
@@ -301,48 +291,50 @@ class Screen:
 
     def poll_every(self, name: str) -> float:
         """Seconds between a tool's polls: its capabilities' hint clamped to 5–10 (SPEC 9)."""
-        snapshot: Any = _lanefather.dashboard_block(self.tool_sources[name].capabilities).get("snapshot")
-        hint: Any = cast(dict[str, Any], snapshot).get("poll") if isinstance(snapshot, dict) else None
-        return float(min(10, max(5, hint))) if isinstance(hint, (int, float)) and not isinstance(hint, bool) else 5.0
+        client = self.clients.get(name)
+        return client.state().poll_interval if client is not None else 5.0
 
     def load_details(self, item: Request) -> tuple[Any, str | None]:
         """A request's slow facts, off the main thread (#15): its holder's directory (lsof or /proc) and, where
         Lanefather's status snapshot does not join it to a lane, its lane from `lanefather show` when Lanefather
         advertises it (fathers#85). GODFATHER_DETAILS_DELAY, a test seam, adds seconds first."""
-        return load_details(item, self.tool_sources["lanefather"])
+        return load_details(item, self.clients["lanefather"].discover(), runner=self._runner, cache=self.show_cache)
+
+    def load_news(self, _: Any = None) -> _news.News:
+        """What's new from every tool, off the main thread, reusing discovered executables and versions."""
+        discovered = {name: client.discover() for name, client in self.clients.items()}
+        return _news.load(discovered=discovered, runner=self.runner)
 
     def notice(self) -> list[str] | None:
         """What the screen says instead of the overview: the tools looked for, or why Slotfather is unsupported."""
-        source = self.source
-        if source.state == "absent":
-            where = "GODFATHER_FIXTURES" if _sources.fixtures() is not None else "PATH"
+        state = self.clients["slotfather"].state()
+        if state.state == "absent":
+            runner = self.runner
+            where = "GODFATHER_FIXTURES" if runner.is_fixture else "PATH"
             return ["No tool found. Godfather looked for these on " + where + ":"] + [
-                f"{tool}  {'found' if _sources.which(tool) else 'not found'}" for tool in _sources.TOOLS]
-        if source.state == "unsupported":
-            return [str(source.problem)]
+                f"{tool}  {'found' if (self.clients[tool].state().executable or runner.which(tool)) else 'not found'}"
+                for tool in _sources.TOOLS]
+        if state.state == "unsupported":
+            return [str(state.problem)]
         return None
 
-    def sources(self) -> list[Source]:
-        return [self.source, *self.others]
-
     def settings_client(self, tool: str) -> SettingsClient:
-        source = next((found for found in self.settings_found if found.name == tool), None)
-        return SettingsClient(source.executable if source else None, tool)
+        client = self.clients.get(tool)
+        return SettingsClient(client.state().executable if client is not None else None, tool, runner=self.runner)
 
     def settings_sections(self) -> list[_settings_model.Section]:
         """Settings as it opens (fathers#87): a section for each present tool, read once now; one without a settings
         contract this Godfather reads says why in its section, an absent one has none."""
         found: list[_settings_model.Section] = []
-        for source in self.settings_found:
-            if source.due():
-                source.discover()
-            name = source.name
-            if source.state == "absent":
+        for name in _sources.TOOLS:
+            client = self.clients.get(name)
+            if client is None:
                 continue
-            if source.state == "unsupported" or not _settings_adapter.supported(source.capabilities):
-                why = source.problem if source.state == "unsupported" else \
-                    f"{name} {source.version or ''}: no settings contract; update {name}".replace(" :", ":")
-                found.append(_settings_model.Section(name, problem=why, readable=False))
+            state = client.discover()
+            if state.state == "absent":
+                continue
+            if not state.settings_supported:
+                found.append(_settings_model.Section(name, problem=state.settings_problem, readable=False))
                 continue
             try:
                 found.append(_settings_model.Section(name, reply=self.settings_client(name).read()))
@@ -393,10 +385,13 @@ def settings_failed(request: _settings_model.Request, failure: BaseException) ->
     return _state.SettingsWritten(request, "failed", None, why)
 
 
-TOOL_ADAPTERS: dict[str, Any] = {"lanefather": _lanefather, "junkfather": _junkfather}  # the other tools, by name
-
-
-def load_details(item: Request, lanes: Source | None = None) -> tuple[Any, str | None]:
+def load_details(
+    item: Request,
+    lanes: ToolState | ToolClient | None = None,
+    *,
+    runner: _sources.Runner | None = None,
+    cache: _lanefather.ShowCache | None = None,
+) -> tuple[Any, str | None]:
     """A request's slow facts, off the main thread (#15): its holder's directory (lsof or /proc) and its lane from
     `lanefather show` where Lanefather's status snapshot (`lanes`, its source) does not join it already.
     GODFATHER_DETAILS_DELAY, a test seam, adds seconds first."""
@@ -404,11 +399,21 @@ def load_details(item: Request, lanes: Source | None = None) -> tuple[Any, str |
         delay = float(os.environ.get("GODFATHER_DETAILS_DELAY") or 0)
         if delay > 0:
             time.sleep(delay)
+    state = lanes.state() if isinstance(lanes, ToolClient) else lanes
     found = item.copy()
-    cwd = _sources.process_cwd(item["pid"]) if item.get("kind") != "waiting" else None
-    snapshot = lanes.snapshot if lanes is not None else None
+    if item.get("kind") != "waiting":
+        cwd = runner.process_cwd(item["pid"]) if runner is not None else _sources.process_cwd(item["pid"])
+    else:
+        cwd = None
+    snapshot = state.snapshot if state is not None else None
     if _lanefather.lane_of(found, snapshot, cwd) is None:
-        _details.enrich_details(found, lanes.capabilities if lanes is not None else None)
+        _details.enrich_details(
+            found,
+            state.capabilities if state is not None else None,
+            executable=state.executable if state is not None else None,
+            runner=runner,
+            cache=cache,
+        )
     return found.get("lane"), cwd
 
 
@@ -441,17 +446,24 @@ class Live:
         # The signal handler writes here too: a full pipe must not block it (the loop is woken already)
         os.set_blocking(self.wake_write, False)
         # Everything slow runs in the background, so a key moves the selection within one frame (#15)
-        self.models = Loader(screen.load, self.wake_write)
+        self.models = Loader(self._poll_model, self.wake_write)
         self.details = Loader(screen.load_details, self.wake_write)
         # Lanefather's snapshot (fathers#85) on a worker of its own, every 5–10 s and soon after one of its events
         self.tools = {name: Loader(screen.load_tool, self.wake_write) for name in TOOL_ADAPTERS}
         self.tool_fetched = {name: -math.inf for name in TOOL_ADAPTERS}
         self.tool_due: dict[str, float] = {}  # an event's poll, debounced: when it runs
-        self.news = Loader(load_news, self.wake_write)  # what's new: on start and each time it opens
+        self.news = Loader(screen.load_news, self.wake_write)  # what's new: on start and each time it opens
         self.settings = Jobs(self.settings_work, self.wake_write)  # Settings' calls, in order (fathers#87)
         self.acting = Jobs(self.action_work, self.wake_write)  # row actions, in order, in the background (fathers#88)
         self.asked = 0
         self.fetched = 0.0
+
+    def _poll_model(self, _: Any = None) -> tuple[Dashboard | None, str | None, tuple[str, ...] | None]:
+        model, problem = self.screen.load()
+        if model is not None or self.screen.closed:
+            return model, problem, None
+        notice = self.screen.notice()
+        return model, problem, tuple(notice) if notice else None
 
     def close(self) -> None:
         self.screen.close()
@@ -530,8 +542,10 @@ class Live:
             command = list(action.command())
         except ValueError as error:  # a malformed $PAGER
             return _state.ActionDone("", False, f"PAGER: {error}", key)
-        if _sources.fixtures() is not None:
-            _sources.act("", command, ACTOR)
+        screen = getattr(self, "screen", None)
+        runner = screen.runner if isinstance(screen, Screen) else _sources.default_runner()
+        if runner.is_fixture:
+            runner.act("", command, ACTOR)
             return _state.ActionDone("", True, f"recorded: {' '.join(command)}", key)
         with suspended(self.fd_in, self.fd_out, self.answers):
             try:
@@ -560,12 +574,13 @@ class Live:
             if failure is not None:
                 self.send(_state.ModelFailed(str(failure)))
             else:
-                model, problem = value
+                model, problem, *rest = value
+                notice = rest[0] if rest else None
                 fresh = cast(dict[str, Any], model or {}).get("fresh_sources")
                 for name in cast(list[str], fresh or []):
                     if name in self.tools:
                         self.tool_due[name] = now + TOOL_DEBOUNCE
-                self.send(_state.ModelLoaded(model, self.theme.holders(), problem))
+                self.send(_state.ModelLoaded(model, self.theme.holders(), problem, notice))
         for name, loader in self.tools.items():
             for _, tool, failure in loader.take():
                 self.send(_state.ToolLoaded(tool if failure is None else _state.Tool(name, "stale", str(failure))))
@@ -628,7 +643,7 @@ class Live:
         if not (self.dirty or loading or now - self.drawn >= 1 or not self.shown):
             return loading
         canvas = self.canvas(size.columns, size.lines)
-        _overview.render(canvas, self.state, now, self.screen.notice())
+        _overview.render(canvas, self.state, now)
         self.send(_state.Drawn(_state.Frame(canvas.width, canvas.height, canvas.tables, canvas.version_at,
                                             tuple(canvas.hint_hits), canvas.order, tuple(canvas.filter_hits),
                                             canvas.switch_at, tuple(canvas.targets))))
@@ -742,9 +757,14 @@ def once(width: int | None, height: int | None, colour: bool | None, interval: f
             _entries.dashboard_colours(model, {}, theme.holders())
             if items:
                 cwd = _sources.process_cwd(items[0]["pid"]) if items[0]["kind"] != "waiting" else None
-                lanes = screen.tool_sources["lanefather"]
+                lanes = screen.clients["lanefather"].state()
                 if _lanefather.lane_of(items[0], lanes.snapshot, cwd) is None:
-                    _details.enrich_details(items[0], lanes.capabilities)
+                    _details.enrich_details(
+                        items[0],
+                        lanes.capabilities,
+                        executable=lanes.executable,
+                        cache=screen.show_cache,
+                    )
         state = _pages.open_page(_state.settle(_state.AppState(model=model, tools=tools), 0.0)[0], page)
         ascii_only = "utf" not in (sys.stdout.encoding or "").lower()
         size_now = shutil.get_terminal_size((120, 40))
@@ -800,19 +820,18 @@ def events_command(argv: list[str]) -> int:
             return 0
         else:
             raise UsageError(f"events: unknown argument {argv[0]!r}", "events")
+    runner = _sources.default_runner()
     feed: _events.Feed = _events.Feed()
     tags: dict[str, str] = {}
     for name in [tool for tool in _sources.TOOLS if not names or tool in names]:
-        source = Source(name, _events.EventsContract(name))
-        source.discover()
-        if source.state == "absent":
+        state = ToolClient(name, ALL_ADAPTERS[name], runner=runner).discover()
+        if state.state == "absent":
             continue
-        log = _events.log_path(source.capabilities)
-        if source.state == "unsupported" or not log:
-            say("godfather", source.problem or f"{name}: no event log")
+        if not state.event_log:
+            say("godfather", state.event_problem or f"{name}: no event log")
             continue
-        tags[name] = source.tag
-        feed.follow(name, str(_sources.event_log(name, log)))
+        tags[name] = state.tag
+        feed.follow(name, str(runner.event_log(name, state.event_log)))
 
     def show(found: list[_events.Event]) -> None:
         for event in found:

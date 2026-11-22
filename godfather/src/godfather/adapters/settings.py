@@ -36,19 +36,6 @@ def supported(capabilities: Optional[dict[str, Any]]) -> bool:
     return isinstance(versions, list) and any(v in SETTINGS_VERSIONS for v in cast(list[Any], versions))
 
 
-class Contract:
-    """A tool read only for its settings (sources.Source's adapter for Settings' own sources, fathers#87 review):
-    any dashboard block; whether it has a settings contract is supported()'s to say."""
-
-    def __init__(self, name: str) -> None:
-        self.name, self.TAG = name, name[:4]
-
-    def unsupported(self, capabilities: dict[str, Any]) -> Optional[str]:
-        if capabilities.get("v") != 1 or not isinstance(capabilities.get("dashboard"), dict):
-            return f"no dashboard contract; update {self.name}"
-        return None
-
-
 def validate_reply(tool: str, reply: dict[str, Any]) -> dict[str, Any]:
     """Checks the required fields of a v1 `settings --json` document so malformed rows fail visibly."""
     if reply.get("v") not in SETTINGS_VERSIONS:
@@ -99,14 +86,17 @@ class SettingsClient:
 
     TIMEOUT = TIMEOUT
 
-    def __init__(self, executable: Optional[str] = None, tool: str = "slotfather") -> None:
-        self.executable, self.tool = executable, tool
+    def __init__(self, executable: Optional[str] = None, tool: str = "slotfather",
+                 runner: Optional[Any] = None) -> None:
+        self.executable, self.tool, self.runner = executable, tool, runner
 
     def call(self, argv: list[str]) -> tuple[int, Any]:
         from .. import sources  # here, so the adapter stays importable without the I/O module's state
 
-        code, value, problem = sources.run_json(self.tool, ["settings", *argv, "--json"], self.TIMEOUT,
-                                                self.executable)
+        timeout = sources.SETTINGS_TIMEOUT if self.TIMEOUT == TIMEOUT else self.TIMEOUT
+        active_runner = self.runner if self.runner is not None else sources.default_runner()
+        code, value, problem = active_runner.run_json(self.tool, ["settings", *argv, "--json"], timeout,
+                                                      self.executable)
         if value is None and code in (DONE, CONFLICT):
             raise SettingsError(problem or f"{self.tool} settings {' '.join(argv)} printed no JSON")
         if code not in (DONE, INVALID, CONFLICT, *READ_ONLY):

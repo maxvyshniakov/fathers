@@ -197,6 +197,9 @@ Versions and release rules: [README.md](README.md#versions).
 
 ### Fixed
 
+- Tool discovery and snapshot polling now share one thread-safe `ToolClient` per tool with single-flight `capabilities
+  --json` discovery, generation-guarded snapshot updates, a locked `lanefather show` cache, and `AppState` notice
+  delivery so background workers neither duplicate discovery calls nor race with the live renderer (fathers#215).
 - In Settings, a slow `settings check` reply that refuses a pending value no longer drops the value while the row still
   has focus; clicking a footer hint or outside the `EVENTS` filter field while editing `/` now exits filter edit mode
   cleanly instead of typing the hint key into the filter or leaving edit mode active; and `Ask to yield` is now offered

@@ -250,7 +250,7 @@ class RunTests(FixtureCase):
         status["entries"] = [row for row in status["entries"] if row["id"] != "j7a8b9c"]
         (self.tmp / "procs" / "junkfather" / "replies.json").write_text(json.dumps(replies))
         screen = app.Screen()
-        screen.tool_sources["junkfather"].discover()
+        screen.clients["junkfather"].discover()
         done = cast(Any, screen.act(self.reap(), ""))
         self.assertFalse(done.ok)
         self.assertIn("changed or is gone", done.line)
@@ -261,7 +261,7 @@ class RunTests(FixtureCase):
         replies["reap --id j7a8b9c --reason=godfather: orphan"] = {"code": 1, "stderr": "junkfather reap: busy\nmore"}
         (self.tmp / "procs" / "junkfather" / "replies.json").write_text(json.dumps(replies))
         screen = app.Screen()
-        screen.tool_sources["junkfather"].discover()
+        screen.clients["junkfather"].discover()
         done = cast(Any, screen.act(self.reap(), ""))
         self.assertEqual((False, "junkfather reap: busy"), (done.ok, done.line))
 
@@ -372,10 +372,12 @@ class ExecutorTests(FixtureCase):
 
     def test_the_worker_reads_its_own_sources(self) -> None:
         screen = app.Screen()
-        self.assertIsNot(screen.action_sources["junkfather"], screen.tool_sources["junkfather"])
-        with mock.patch.object(screen.tool_sources["junkfather"], "poll", side_effect=AssertionError("loader's")):
+        client = screen.clients["junkfather"]
+        self.assertIsNone(client.state().snapshot)
+        with mock.patch.object(client, "refresh", side_effect=AssertionError("loader's")):
             done = cast(Any, screen.act(self.reap(), ""))
         self.assertTrue(done.ok)
+        self.assertIsNone(client.state().snapshot, "poll_fresh never mutates the cached snapshot")
 
     def test_an_opener_is_started_not_waited_for(self) -> None:
         started: list[dict[str, Any]] = []

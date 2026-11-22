@@ -9,11 +9,12 @@ from __future__ import annotations
 
 import datetime
 import json
+from pathlib import Path
 import posixpath
 import re
+import threading
 import time
-from pathlib import Path
-from typing import Any, Mapping, Optional, cast
+from typing import Any, Callable, Mapping, Optional, cast
 
 from .. import sources as _sources
 from ..events import dashboard_block
@@ -266,10 +267,59 @@ def as_summary(lane: Mapping[str, Any]) -> dict[str, Any]:
 CACHE_SECONDS = 5.0
 CACHE_LIMIT = 128
 TOO_OLD = "lanefather too old"  # its capabilities advertise no `show`
-_CACHE: dict[tuple[str, str, str], tuple[float, dict[str, Any]]] = {}
 
 
-def fetch(context: dict[str, str], cwd: str = "", capabilities: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+class ShowCache:
+    """Thread-safe bounded TTL cache for `lanefather show ID --json` replies."""
+
+    def __init__(self, ttl: float = CACHE_SECONDS, limit: int = CACHE_LIMIT,
+                 clock: Callable[[], float] = time.monotonic) -> None:
+        self.ttl = ttl
+        self.limit = limit
+        self.clock = clock
+        self._lock = threading.Lock()
+        self._entries: dict[tuple[str, str, str], tuple[float, dict[str, Any]]] = {}
+
+    def get(self, key: tuple[str, str, str]) -> Optional[dict[str, Any]]:
+        with self._lock:
+            cached = self._entries.get(key)
+            if cached is None:
+                return None
+            if self.clock() - cached[0] >= self.ttl:
+                self._entries.pop(key, None)
+                return None
+            return dict(cached[1])
+
+    def put(self, key: tuple[str, str, str], value: dict[str, Any]) -> None:
+        with self._lock:
+            if self.limit <= 0:
+                return
+            if key in self._entries:
+                self._entries.pop(key, None)
+            elif len(self._entries) >= self.limit:
+                self._entries.pop(next(iter(self._entries)))
+            self._entries[key] = (self.clock(), dict(value))
+
+    def clear(self) -> None:
+        with self._lock:
+            self._entries.clear()
+
+    def __len__(self) -> int:
+        with self._lock:
+            return len(self._entries)
+
+
+_DEFAULT_CACHE = ShowCache()
+
+
+def fetch(
+    context: dict[str, str],
+    cwd: str = "",
+    capabilities: Optional[dict[str, Any]] = None,
+    executable: Optional[str] = None,
+    runner: Optional[_sources.Runner] = None,
+    cache: Optional[ShowCache] = None,
+) -> dict[str, Any]:
     """The lane summary of a request's lane, asked only of a Lanefather whose capabilities advertise `show` (else
     `lanefather too old`); errors come back as {"error": why}."""
     lane, directory = context.get('lane', ''), context.get('lanefather.state', '')
@@ -278,11 +328,13 @@ def fetch(context: dict[str, str], cwd: str = "", capabilities: Optional[dict[st
         return {'error': 'lane reference missing'}
     # The command location is not part of identity: an already cached response survives a transient PATH change,
     # so the cache is read before Lanefather is looked up or its capabilities checked. Reusing it asks nothing.
+    store = cache if cache is not None else _DEFAULT_CACHE
     key = (location, lane, 'state-v1' if directory else 'project-v1')
-    cached = _CACHE.get(key)
-    if cached and time.monotonic() - cached[0] < CACHE_SECONDS:
-        return cached[1]
-    command = _sources.which('lanefather') or ''
+    cached = store.get(key)
+    if cached is not None:
+        return cached
+    active_runner = runner if runner is not None else _sources.default_runner()
+    command = executable or active_runner.which('lanefather') or ''
     if not command:
         return {'error': 'lanefather not installed'}
     if not show_supported(capabilities):
@@ -290,7 +342,7 @@ def fetch(context: dict[str, str], cwd: str = "", capabilities: Optional[dict[st
     result: dict[str, Any]
     try:
         reference = ['--state-dir', directory] if directory else ['--project-dir', cwd]
-        reply = _sources.run('lanefather', ['show', lane, *reference, '--json'], 1.5, command)
+        reply = active_runner.run('lanefather', ['show', lane, *reference, '--json'], 1.5, command)
         if reply.code in (124, 126):  # a timeout, or it could not be started
             raise OSError(reply.stderr)
         if reply.code or len(reply.stdout) > 65536:
@@ -309,7 +361,5 @@ def fetch(context: dict[str, str], cwd: str = "", capabilities: Optional[dict[st
                 result = data
     except (OSError, ValueError):
         result = {'error': 'lanefather unavailable'}
-    if len(_CACHE) >= CACHE_LIMIT:
-        _CACHE.pop(next(iter(_CACHE)))
-    _CACHE[key] = (time.monotonic(), result)
+    store.put(key, result)
     return result

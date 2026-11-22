@@ -118,8 +118,9 @@ class DetailsTests(unittest.TestCase):
         item['context'] = {'lane': 'compiler', 'lanefather.state': '/project/state'}
         # Hermetic: an empty cache, no fixture mode, and PATH only the fake's folder, so a lanefather installed on
         # this machine cannot answer once the fake is gone (CI run 43841660797 failed where ~/.local/bin hid it).
-        cache = mock.patch.dict(_lanefather._CACHE, clear=True)  # pyright: ignore[reportPrivateUsage]
-        with tempfile.TemporaryDirectory() as tmp, cache, mock.patch.dict(os.environ):
+        _lanefather._DEFAULT_CACHE.clear()  # pyright: ignore[reportPrivateUsage]
+        self.addCleanup(_lanefather._DEFAULT_CACHE.clear)  # pyright: ignore[reportPrivateUsage]
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(os.environ):
             os.environ.pop('GODFATHER_FIXTURES', None)
             command = Path(tmp) / 'lanefather'
             calls = Path(tmp) / 'calls'

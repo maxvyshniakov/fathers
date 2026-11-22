@@ -204,6 +204,7 @@ class AppState:
     page: str = "overview"  # the page shown (PAGES)
     came_from: tuple[str, ...] = ()  # the pages a link left, Esc goes back through them
     acting: frozenset[tuple[Any, ...]] = frozenset()  # the actions in flight (action_key()), each started once
+    slotfather_notice: Optional[tuple[str, ...]] = None  # notice lines when Slotfather is absent or unsupported
 
 
 # Events
@@ -227,6 +228,7 @@ class ModelLoaded:
     colours: int  # the drawing theme's holder colours (theme.Theme.holders()) leases get: required, as a builtin
     # theme has six and a lease given a seventh would name a style it lacks
     problem: Optional[str] = None  # why the model shown is stale
+    notice: Optional[tuple[str, ...]] = None  # what stands in for the overview when Slotfather is absent/unsupported
 
 
 @dataclass(frozen=True)
@@ -687,4 +689,5 @@ def model_loaded(state: AppState, event: ModelLoaded) -> AppState:
         keep = {(identity, kind) for identity in ids for kind in ("lease", "request")}
         state = dataclasses.replace(state, details={key: value for key, value in state.details.items() if key in keep})
     refresh = Refresh("live") if event.problem is None else Refresh("stale", event.problem)
-    return dataclasses.replace(state, model=fresh, refresh=refresh)
+    notice = tuple(event.notice) if event.notice is not None else None
+    return dataclasses.replace(state, model=fresh, refresh=refresh, slotfather_notice=notice)

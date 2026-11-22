@@ -189,7 +189,7 @@ class TableTests(unittest.TestCase):
 
 class ScreenTests(unittest.TestCase):
     def screen(self) -> app.Screen:
-        found = app.Screen(others=[])
+        found = app.Screen()
         self.addCleanup(found.close)
         return found
 

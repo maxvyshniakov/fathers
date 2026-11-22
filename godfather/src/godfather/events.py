@@ -44,12 +44,9 @@ def local_host() -> str:
     GODFATHER_FIXTURES, DIR/host.json's `host` stands in for it where it names one."""
     from . import sources as _sources
 
-    root = _sources.fixtures()
-    if root is not None:
-        with contextlib.suppress(OSError, ValueError, AttributeError):
-            named = json.loads((root / "host.json").read_text(encoding="utf-8")).get("host")
-            if isinstance(named, str) and named:
-                return named
+    fixture_host = _sources.default_runner().local_host()
+    if fixture_host:
+        return fixture_host
     name = re.sub(r"[^a-z0-9-]", "-", socket.gethostname().split(".")[0].lower()).strip("-")[:63]
     return name.strip("-") or "localhost"
 
@@ -348,25 +345,6 @@ def tag_of(capabilities: Optional[dict[str, Any]], name: str) -> str:
     """The source's tag as its capabilities give it (`slot`, `lane`, `junk`), else the one Godfather knows it by."""
     tag = dashboard_block(capabilities).get("tag")
     return tag if isinstance(tag, str) and TAG.fullmatch(tag) else DEFAULT_TAGS.get(name, name[:4])
-
-
-class EventsContract:
-    """A tool read only for its events (`godfather events`, and EVENTS' other sources until their pages come): an
-    adapter for sources.Source that asks for a dashboard block with an event log of a known schema version."""
-
-    def __init__(self, name: str) -> None:
-        self.name = name
-        self.TAG = DEFAULT_TAGS.get(name, name[:4])
-
-    def unsupported(self, capabilities: dict[str, Any]) -> Optional[str]:
-        if capabilities.get("v") != 1 or not dashboard_block(capabilities):
-            return f"no dashboard contract; update {self.name}"
-        events: Any = dashboard_block(capabilities).get("events")
-        if not isinstance(events, dict):
-            return f"no event log; update {self.name}"
-        if log_path(capabilities) is None:
-            return "its event log needs a newer godfather"
-        return None
 
 
 # EVENTS' rows (fathers#84): each source's formatter turns a kind and its details into the event word, the detail

@@ -122,9 +122,8 @@ class ShowTests(unittest.TestCase):
     response cache starts empty."""
 
     def setUp(self) -> None:
-        cache = mock.patch.dict(lanefather._CACHE, clear=True)  # pyright: ignore[reportPrivateUsage]
-        cache.start()
-        self.addCleanup(cache.stop)
+        lanefather._DEFAULT_CACHE.clear()  # pyright: ignore[reportPrivateUsage]
+        self.addCleanup(lanefather._DEFAULT_CACHE.clear)  # pyright: ignore[reportPrivateUsage]
         environ = mock.patch.dict(os.environ)
         environ.start()
         self.addCleanup(environ.stop)

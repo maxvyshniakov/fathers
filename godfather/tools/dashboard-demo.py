@@ -119,7 +119,10 @@ def load_scene(advance: bool = False, elapsed: Callable[[], float] | None = None
         def notice(self) -> list[str] | None:
             return None
 
-    def frozen_details(_item: dict[str, Any]) -> None:
+        def load_news(self, _: Any = None) -> Any:
+            return app.load_news()
+
+    def frozen_details(_item: dict[str, Any], *_: Any, **__: Any) -> None:
         pass  # frozen lane summaries; never query a live lanefather
 
     details.enrich_details = frozen_details  # type: ignore[assignment]

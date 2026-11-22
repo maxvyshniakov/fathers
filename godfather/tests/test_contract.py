@@ -64,9 +64,10 @@ class ContractTests(unittest.TestCase):
     def test_the_snapshot_decodes_into_the_overview_model(self) -> None:
         with app.Screen() as screen:
             model, error = screen.load()
-            self.assertIsNone(error, screen.source.problem)
+            slot_state = screen.clients["slotfather"].state()
+            self.assertIsNone(error, slot_state.problem)
             assert model is not None
-            self.assertEqual("ok", screen.source.state)
+            self.assertEqual("ok", slot_state.state)
         self.assertEqual(4, model["slots"], "12 cores, 64 GiB: Slotfather's automatic capacity")
         for key in ("holders", "waiters", "events", "history", "memory", "advice", "overtake_window"):
             self.assertIn(key, model)

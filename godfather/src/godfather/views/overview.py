@@ -253,7 +253,10 @@ def render(canvas: Canvas, state: AppState, now: float, notice: Optional[list[st
             canvas.loading = int(now * 10)  # a spinner at ten frames a second
         else:
             cwd, failure = known.cwd, known.error
-    dashboard_draw(canvas, state.model, index, state.overlay, state.refresh.error, cwd, state.scroll, notice,
+    shown_notice = notice if notice is not None else (
+        list(state.slotfather_notice) if state.slotfather_notice is not None else None
+    )
+    dashboard_draw(canvas, state.model, index, state.overlay, state.refresh.error, cwd, state.scroll, shown_notice,
                    state.notice.text if state.notice else None, failure, state.news, state.read, state.moment,
                    state.events_filter, _settings_view.context_of(state, canvas.width, canvas.height), event,
                    state.tools, state.page,

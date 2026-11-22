@@ -138,15 +138,16 @@ class ReplayTests(unittest.TestCase):
                 screen = app.Screen()
                 entered = threading.Event()
                 release = threading.Event()
-                real_poll = screen.source.poll
+                client = screen.clients["slotfather"]
+                real_refresh = client.refresh
 
-                def delayed_poll() -> Any:
-                    found = real_poll()
+                def delayed_refresh() -> Any:
+                    found = real_refresh()
                     entered.set()
                     release.wait(5)
                     return found
 
-                with mock.patch.object(screen.source, "poll", side_effect=delayed_poll):
+                with mock.patch.object(client, "refresh", side_effect=delayed_refresh):
                     live = app.Live(0, 1, screen, 1.0, "auto")
                     live.load_model()
                     self.assertTrue(entered.wait(5), "model loader entered poll")
