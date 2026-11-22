@@ -144,11 +144,8 @@ class Supervisor:
                 return status(code)
             if entry.get("state") == _entry.RUNNING and _entry.due(entry, self.wall()) \
                     and self.clock() >= retry_at:
-                def still_due(e: Entry, at: float = self.wall()) -> bool:
-                    return _entry.due(e, at)
-
                 result = self.reaper(self.store, self.id, "ttl expired", actor=_events.tool("supervisor"),
-                                     report_failure=not failures, allowed=still_due)
+                                     report_failure=not failures, allowed=_entry.require_due(self.wall()))
                 if result["result"] != "failed":
                     self.say(f"{self.id} reached its TTL: {result['result']}")
                     continue

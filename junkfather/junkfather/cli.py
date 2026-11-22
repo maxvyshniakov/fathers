@@ -342,26 +342,34 @@ def reap_command(store: Store, args: argparse.Namespace) -> int:
         table = _procs.read_or_none()
         if table is None:
             raise Refused("the process table cannot be read")
+        if args.force:
+            return report(_reap.reap_unowned(store, args.pid, table, True, args.reason, args.grace, args.dry_run,
+                                             args.via), args)
     selected, results = _reap.select(store, args.id, args.owner, args.agent, args.lane, table, args.pid,
                                      lifecycle=lifecycle)
     if table is not None and not selected:
-        return report(_reap.reap_unowned(store, args.pid, table, args.force, args.reason, args.grace, args.dry_run,
+        return report(_reap.reap_unowned(store, args.pid, table, False, args.reason, args.grace, args.dry_run,
                                          args.via), args)
     if args.expired:
         selected = [e for e in selected if _entry.due(e, now)]
-        allowed: Optional[Callable[[_entry.Entry], bool]] = _entry.due
         if args.owner:
             owner_id, agent_id = str(args.owner), args.agent
 
-            def owner_and_due(e: _entry.Entry) -> bool:
-                return _entry.due(e) and _reap.matches_owner(e, owner_id, agent_id, lifecycle=lifecycle)
-            allowed = owner_and_due
+            def owner_and_due(e: _entry.Entry) -> Optional[str]:
+                if not _reap.matches_owner(e, owner_id, agent_id, lifecycle=lifecycle):
+                    return "owner changed"
+                return None if _entry.due(e) else "not expired"
+            allowed: Optional[_entry.Guard] = owner_and_due
         elif args.lane:
             lane_id = str(args.lane)
 
-            def lane_and_due(e: _entry.Entry) -> bool:
-                return _entry.due(e) and (e.get("owner") or {}).get("lane") == lane_id
+            def lane_and_due(e: _entry.Entry) -> Optional[str]:
+                if (e.get("owner") or {}).get("lane") != lane_id:
+                    return "owner changed"
+                return None if _entry.due(e) else "not expired"
             allowed = lane_and_due
+        else:
+            allowed = _entry.require_due()
     else:
         allowed = None
     for entry in selected:

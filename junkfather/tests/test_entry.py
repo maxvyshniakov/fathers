@@ -85,8 +85,8 @@ class TransitionTests(Case):
         entry.started(self.store, ident, proc(4100, cmd="sleep 600"), {"pid": 7, "start": A})
         entry.handed(self.store, ident, {"kind": "claude", "session": "s2"})
         entry.noted_error(self.store, ident, {"reason": "r"})
-        me = entry.begin_reap(self.store, ident, "test", table(proc(os.getpid())))
-        self.assertIsNotNone(me)
+        me, why = entry.begin_reap(self.store, ident, "test", table(proc(os.getpid())))
+        self.assertEqual((os.getpid(), ""), (me, why))
         reaping = got(self.store.load(ident))
         entry.end_reap(self.store, ident, os.getpid(), True, {"reason": "test"}, {})
         failed = got(entry.failed(self.store, self.make(entry.STARTING), "why"))
@@ -125,9 +125,10 @@ class ReapTransitionTests(Case):
 
     def test_one_reaper_holds_an_entry_and_only_it_ends_the_reap(self):
         ident = self.running()
-        me = entry.begin_reap(self.store, ident, "test", table(proc(os.getpid())))
-        self.assertEqual(os.getpid(), me)
-        self.assertIsNone(entry.begin_reap(self.store, ident, "again", table(proc(os.getpid()))))
+        me, why = entry.begin_reap(self.store, ident, "test", table(proc(os.getpid())))
+        self.assertEqual((os.getpid(), ""), (me, why))
+        self.assertEqual((None, "another reaper has it"),
+                         entry.begin_reap(self.store, ident, "again", table(proc(os.getpid()))))
         self.assertIsNone(entry.end_reap(self.store, ident, os.getpid() + 1, True, {}, {}), "not its reaper")
         self.assertEqual(entry.REAPING, self.state_of(ident))
         ended = got(entry.end_reap(self.store, ident, os.getpid(), True, {"reason": "test"}, {}))
@@ -136,21 +137,21 @@ class ReapTransitionTests(Case):
 
     def test_a_failed_reap_returns_the_entry_to_running_with_its_error(self):
         ident = self.running()
-        me = entry.begin_reap(self.store, ident, "test", table(proc(os.getpid())))
+        me, _ = entry.begin_reap(self.store, ident, "test", table(proc(os.getpid())))
         assert me is not None
         back = got(entry.end_reap(self.store, ident, me, False, {}, {"reason": "test", "left": [4100]}))
         self.assertEqual((entry.RUNNING, [4100]), (back["state"], back["last_error"]["left"]))
 
     def test_a_resource_entry_goes_through_the_same_reap(self):
         ident = self.running(mode="resource")
-        me = entry.begin_reap(self.store, ident, "test", table(proc(os.getpid())))
+        me, _ = entry.begin_reap(self.store, ident, "test", table(proc(os.getpid())))
         assert me is not None
         self.assertEqual(entry.REAPED, (entry.end_reap(self.store, ident, me, True, {"steps": []}, {}) or {})["state"])
 
     def test_a_sweep_that_comes_second_does_not_undo_a_reap(self):
         """A reap begins while a sweep holds an older read: the sweep's gone and known writes are refused."""
         ident = self.running()
-        me = entry.begin_reap(self.store, ident, "test", table(proc(os.getpid())))
+        me, _ = entry.begin_reap(self.store, ident, "test", table(proc(os.getpid())))
         self.assertIsNone(entry.gone(self.store, ident))
         self.assertIsNone(entry.known(self.store, ident, [proc(4100)]))
         self.assertIsNone(entry.release_stuck(self.store, "jnothing"))
@@ -162,8 +163,28 @@ class ReapTransitionTests(Case):
     def test_a_reap_that_comes_second_skips_an_entry_the_sweep_marked_gone(self):
         ident = self.running()
         self.assertIsNotNone(entry.gone(self.store, ident))
-        self.assertIsNone(entry.begin_reap(self.store, ident, "late", table(proc(os.getpid()))))
+        self.assertEqual((None, "already gone"),
+                         entry.begin_reap(self.store, ident, "late", table(proc(os.getpid()))))
         self.assertEqual(entry.GONE, self.state_of(ident))
+
+    def test_begin_reap_reports_the_exact_lock_time_refusal_reason(self):
+        here = table(proc(os.getpid()))
+        self.assertEqual((None, "no such entry"), entry.begin_reap(self.store, "jmissing", "test", here))
+        for state, expected in ((entry.STARTING, "still starting"), (entry.EXITED, "already exited"),
+                                (entry.GONE, "already gone"), (entry.REAPED, "already reaped"),
+                                (entry.FAILED, "already failed"), (entry.REAPING, "another reaper has it")):
+            ident = self.running()
+            self.store.update(ident, lambda e, s=state: e.update(state=s))
+            self.assertEqual((None, expected), entry.begin_reap(self.store, ident, "test", here))
+        ident = self.running()
+        self.store.update(ident, lambda e: e.update(expires=200.0))
+        self.assertEqual((None, "not expired"),
+                         entry.begin_reap(self.store, ident, "reap", here, allowed=entry.require_due(100.0)))
+        self.assertEqual((None, "owner changed"),
+                         entry.begin_reap(self.store, ident, "reap", here, allowed=lambda _e: "owner changed"))
+        self.assertEqual((None, "guard refused"),
+                         entry.begin_reap(self.store, ident, "reap", here, allowed=lambda _e: False))
+        self.assertEqual(entry.RUNNING, self.state_of(ident))
 
     def test_the_sweep_releases_a_stuck_reap_and_marks_the_entry_gone(self):
         ident = self.running()

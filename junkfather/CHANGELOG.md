@@ -86,6 +86,11 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 
 ### Fixed
 
+- `junkfather reap --pid PID --force` now goes straight to the unowned-process guard instead of matching live
+  entries first, so a PID adopted or running under an active entry is refused rather than reaping that entry;
+  `reap` records the exact lock-time skip reason (`owner changed`, `not expired`, `already exited`, `another reaper
+  has it`, or a guard's refusal) without reloading outside the lock; `owner.detect` checks for a Claude ancestor
+  once on a miss; and `resources.unowned` drops an unreachable `safari-tp` check (fathers#210).
 - `events.jsonl` strips Unicode line and paragraph separators (`U+2028`, `U+2029`), caps general strings at 1000
   characters (400 for commands) and bounds the `events.lock` wait to 1 s, and `install.py` serializes installs under
   `.install.lock` and verifies existing releases through the shared `fathers_common` kit (fathers#117).

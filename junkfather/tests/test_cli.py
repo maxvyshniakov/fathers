@@ -155,6 +155,46 @@ class ConventionTests(Case):
         self.assertIn("Traceback (most recent call last)", logged)
         self.assertIn("RuntimeError: boom", logged)
 
+    def test_reap_pid_force_never_reaps_a_running_owned_entry(self):
+        child = self.spawn("sleep", "600", start_new_session=True)
+        self.runs_600(child)
+        self.assertEqual(0, self.cli("adopt", str(child.pid), "--ttl", "1h").returncode)
+        (owned,) = self.store.entries()
+        unlisted = self.cli("reap", "--pid", str(child.pid), "--force")
+        self.assertEqual((3, f"junkfather: refusing pid {child.pid}: the last sweep did not list it "
+                             "(run junkfather sweep)\n"), (unlisted.returncode, unlisted.stderr))
+        self.assertEqual("running", self.state_of(owned["id"]))
+        (self.state / "unowned.json").write_text(json.dumps(
+            {"v": 1, "items": [{"pid": child.pid, "start": owned["start"], "cmd": owned["seen"]}]}))
+        listed = self.cli("reap", "--pid", str(child.pid), "--force")
+        self.assertEqual((3, f"junkfather: refusing pid {child.pid}: an entry owns it now (reap that entry)\n"),
+                         (listed.returncode, listed.stderr))
+        self.assertEqual("running", self.state_of(owned["id"]))
+        self.assertTrue(self.runs(child.pid))
+
+    def test_reap_expired_reports_not_expired_when_extended_before_claim(self):
+        from junkfather import entry as entry_module
+        child = self.spawn("sleep", "600", start_new_session=True)
+        self.runs_600(child)
+        self.assertEqual(0, self.cli("adopt", str(child.pid), "--ttl", "1h").returncode)
+        (owned,) = self.store.entries()
+        self.store.update(owned["id"], lambda e: e.update(expires=0.0))
+        real_begin = entry_module.begin_reap
+
+        def extend_then_begin(store: Store, entry_id: str, reason: str, *args: Any, **kwargs: Any) -> Any:
+            entry_module.extended(store, entry_id, 3600.0)
+            return real_begin(store, entry_id, reason, *args, **kwargs)
+
+        out = io.StringIO()
+        with unittest.mock.patch.object(entry_module, "begin_reap", side_effect=extend_then_begin), \
+                contextlib.redirect_stdout(out):
+            code = cli.main(["reap", "--id", owned["id"], "--expired", "--json"])
+        self.assertEqual(0, code)
+        self.assertEqual([{"how": "leader", "id": owned["id"], "pids": [], "reason": "not expired",
+                           "result": "skipped"}], json.loads(out.getvalue())["results"])
+        self.assertEqual("running", self.state_of(owned["id"]))
+        self.assertTrue(self.runs(child.pid))
+
 
 class DefaultsTests(unittest.TestCase):
     def test_each_tunable_is_defined_in_defaults_only(self):
