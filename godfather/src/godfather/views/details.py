@@ -5,7 +5,7 @@ from __future__ import annotations
 import datetime
 import textwrap
 from pathlib import Path
-from typing import Any, Optional, cast
+from typing import Any, Mapping, Optional, cast
 
 from ..adapters import junkfather as _junkfather
 from ..adapters import lanefather as _lanefather
@@ -110,8 +110,10 @@ def request_facts(item: Item, model: Model, position: int, moment: datetime.date
         if not ahead:
             facts.append(("free", [(f"{model['free']} of {model['slots']} slots", "text")]))
             facts.extend((name, [(value, "text")]) for name, value in queue_policy(model, moment).items())
-            if model["used"] and model["memory_block"]:
-                facts.append(("blocked", [(model["memory_block"], "warn")]))
+            for key in ("memory_block", "memory_budget_block", "load_block"):  # fathers#206: each reason it waits
+                reason = cast(Mapping[str, Any], model).get(key)
+                if model["used"] and reason:
+                    facts.append(("blocked", [(str(reason), "warn")]))
         else:
             requests = "request" if len(ahead) == 1 else "requests"
             facts.append(("ahead", [(f"{len(ahead)} {requests} · {sum(w['count'] for w in ahead)} slots", "text")]))

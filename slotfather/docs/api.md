@@ -120,8 +120,11 @@ nothing else. The block:
   `averages` (`[l1, l5, l15]`), `draining`, `advice` (as `slotfather advise` computes it), `holders` and `waiters`
   (rows, in the order the dashboard shows them), `used`, `free`, `memory_block` (why new leases wait for memory,
   or `null`), `load_block` (why new leases beside running ones wait for sustained CPU load, or `null`; fathers#184),
+  `memory_budget_block` (why a new request beside running leases waits for the expected-peak memory budget:
+  held leases' and the request's expected peak over `memory_share` of the memory, or `null`; fathers#206),
   `memory_budget_mb` and `memory_expected_mb` (expected-peak memory budget and held leases' expected
-  peak RSS in MB, fathers#9), `admission`, `order`, `start` and `reserved` (the head's expected and reserved start),
+  peak RSS in MB, fathers#9), `admission` (the most slots a new request gets now, by the rules grant() applies:
+  slots, memory pressure, CPU load and the memory budget), `order`, `start` and `reserved` (the head's expected and reserved start),
   `limit`,
   `memory` (the memory facts, plus `low`: `true`/`false`, `null` when unknown; `swap_low`: free swap under
   SLOTFATHER_MIN_FREE_SWAP_MB; and `psi_low`: on Linux, PSI memory some or full at or over SLOTFATHER_MAX_PSI_SOME /

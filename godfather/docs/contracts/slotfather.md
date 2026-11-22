@@ -48,6 +48,10 @@ dashboard:
   holders, waiters   [item]       in the order the dashboard shows them
   used, free         int
   memory_block       str | null
+  load_block         str | null   optional (Slotfather fathers#184): why sustained CPU load holds new leases beside
+                                  running ones; MACHINE's border says `CPU load high` in red when admission is 0
+  memory_budget_block str | null  optional (Slotfather fathers#206): why the expected-peak memory budget holds a new
+                                  request beside running leases; MACHINE says `memory budget full` in red
   admission          int | null
   order              "backfill" | "window"
   start, reserved    time | null

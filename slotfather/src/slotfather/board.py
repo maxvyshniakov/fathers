@@ -421,13 +421,22 @@ def held_history(events: list[dict[str, Any]], held_now: int, now_moment: dateti
 
 def dashboard_admission(waiters: list[dict[str, Any]], held: list[dict[str, Any]], slots: int, other: int,
                         memory_block: str | None, estimate: _schedule.Estimate | None, settings: dict[str, Any],
-                        memory_kind: str = "short", load_block: str | None = None) -> int:
+                        memory_kind: str = "short", load_block: str | None = None, *,
+                        memory_expected_mb: float = 0.0, memory_need_mb: float | None = None,
+                        ram_mb: float | None = None) -> int:
     """Largest generic request grant() would admit, including earlier grants consuming the memory exemption; under a
-    memory-pressure warning (`memory_kind`) at most one slot, none beside a lease granted under pressure, and none
-    beside running leases while sustained CPU load holds grants (`load_block`, fathers#184)."""
+    memory-pressure warning (`memory_kind`) at most one slot, none beside a lease granted under pressure, none
+    beside running leases while sustained CPU load holds grants (`load_block`, fathers#184), and none beside running
+    leases whose expected peak memory (`memory_expected_mb`) and the request's (`memory_need_mb`, else the
+    `memory_default_mb` setting) exceed `memory_share` of `ram_mb` (schedule.budget_wait(), fathers#206)."""
     used = sum(_entry.holds(entry, slots) for entry in held) + other
     free = max(0, slots - used)
     if load_block and used:  # schedule.memory_gate()'s `load`: an idle machine still starts its first request
+        return 0
+    share = float(settings.get("memory_share", _config.ORDER_DEFAULTS["memory_share"]))
+    need_mb = float(settings.get("memory_default_mb", _config.ORDER_DEFAULTS["memory_default_mb"])) \
+        if memory_need_mb is None else memory_need_mb
+    if used and _schedule.budget_wait(memory_expected_mb, need_mb, ram_mb, share):  # memory_gate()'s budget
         return 0
     memory_block = memory_block or load_block
     if free and memory_block and used and memory_kind == "warning" and \
@@ -469,13 +478,18 @@ def dashboard_model(look: _query.Look | None = None) -> dict[str, Any]:
     default_mem_mb = float(settings_for_mem.get("memory_default_mb", _config.ORDER_DEFAULTS["memory_default_mb"]))
     mem_share = float(settings_for_mem.get("memory_share", _config.ORDER_DEFAULTS["memory_share"]))
 
-    def est_memory_of(entry: dict[str, Any]) -> tuple[float, str]:
+    def expected_mb_of(entry: dict[str, Any]) -> tuple[float, str]:
+        """An entry's expected peak RSS in MB and where it comes from, as grant()'s memory gate counts it."""
         if mem_est is not None:
             with contextlib.suppress(Exception):
                 peak = mem_est(entry)
                 if peak is not None:
-                    return round(peak, 1), "history"
-        return round(default_mem_mb, 1), "default"
+                    return float(peak), "history"
+        return default_mem_mb, "default"
+
+    def est_memory_of(entry: dict[str, Any]) -> tuple[float, str]:
+        peak, source = expected_mb_of(entry)
+        return round(peak, 1), source
 
     def item(entry: dict[str, Any], kind: str, count: int, queue: str = "",
              extra: Iterable[int] = ()) -> dict[str, Any]:
@@ -560,12 +574,17 @@ def dashboard_model(look: _query.Look | None = None) -> dict[str, Any]:
     free = max(0, slots - used)
     # fathers#184: why sustained CPU load holds new leases beside running ones, by the rule grant() applies
     load_block = _schedule.load_wait(averages, machine, slots, min(used, slots), settings)
+    # fathers#206: grant()'s memory_share budget, for a generic request beside the held leases' expected peak
+    ram_gib = _platform.memory_gib()
+    ram_mb = None if ram_gib is None else ram_gib * 1024.0
+    held_mb = sum(expected_mb_of(e)[0] for e in held)
+    need_mb = expected_mb_of({"label": "", "cmd": ""})[0]
+    memory_budget_block = _schedule.budget_wait(held_mb, need_mb, ram_mb, mem_share) if used else None
     admission = dashboard_admission(live_waiters, held, slots,
                                     other, memory_block,
                                     _estimates.estimator(directory) if live_waiters else None, settings, memory_kind,
-                                    load_block)
+                                    load_block, memory_expected_mb=held_mb, memory_need_mb=need_mb, ram_mb=ram_mb)
     own_held = sum(h["count"] for h in holders if h["kind"] == "held")
-    ram_gib = _platform.memory_gib()
     memory_budget_mb = round(ram_gib * 1024.0 * mem_share, 1) if (ram_gib is not None and mem_share > 0) else None
     memory_expected_mb = round(sum(float(h.get("est_memory_mb") or 0.0) for h in holders if h["kind"] == "held"), 1)
     return {"directory": str(directory), "slots": slots, "saved": saved, "basis": look.basis, "cores": machine,
@@ -573,7 +592,7 @@ def dashboard_model(look: _query.Look | None = None) -> dict[str, Any]:
             "advice": cast(dict[str, Any], cast(Any, _query).size(slots, machine, slots, averages, min(used, slots),
                                                                   bool(waiters) and admission == 0)),
             "holders": holders, "waiters": waiters, "used": used, "free": free, "memory_block": memory_block,
-            "load_block": load_block,
+            "load_block": load_block, "memory_budget_block": memory_budget_block,
             "memory_budget_mb": memory_budget_mb, "memory_expected_mb": memory_expected_mb,
             "admission": admission,
             "order": order, "start": start, "reserved": reserved, "limit": settings["limit"],

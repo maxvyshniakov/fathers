@@ -119,6 +119,10 @@ class Dashboard(_Dashboard, total=False):
     stale_since: datetime.datetime
     history_window: float  # the chart's span, set only by the demo scene and its goldens
     unleased_top: List[TreeRow]  # MACHINE's top processes outside leases while unleased load is high (fathers#203)
+    # fathers#206: why CPU load or the expected-peak memory budget holds new leases beside running ones; the adapter
+    # always sets them (None from an older Slotfather), models drawn by tests and the demo may leave them out
+    load_block: Optional[str]
+    memory_budget_block: Optional[str]
 
 
 DASHBOARD_REQUIRED = ("slots", "cores", "used", "free", "advice", "memory", "overtake_window")

@@ -13,6 +13,11 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
   (`load-wait=`), `status --json` adds `load_wait`, the dashboard block adds `load_block` and its `admission`
   follows the gate, and `advise` adds `load_block` (fathers#184).
 
+- The dashboard's admission follows the expected-peak memory budget that grant() applies: beside running leases
+  whose expected peak memory and a new request's exceed `memory_share` of the memory it is 0, where it used to
+  advertise free slots no request could take. The dashboard block adds `memory_budget_block` (why, or `null`) and
+  `advise` adds `memory_budget_block` for the request it is asked about (fathers#206).
+
 - `slotfather.contract` defines `TypedDict` contracts for `status --json` (`StatusSnapshot`, `StatusEntry`),
   `status --json --full` (`FullSnapshot`, `DashboardBlock`, `DashboardRow`, `DashboardUnknown`, `DashboardEvent`), and
   `events.jsonl` (`Event`, `Subject`, `Actor`, `KINDS`), checked against `docs/api.md`, with strict Pyright typing

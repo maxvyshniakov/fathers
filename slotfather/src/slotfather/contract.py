@@ -226,6 +226,7 @@ class DashboardBlock(TypedDict):
     free: int
     memory_block: Optional[str]
     load_block: Optional[str]
+    memory_budget_block: Optional[str]
     memory_budget_mb: Optional[float]
     memory_expected_mb: float
     admission: int

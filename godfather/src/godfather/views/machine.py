@@ -97,19 +97,29 @@ def machine_note(model: Model) -> list[Part]:
             *admission_note(model)]
 
 
+# The machine's own reasons admission is closed, red and first (fathers#156, fathers#206): the model's field that says
+# why, and the border's words for it
+MACHINE_BLOCKS = (("memory_block", "memory short"), ("memory_budget_block", "memory budget full"),
+                  ("load_block", "CPU load high"))
+
+
 def admission_note(model: Model) -> list[Part]:
     """What a new request could get now, or why nothing (fathers#156), from the fields Slotfather's model carries:
-    memory short (red: the machine problem, first where there is another reason too), draining after a lowered
-    capacity, one request holding the whole machine (named), the slots all held, or requests waiting ahead. A full
-    or queued machine is the queue working: the normal colour, never a fault. Slotfather admits by slots and memory
-    only; the load limit `lanefather` refuses lanes by is Lanefather's, not this."""
+    the machine's reasons (red, first where there is another reason too): memory short, the expected-peak memory
+    budget full and sustained CPU load (fathers#206; an older Slotfather sends neither); then draining after a
+    lowered capacity, one request holding the whole machine (named), the slots all held, or requests waiting ahead.
+    A full or queued machine is the queue working: the normal colour, never a fault. The load limit `lanefather`
+    refuses lanes by is Lanefather's, not this."""
     admission = model.get("admission")
     if admission is None:
         return [("admission: ?", "dim")]
     if admission:
         return [(f"admission: {admission} slots", "status-normal")]
     slots, used = int(model.get("slots") or 0), int(model.get("used") or 0)
-    found: list[Part] = [("memory short", "bad")] if model.get("memory_block") else []
+    found: list[Part] = []
+    for key, words in MACHINE_BLOCKS:
+        if cast(Mapping[str, Any], model).get(key):
+            found += ([(" · ", "dim")] if found else []) + [(words, "bad")]
     holders = cast(list[dict[str, Any]], model.get("holders") or [])
     whole = next((holder for holder in holders if holder.get("kind") == "held" and slots
                   and (holder.get("all") or int(holder.get("count") or 0) >= slots)), None)

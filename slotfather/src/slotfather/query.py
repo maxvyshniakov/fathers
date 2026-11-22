@@ -614,4 +614,21 @@ def advise(maximum: int | None = None, exclusive: bool = False, cores_now: int |
     # held, and an idle machine starts its first request); like memory, it does not shrink the job count.
     found["load_block"] = _schedule.load_wait(averages, machine, slots, min(held, slots),
                                               order_settings) if held else None
+    # fathers#206: why grant()'s memory_share budget holds this request back beside the leases others hold now: their
+    # expected peak memory and the request's exceed the share of the queue's memory (None: it does not, nothing is
+    # held, or the memory is unknown); like the others, it does not shrink the job count.
+    found["memory_budget_block"] = None
+    if held:
+        memory_estimate = _queue.memory_estimator(_config.state_dir())
+        default_mb = float(order_settings.get("memory_default_mb", _config.ORDER_DEFAULTS["memory_default_mb"]))
+
+        def peak(entry: dict[str, Any]) -> float:
+            found_mb = memory_estimate(entry)
+            return float(found_mb) if found_mb is not None else default_mb
+
+        ram_gib = _platform.memory_gib()
+        found["memory_budget_block"] = _schedule.budget_wait(
+            sum(peak(e) for e in holders), peak({"label": label, "cmd": command}),
+            None if ram_gib is None else ram_gib * 1024.0,
+            float(order_settings.get("memory_share", _config.ORDER_DEFAULTS["memory_share"])))
     return found

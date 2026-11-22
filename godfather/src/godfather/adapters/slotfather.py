@@ -230,6 +230,10 @@ def decode(snapshot: Any) -> Dashboard:
         "advice": _decoding.as_object(block["advice"]),
         "holders": holders, "waiters": waiters, "used": int(block["used"]), "free": int(block["free"]),
         "memory_block": _decoding.text(block.get("memory_block")),
+        # fathers#206: why CPU load (fathers#184) or the expected-peak memory budget holds new leases beside running
+        # ones; an older Slotfather sends neither (None)
+        "load_block": _decoding.text(block.get("load_block")),
+        "memory_budget_block": _decoding.text(block.get("memory_budget_block")),
         "admission": int(admission) if _decoding.is_whole(admission) else None,
         "order": _decoding.string(block.get("order"), "window") or "window", "start": parse_time(block.get("start")),
         "reserved": parse_time(block.get("reserved")), "limit": float(limit) if _decoding.is_number(limit) else 0,
