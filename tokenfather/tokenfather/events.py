@@ -1,35 +1,32 @@
-"""Shared fathers event log writer for Tokenfather (Godfather schema v1, validated by common/eventcheck.py)."""
+"""Tokenfather's events in the shared fathers event log (Godfather schema v1, validated by common/eventcheck.py).
+
+Backed by `fathers_common.events` (fathers#117): it strips C0/DEL/C1 and U+2028/U+2029, caps strings, bounds nesting at
+four levels, keeps lines within 16 KiB, and appends with rotation past 4 MiB under a bounded flock on `events.lock`.
+"""
 from __future__ import annotations
 
-import contextlib
+from collections.abc import Mapping
 import datetime
-import fcntl
-import json
-import math
 import os
 from pathlib import Path
-import re
 import tempfile
-import time
-from typing import Any, cast
+from typing import Any
 
-from .schema import format_timestamp, host_name
+from fathers_common import events as _common
 
-SCHEMA = 1
+SCHEMA = _common.SCHEMA_VERSION
 SOURCE = "tokenfather"
 TAG = "tokens"
-MAX_LINE = 16 * 1024
-ROTATE_AT = 4 * 2**20
-MAX_DEPTH = 4
-MAX_STRING = 1000
-LOCK_WAIT = 1.0
+MAX_LINE = _common.MAX_LINE
+ROTATE_AT = _common.ROTATE_AT
+MAX_DEPTH = _common.MAX_DEPTH
+MAX_STRING = _common.MAX_STRING
+LOCK_WAIT = _common.LOCK_WAIT
 
 KINDS: dict[str, str] = {
     "usage.collected": "collect updated the daily rollup with new model requests",
     "usage.daily": "daily usage summary across providers",
 }
-
-_CONTROL = re.compile("[\x00-\x1f\x7f-\x9f\u2028\u2029]")
 
 
 def machine_dir() -> Path:
@@ -42,6 +39,7 @@ def path() -> Path:
 
 
 def temporary(directory: Path) -> bool:
+    """Whether `directory` lies under a temporary root, where a test's state must not write the machine's log."""
     try:
         resolved = directory.expanduser().resolve()
     except OSError:
@@ -51,84 +49,26 @@ def temporary(directory: Path) -> bool:
 
 
 def clean(value: Any, depth: int = 1, limit: int = MAX_STRING) -> Any:
-    if isinstance(value, str):
-        text = _CONTROL.sub(" ", value)
-        return text if len(text) <= limit else text[: limit - 1] + "…"
-    if isinstance(value, bool) or value is None or isinstance(value, int):
-        return value
-    if isinstance(value, float):
-        return value if math.isfinite(value) else None
-    if isinstance(value, (dict, list, tuple)):
-        if depth >= MAX_DEPTH:
-            return clean(json.dumps(value, default=str, sort_keys=True), depth, limit)
-        if isinstance(value, dict):
-            mapping = cast(dict[Any, Any], value)
-            return {clean(str(k), depth, 64): clean(v, depth + 1, limit) for k, v in mapping.items()}
-        items: list[Any] = list(cast(Any, value))
-        return [clean(item, depth + 1, limit) for item in items]
-    return clean(str(value), depth, limit)
+    return _common.clean(value, depth, limit)
 
 
 def event(
     kind: str,
-    subject: dict[str, Any],
-    details: dict[str, Any],
+    subject: Mapping[str, Any],
+    details: Mapping[str, Any],
     *,
     level: str = "info",
     moment: datetime.datetime | None = None,
 ) -> dict[str, Any]:
-    found: dict[str, Any] = {
-        "v": SCHEMA,
-        "time": format_timestamp(moment or datetime.datetime.now(datetime.UTC)),
-        "host": host_name(),
-        "source": SOURCE,
-        "kind": kind,
-        "subject": {k: clean(v, MAX_DEPTH) for k, v in subject.items() if v is not None},
-        "actor": {"type": "tool", "name": SOURCE, "pid": os.getpid()},
-        "details": clean(details, 1),
-    }
-    if level != "info":
-        found["level"] = level
-    return found
+    """A schema-v1 event from Tokenfather itself (the actor is this process)."""
+    actor = {"type": "tool", "name": SOURCE, "pid": os.getpid()}
+    return _common.build_event(SOURCE, kind, subject, actor, details, level=level, moment=moment)
 
 
-def encode(found: dict[str, Any]) -> bytes:
-    for limit in (MAX_STRING, 200):
-        payload = dict(found, details=clean(found["details"], 1, limit))
-        line = (json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n").encode()
-        if len(line) <= MAX_LINE:
-            return line
-    details = {"message": clean(found["details"].get("message", ""), 1, 2000), "truncated": True}
-    return (json.dumps(dict(found, details=details), ensure_ascii=False, separators=(",", ":")) + "\n").encode()
+def encode(found: Mapping[str, Any]) -> bytes:
+    return _common.encode_event(found)
 
 
-def _hold(handle: Any, wait: float) -> bool:
-    deadline = time.monotonic() + wait
-    while True:
-        try:
-            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            return True
-        except BlockingIOError:
-            if time.monotonic() >= deadline:
-                return False
-            time.sleep(0.02)
-
-
-def append(found: dict[str, Any], log: Path | None = None) -> bool:
-    target = log or path()
-    with contextlib.suppress(Exception):
-        line = encode(found)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        with open(target.with_name("events.lock"), "a", encoding="utf-8") as lock:
-            if not _hold(lock, LOCK_WAIT):
-                return False
-            with contextlib.suppress(FileNotFoundError):
-                if target.stat().st_size + len(line) > ROTATE_AT:
-                    target.replace(target.with_name(target.name + ".1"))
-            fd = os.open(target, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
-            try:
-                os.write(fd, line)
-            finally:
-                os.close(fd)
-        return True
-    return False
+def append(found: Mapping[str, Any], log: Path | None = None) -> bool:
+    """Append `found` to `log` (default `path()`); never raises, False when the event was dropped."""
+    return _common.append_event(log or path(), found, rotate_at=ROTATE_AT, lock_wait=LOCK_WAIT)

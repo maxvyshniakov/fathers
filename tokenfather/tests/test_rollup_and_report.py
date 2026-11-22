@@ -224,13 +224,15 @@ class RollupAndReportTests(unittest.TestCase):
         self.assertEqual(
             2, cli.main(["report", "--no-collect", "--state-dir", str(self.state), "--until", "bad"])
         )
-        sample = (
+        sample = self.tmp / "CHANGELOG.md"
+        sample.write_text(
             "# Tokenfather Changelog\n\n## Unreleased\n\n## 0.2.0 - 2026-11-20\n\n### Added\n\n- New\n\n"
-            "## 0.1.0 - 2026-11-16\n\n### Added\n\n- Old\n"
+            "## 0.1.0 - 2026-11-16\n\n### Added\n\n- Old\n",
+            encoding="utf-8",
         )
-        filtered = cli.filter_changelog_since(sample, "0.1.0")
-        self.assertIn("0.2.0", filtered)
-        self.assertNotIn("0.1.0", filtered)
+        from tokenfather import changelog
+        filtered = changelog.contract("0.1.0", sample, None)
+        self.assertEqual(["0.2.0"], [entry["version"] for entry in filtered["entries"]])
 
 
 if __name__ == "__main__":

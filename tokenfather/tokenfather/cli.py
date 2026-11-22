@@ -12,6 +12,7 @@ from typing import Any, NoReturn
 from fathers_common.cli import UsageParser
 
 from . import __version__, events
+from . import changelog as _changelog
 from .attribution import LaneIndex, discover_lane_dirs, load_lanes
 from .pricing import load_pricing
 from .report import build_report, format_report
@@ -117,49 +118,6 @@ def cmd_collect(args: Any) -> int:
     return 0
 
 
-def _parse_version(raw: str) -> tuple[int, ...] | None:
-    cleaned = raw.strip().lstrip("v")
-    parts = cleaned.split(".")
-    if not parts or not all(part.isdigit() for part in parts):
-        return None
-    return tuple(int(part) for part in parts)
-
-
-def filter_changelog_since(text: str, since: str) -> str:
-    since_ver = _parse_version(since)
-    if since_ver is None:
-        raise ValueError(f"invalid --since version: {since!r}")
-    lines = text.splitlines()
-    header: list[str] = []
-    sections: list[tuple[str, list[str]]] = []
-    current_heading: str | None = None
-    current_lines: list[str] = []
-    for line in lines:
-        if line.startswith("## "):
-            if current_heading is not None:
-                sections.append((current_heading, current_lines))
-            current_heading = line
-            current_lines = [line]
-        elif current_heading is None:
-            header.append(line)
-        else:
-            current_lines.append(line)
-    if current_heading is not None:
-        sections.append((current_heading, current_lines))
-    kept: list[str] = list(header)
-    for heading, sec_lines in sections:
-        if heading.strip() == "## Unreleased":
-            body = [ln for ln in sec_lines[1:] if ln.strip()]
-            if body:
-                kept.extend(sec_lines)
-            continue
-        ver_token = heading[3:].strip().split()[0] if len(heading) > 3 else ""
-        ver = _parse_version(ver_token)
-        if ver is not None and ver > since_ver:
-            kept.extend(sec_lines)
-    return "\n".join(kept).rstrip()
-
-
 def cmd_report(args: Any) -> int:
     from .schema import parse_timestamp
 
@@ -191,24 +149,15 @@ def cmd_report(args: Any) -> int:
 
 
 def cmd_changelog(args: Any) -> int:
-    candidates = [Path(__file__).with_name("CHANGELOG.md"), Path(__file__).resolve().parents[1] / "CHANGELOG.md"]
-    text = ""
-    source: str | None = None
-    for candidate in candidates:
-        if candidate.is_file():
-            text = candidate.read_text(encoding="utf-8")
-            source = str(candidate)
-            break
-    if args.since:
-        try:
-            text = filter_changelog_since(text, args.since)
-        except ValueError as err:
-            print(f"tokenfather changelog: {err}", file=sys.stderr)
-            return 2
+    try:
+        found = _changelog.contract(args.since)
+    except ValueError as err:
+        print(f"tokenfather changelog: {err}", file=sys.stderr)
+        return 2
     if args.json:
-        print(json.dumps({"v": 1, "version": __version__, "source": source, "since": args.since, "text": text}))
+        print(json.dumps(found))
     else:
-        print(text.rstrip())
+        print(_changelog.text(found["entries"]) or "no changelog entries")
     return 0
 
 
@@ -256,8 +205,8 @@ def parser() -> Parser:
     p.set_defaults(run=cmd_report)
 
     p = _add(root, commands, "changelog")
-    p.add_argument("--since", metavar="VERSION", help="show entries since VERSION")
-    p.add_argument("--json", action="store_true", help="print changelog metadata as JSON")
+    p.add_argument("--since", metavar="VERSION", help="only Unreleased and releases newer than VERSION")
+    p.add_argument("--json", action="store_true", help="print the changelog contract reply as JSON")
     p.set_defaults(run=cmd_changelog)
 
     p = _add(root, commands, "capabilities")
