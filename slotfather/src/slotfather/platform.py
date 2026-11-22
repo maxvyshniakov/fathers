@@ -10,7 +10,7 @@ import re
 import subprocess
 import sys
 import time
-from typing import Any, cast
+from typing import Any, NamedTuple, cast
 
 from . import config as _config
 
@@ -51,7 +51,7 @@ def memory_gib(group: str | None = None) -> float | None:
             return limit / (1 << 30)
         found = meminfo().get("MemTotal")
         return found / (1 << 20) if found else None
-    if sys.platform == "darwin":
+    if macos():
         found = sysctl("hw.memsize")
         return int(found) / (1 << 30) if found and found.isdigit() else None
     with contextlib.suppress(ValueError, OSError, AttributeError):
@@ -103,7 +103,7 @@ def start_epoch(pid: int) -> int | None:
         except (OSError, IndexError, ValueError):
             return None
         return None
-    if sys.platform == "darwin":
+    if macos():
         from . import macos_process
         return macos_process.start_seconds(pid)
     return None
@@ -195,8 +195,7 @@ def verified_holder(start: object, started: object, pid: int, observed: str) -> 
 def macos_pressure_active(level: float | None) -> bool:
     """Whether macOS's live memory-pressure level replaces the vm.swapusage free-swap floor: vm.swapusage reports the
     currently allocated swap file, not macOS's expandable swap ceiling."""
-    return (not _config.setting("MEMORY_FILE") and sys.platform == "darwin" and not linux()
-            and level is not None and level >= 1)
+    return not _config.setting("MEMORY_FILE") and macos() and level is not None and level >= 1
 
 
 def memory_short() -> str | None:
@@ -238,8 +237,27 @@ def linux() -> bool:
     return sys.platform.startswith("linux") or bool(_config.setting("PROC"))
 
 
+def macos() -> bool:
+    """Whether host inspection targets macOS native adapters (False when SLOTFATHER_PROC overrides to /proc)."""
+    return sys.platform == "darwin" and not linux()
+
+
+def ru_maxrss_kb(ru_maxrss: int) -> int:
+    """Convert rusage.ru_maxrss to KiB (macOS reports bytes; Linux reports KiB)."""
+    return ru_maxrss // 1024 if sys.platform == "darwin" else ru_maxrss
+
+
 def proc_path(*parts: str) -> Path:
     return Path(_config.setting("PROC") or "/proc", *parts)
+
+
+def proc_swap_kb(pid: int) -> int | None:
+    """Linux VmSwap of `pid` in KiB from /proc/PID/status, or None where unavailable."""
+    with contextlib.suppress(OSError, ValueError):
+        for line in proc_path(str(pid), "status").read_text().splitlines():
+            if line.startswith("VmSwap:"):
+                return int(line.split()[1])
+    return None
 
 
 def service_of(cgroup_lines: list[str]) -> tuple[bool, str] | None:
@@ -460,6 +478,102 @@ def pressure_level() -> float | None:
         return None
     value = sysctl("kern.memorystatus_vm_pressure_level")
     return float(value) if value and value.isdigit() else None
+
+
+def vm_stat(timeout: float = 2) -> str | None:
+    """Output of macOS `vm_stat`, or None where unavailable."""
+    try:
+        result = subprocess.run(["vm_stat"], capture_output=True, text=True, timeout=timeout)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return result.stdout if result.returncode == 0 else None
+
+
+def macos_used_memory(text: str) -> float | None:
+    """Physical MB in active, wired and compressor pages; inactive cache is excluded."""
+    page = re.search(r"page size of (\d+) bytes", text)
+    fields = dict(re.findall(r"^(Pages [^:]+):\s+(\d+)\.", text, re.MULTILINE))
+    names = ("Pages active", "Pages wired down", "Pages occupied by compressor")
+    if not page or any(name not in fields for name in names):
+        return None
+    return sum(int(fields[name]) for name in names) * int(page[1]) / (1024 * 1024)
+
+
+def macos_free_memory_pct() -> int | None:
+    """macOS `kern.memorystatus_level` free memory percentage, or None where unavailable."""
+    raw = sysctl("kern.memorystatus_level")
+    return int(raw) if raw and raw.isdigit() else None
+
+
+class MemorySnapshot(NamedTuple):
+    """Unified host memory, swap, pressure, PSI, and cgroup facts across macOS and Linux."""
+    total_mb: float | None = None
+    available_mb: float | None = None
+    used_mb: float | None = None
+    free_pct: int | None = None
+    swap_total_mb: float | None = None
+    swap_free_mb: float | None = None
+    pressure_level: float | None = None
+    psi_some: float | None = None
+    psi_full: float | None = None
+    cgroup: str | None = None
+    cgroup_max_mb: float | None = None
+    cgroup_available_mb: float | None = None
+    from_seam: bool = False
+
+
+def memory_snapshot(
+    *,
+    include_vm_stat: bool = False,
+    include_free_pct: bool = False,
+    include_pressure: bool = True,
+    honor_memory_file: bool = True,
+) -> MemorySnapshot:
+    """Read host memory/swap/pressure/PSI/cgroup facts in one place for board, usage, and sweep."""
+    seam = _config.setting("MEMORY_FILE") if honor_memory_file else None
+    if seam:
+        with contextlib.suppress(OSError, ValueError):
+            free, level = (float(v) for v in Path(seam).read_text().split()[:2])
+            return MemorySnapshot(swap_free_mb=free, pressure_level=level, from_seam=True)
+        return MemorySnapshot(from_seam=True)
+    if linux():
+        facts = linux_memory()
+        avail = facts["available"]
+        total = facts["total"]
+        free_pct = round(100 * float(avail) / float(total)) if include_free_pct and avail is not None and total else None
+        return MemorySnapshot(
+            total_mb=total,
+            available_mb=avail,
+            free_pct=free_pct,
+            swap_total_mb=facts["swap_total"],
+            swap_free_mb=facts["swap_free"],
+            psi_some=facts["psi_some"],
+            psi_full=facts["psi_full"],
+            cgroup=facts.get("cgroup"),
+            cgroup_max_mb=facts.get("cgroup_max"),
+            cgroup_available_mb=facts.get("cgroup_available"),
+        )
+    usage = swap_usage()
+    swap_total, swap_free = usage if usage is not None else (None, None)
+    level = pressure_level() if include_pressure else None
+    total_mb: float | None = None
+    used_mb: float | None = None
+    if include_vm_stat:
+        with contextlib.suppress(OSError, ValueError):
+            physical = sysctl("hw.memsize")
+            if physical is not None:
+                stats = vm_stat()
+                total_mb = int(physical) / (1024 * 1024)
+                used_mb = macos_used_memory(stats) if stats is not None else None
+    free_pct = macos_free_memory_pct() if include_free_pct else None
+    return MemorySnapshot(
+        total_mb=total_mb,
+        used_mb=used_mb,
+        free_pct=free_pct,
+        swap_total_mb=swap_total,
+        swap_free_mb=swap_free,
+        pressure_level=level,
+    )
 
 
 def cpu_seconds(text: str) -> float | None:

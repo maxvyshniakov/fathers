@@ -15,7 +15,7 @@ from . import config as _config
 from . import lineage as _lineage
 from . import platform as _platform
 from . import process as _process
-from .sweep_plan import LINUX, Cwd, Item, Proc, Snapshot, removed_dir, restart_loops
+from .sweep_plan import Cwd, Item, Proc, Snapshot, removed_dir, restart_loops
 
 TIMEOUT = 10  # seconds a ps, lsof, launchctl or docker call may take
 
@@ -51,119 +51,60 @@ def parse_table(text: str) -> dict[int, Proc]:
 def working_dirs(procs: dict[int, Proc], uid: int) -> tuple[dict[int, Cwd], list[str]]:
     """The working directory of each of the user's processes, and notes on what could not be read. macOS: one
     lsof; Linux: /proc/PID/cwd, which says " (deleted)" for a removed one."""
-    found: dict[int, Cwd] = {}
-    notes: list[str] = []
-    if LINUX:
+    if _platform.linux():
         found, notes, _ = proc_cwds(procs, uid)
         return found, notes
-    try:
-        result = subprocess.run(["lsof", "-a", "-d", "cwd", "-u", str(uid), "-w", "-Fpin"], capture_output=True,
-                                text=True, timeout=TIMEOUT * 3)
-    except (OSError, subprocess.TimeoutExpired) as error:
-        return found, [f"working directories unknown (lsof: {error})"]
-    pid: int | None = None
-    inode: int | None = None
-    for line in result.stdout.splitlines():
-        tag, value = line[:1], line[1:]
-        if tag == "p":
-            pid, inode = (int(value) if value.isdigit() else None), None
-        elif tag == "i":
-            inode = int(value) if value.isdigit() else None
-        elif tag == "n" and pid is not None:
-            found[pid] = Cwd(value, removed_dir(value, inode))
-    return found, notes
+    raw, _, notes = _process.working_dirs(
+        {pid: proc.uid for pid, proc in procs.items()},
+        uid,
+        timeout=TIMEOUT * 3,
+        check_removed=removed_dir,
+        strict=False,
+        use_proc=False,
+    )
+    return {pid: Cwd(item.path, item.removed) for pid, item in raw.items()}, notes
 
 
 def proc_cwds(procs: dict[int, Proc], uid: int) -> tuple[dict[int, Cwd], list[str], set[int]]:
     """Linux: the working directories from /proc/PID/cwd, notes, and the pids in another mount namespace (a
     container: rootless podman, `docker run --user $(id -u)`), whose paths mean nothing here; those are left out
     and never candidates. A directory is gone only when the kernel says so: " (deleted)" or no links left."""
-    found: dict[int, Cwd] = {}
-    notes: list[str] = []
-    foreign: set[int] = set()
-    try:
-        own = os.readlink(_platform.proc_path("self", "ns", "mnt"))
-    except OSError:
-        own = None
-    for pid, proc in procs.items():
-        if proc.uid != uid:
-            continue
-        try:
-            if own is not None and os.readlink(_platform.proc_path(str(pid), "ns", "mnt")) != own:
-                foreign.add(pid)
-                continue
-            link = os.readlink(_platform.proc_path(str(pid), "cwd"))
-        except OSError:
-            if own is not None:
-                foreign.add(pid)  # its namespace cannot be read: do not judge it
-            continue
-        if link.endswith(" (deleted)"):
-            found[pid] = Cwd(link[:-len(" (deleted)")], True)
-            continue
-        try:
-            removed = os.stat(_platform.proc_path(str(pid), "cwd")).st_nlink == 0
-        except OSError:
-            removed = None
-        found[pid] = Cwd(link, removed)
-    if foreign:
-        notes.append(f"{len(foreign)} process(es) in another mount namespace (a container) left out")
-    return found, notes, foreign
+    raw, foreign, notes = _process.working_dirs(
+        {pid: proc.uid for pid, proc in procs.items()},
+        uid,
+        strict=False,
+        use_proc=True,
+    )
+    return {pid: Cwd(item.path, item.removed) for pid, item in raw.items()}, notes, foreign
 
 
 def managed_jobs(procs: dict[int, Proc], uid: int) -> set[int]:
     """Processes a service manager runs on purpose: launchd jobs of this user (macOS), systemd services' main
     processes (Linux). They have ppid 1 like an orphan; a service is not one."""
+    if not _platform.linux():
+        return _process.launchd_managed_pids(uid, timeout=TIMEOUT)
     found: set[int] = set()
-    if not LINUX:
-        # `launchctl list` answers for the caller's domain only (from ssh or cron not the GUI one), so the GUI
-        # domain's services are asked for by name as well.
-        for command in (["launchctl", "list"], ["launchctl", "print", f"gui/{uid}"]):
-            with contextlib.suppress(OSError, subprocess.TimeoutExpired):
-                result = subprocess.run(command, capture_output=True, text=True, timeout=TIMEOUT)
-                found |= launchd_pids(result.stdout, command[1])
-        return found
-    snap = Snapshot(procs, uid=uid)
     units: dict[tuple[bool, str], int] = {}
     for pid, proc in procs.items():
-        if proc.uid != uid or not snap.adopted(proc):
+        if proc.uid != uid:
             continue
-        try:
-            lines = _platform.proc_path(str(pid), "cgroup").read_text().splitlines()
-        except OSError:
-            continue
-        key = service_of(lines)
-        if key is None:
-            continue
-        if key not in units:
-            units[key] = main_pid(*key)
-        if units[key] in (pid, -1):
+        parent = procs.get(proc.ppid)
+        if _process.is_systemd_service_main(
+            pid,
+            proc.ppid,
+            proc.cmd,
+            parent.cmd if parent is not None else None,
+            uid,
+            units,
+            fail_closed=False,
+            timeout=TIMEOUT,
+            run_main_pid=main_pid,
+        ):
             found.add(pid)
     return found
 
 
-def launchd_pids(text: str, how: str) -> set[int]:
-    """The pids of running jobs in `launchctl list` (PID first on each line) or `launchctl print gui/UID` (its
-    services block: pid, status, label) output."""
-    found: set[int] = set()
-    if how == "list":
-        for line in text.splitlines()[1:]:
-            first = line.split("\t", 1)[0].strip()
-            if first.isdigit() and int(first) > 0:
-                found.add(int(first))
-        return found
-    inside = False
-    for line in text.splitlines():
-        if line.strip() == "services = {":
-            inside = True
-        elif inside and line.strip() == "}":
-            inside = False
-        elif inside:
-            first = (line.split() or [""])[0]
-            if first.isdigit() and int(first) > 0:
-                found.add(int(first))
-    return found
-
-
+launchd_pids = _process.launchd_pids
 service_of = _platform.service_of
 Run = Callable[..., "subprocess.CompletedProcess[str]"]
 
@@ -178,7 +119,7 @@ def snapshot() -> Snapshot:
     procs = table()
     uid = os.geteuid()
     foreign: set[int] = set()
-    if LINUX:
+    if _platform.linux():
         cwds, notes, foreign = proc_cwds(procs, uid)
     else:
         cwds, notes = working_dirs(procs, uid)
@@ -211,16 +152,16 @@ def containers(settings: Mapping[str, Any]) -> dict[str, Any]:
 def memory_facts() -> dict[str, Any]:
     """Swap and memory now: total and free swap in MB, macOS pressure level when read, and why memory is short
     (None: it is not)."""
-    usage = None
+    include_pressure = not bool(_config.setting("MEMORY_FILE"))
+    snap = _platform.MemorySnapshot()
     with contextlib.suppress(_config.SlotError, OSError):
-        usage = _platform.swap_usage()
-    pressure = None
-    if not _config.setting("MEMORY_FILE"):
-        with contextlib.suppress(_config.SlotError, OSError):
-            pressure = _platform.pressure_level()
-    found: dict[str, Any] = {"swap_total_mb": None if usage is None else round(usage[0]),
-                             "swap_free_mb": None if usage is None else round(usage[1]),
-                             "pressure": pressure, "short": None}
+        snap = _platform.memory_snapshot(include_pressure=include_pressure, honor_memory_file=False)
+    found: dict[str, Any] = {
+        "swap_total_mb": None if snap.swap_total_mb is None else round(snap.swap_total_mb),
+        "swap_free_mb": None if snap.swap_total_mb is None else round(snap.swap_free_mb or 0.0),
+        "pressure": snap.pressure_level if include_pressure else None,
+        "short": None,
+    }
     with contextlib.suppress(_config.SlotError, OSError):
         found["short"] = _platform.memory_short()
     return found
@@ -251,11 +192,10 @@ def memory_report(facts: Mapping[str, Any], snap: Snapshot, settings: Mapping[st
         entry: dict[str, Any] = {"pid": proc.pid, "rss_mb": round(proc.rss / 1024), "cmd": proc.cmd[:200],
                                  "class": f"lease {label}" if label else classed.get(proc.pid, "-"),
                                  "age": None if age is None else round(age)}
-        if LINUX and proc.uid == snap.uid:
-            with contextlib.suppress(OSError, ValueError):
-                for line in _platform.proc_path(str(proc.pid), "status").read_text().splitlines():
-                    if line.startswith("VmSwap:"):
-                        entry["swap_mb"] = round(int(line.split()[1]) / 1024)
+        if _platform.linux() and proc.uid == snap.uid:
+            swap_kb = _platform.proc_swap_kb(proc.pid)
+            if swap_kb is not None:
+                entry["swap_mb"] = round(swap_kb / 1024)
         found["top"].append(entry)
     return found
 

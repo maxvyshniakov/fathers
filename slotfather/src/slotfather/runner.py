@@ -16,6 +16,7 @@ from typing import Any
 from . import client as _client
 from . import config as _config
 from . import entry as _entry
+from . import platform as _platform
 from . import process as _process
 from . import settings as _settings
 
@@ -49,7 +50,7 @@ def execute(argv: list[str], environment: dict[str, str], background: bool = Fal
     started = time.time() - 1
     watch = None
     attributed = None
-    if sys.platform == "darwin":
+    if _platform.macos():
         def _attributed(pids: list[int], table: dict[int, tuple[Any, ...]]) -> set[int]:
             return _process.attributed_browser_helpers(pids, table, child.pid, started)
         attributed = _attributed

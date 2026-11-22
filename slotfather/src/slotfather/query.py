@@ -4,7 +4,6 @@ from __future__ import annotations
 import contextlib
 import math
 import time
-import sys
 from pathlib import Path
 from typing import Any, Callable, Iterator, NamedTuple
 
@@ -374,22 +373,19 @@ def held_line(held: int, slots: int) -> str:
 
 def status_processes(directory: Path, pid: int | None = None) -> dict[int, tuple[int, str]]:
     """The legacy identity format, using the native adapter only when every holder is observable."""
-    if sys.platform == "darwin":
-        from .macos_process import basic_snapshot
+    if _platform.macos():
         sources = [directory, *_config.legacy_dirs()]
         required = {entry["pid"] for source in sources for _, entry in _state.entries(source)
                     if type(entry.get("pid")) is int}
         if pid is not None:
             required.add(pid)
-        try:
-            table = basic_snapshot(required)
+        table = _process.identity_table(required)
+        if table is not None:
             # Legacy clients use their own lock: a lease may appear during this observation.
             if any(entry["pid"] in table and not table[entry["pid"]][1]
                    for source in sources for _, entry in _state.entries(source) if type(entry.get("pid")) is int):
                 return _queue.process_table(directory, log=False)
             return table
-        except OSError:
-            pass
     return _queue.process_table(directory, log=False)
 
 
@@ -489,32 +485,16 @@ def status_json(
                        for n, item in enumerate(both)]
         parents = _lineage.parents_of(table)
         membership = _process.lease_membership(parents, lease_specs, [pid])
-        if sys.platform == "darwin" and both and parents.get(pid) == 1 and not membership.leases.get(pid):
-            targeted = _process.commands([pid]).get(pid, "")
-            if targeted and _process.is_detached_browser_helper(targeted):
-                helper_ctx = _process.helper_snapshot()
-                if helper_ctx is not None and pid in helper_ctx.raw_starts and _platform.same_holder(
-                        table[pid][1], None, pid, helper_ctx.raw_starts[pid]):
-                    valid_holders: list[object] = [
-                        lease.pid if (type(lease.pid) is int and lease.pid in helper_ctx.raw_starts
-                                      and lease.pid in table
-                                      and _platform.same_holder(table[lease.pid][1], None, lease.pid,
-                                                                helper_ctx.raw_starts[lease.pid]))
-                        else None
-                        for lease in lease_specs
-                    ]
-                    attributed = _process.detached_browser_helpers(
-                        helper_ctx.parents, helper_ctx.commands, valid_holders,
-                        uids=helper_ctx.uids, starts=helper_ctx.starts,
-                        lease_since=[_process.lease_started_epoch(item) for item in both],
-                    )
-                    matched = [(index, "helper") for index, helper_pids in sorted(attributed.items())
-                               if lease_specs[index].by_environment and pid in helper_pids]
-                    if matched:
-                        membership = _process.Membership(
-                            {**membership.leases, pid: matched},
-                            [item_pid for item_pid in membership.unknown if item_pid != pid],
-                        )
+        if both and pid in table:
+            membership = _process.resolve_pid_helper_membership(
+                pid,
+                table[pid][1],
+                parents,
+                lease_specs,
+                {number: row[1] for number, row in table.items()},
+                [_process.lease_started_epoch(item) for item in both],
+                membership,
+            )
         via = dict(membership.leases.get(pid, []))
         mine = [(n < len(entries_found), {**item, "via": via[n]}) for n, item in enumerate(both) if n in via]
         entries_found = [item for current, item in mine if current]

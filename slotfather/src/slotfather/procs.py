@@ -9,9 +9,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-import subprocess
-import sys
-from typing import Any, NamedTuple, cast
+from typing import Any, cast
 
 from . import config, platform, state
 from . import lineage as _lineage
@@ -23,42 +21,16 @@ class ProcsError(config.SlotError):
     """Process membership could not be established."""
 
 
-class Process(NamedTuple):
-    pid: int
-    ppid: int
-    uid: int
-    tty: str
-    start: str
-    cmd: str
+Process = _process.Process
 
 
 def read_processes(pid: int | None = None, required: set[int] | None = None) -> dict[int, Process]:
     """One locale-stable process table; failure is never an empty answer."""
-    if sys.platform == "darwin" and pid is not None:
-        try:
-            from .macos_process import snapshot
-            return {number: Process(*process) for number, process in snapshot(pid, required or set()).items()}
-        except (OSError, ValueError, AttributeError):
-            pass  # Unsupported native ABI or required identity: use the full ps adapter.
     try:
-        rows = _process.table(["-ax", "-ww", "-o", _process.MEMBERS], caller=False, env=platform.c_locale(),
-                              timeout=5)
+        return _process.member_processes(pid, required)
     except _process.PsError as error:
         message = str(error) if error.detail.startswith("ps ") else f"cannot read processes: {error.detail}"
         raise ProcsError(message) from None
-    found: dict[int, Process] = {}
-    for line in rows:
-        parts = line.split(None, 10)
-        if len(parts) < 10 or not all(value.isdigit() for value in parts[:3]):
-            continue
-        if parts[4].startswith("Z"):
-            continue
-        pid, ppid, uid = map(int, parts[:3])
-        found[pid] = Process(pid, ppid, uid, "" if parts[3] in ("?", "??", "-") else parts[3],
-                             " ".join(parts[5:10]), parts[10] if len(parts) > 10 else "")
-    if not found:
-        raise ProcsError("ps listed no live processes")
-    return found
 
 
 def ancestors(processes: dict[int, Process], pid: int) -> list[int]:
@@ -126,80 +98,39 @@ def read_leases(processes: dict[int, Process], entries: list[tuple[Path, dict[st
     return leases
 
 
-def _adopted_by_manager(process: Process, processes: dict[int, Process]) -> bool:
-    if process.ppid == 1:
-        return True
-    parent = processes.get(process.ppid)
-    return parent is not None and os.path.basename(_lineage.program(parent.cmd)) == "systemd"
-
-
-def _non_dumpable_service(pid: int, process: Process, processes: dict[int, Process], uid: int, proc: Path,
-                          units: dict[tuple[bool, str], int]) -> bool:
-    """Whether a same-user Linux process whose /proc cwd or mount namespace answered EACCES/EPERM is a managed
-    system or user service main process (systemd --user, (sd-pam), or a systemd .service MainPID; fathers#164).
-    Unlike sweep_os.managed_jobs, an unanswerable systemctl (-1) never exempts a process: fail closed."""
-    if not _adopted_by_manager(process, processes):
-        return False
-    try:
-        lines = (proc / str(pid) / "cgroup").read_text().splitlines()
-    except OSError:
-        return False
-    cgroup = next((line.split(":", 2)[2].strip() for line in lines if line.startswith("0::")), "").rstrip("/")
-    manager_unit = f"/user@{uid}.service"
-    if cgroup.endswith((manager_unit, f"{manager_unit}/init.scope")):
-        exe = os.path.basename(_lineage.program(process.cmd))
-        if exe == "systemd" or process.cmd.strip().startswith("(sd-pam)"):
-            return True
-    key = platform.service_of(lines)
-    if key is None:
-        return False
-    if key not in units:
-        units[key] = platform.main_pid(*key, subprocess.run, timeout=5)
-    return units[key] == pid
-
-
 def read_cwds(processes: dict[int, Process], uid: int, exempt: set[int] | None = None) -> dict[int, str]:
     """Read local working directories; inaccessible processes remain explicitly unknown unless they are non-dumpable
     long-lived managed services on Linux (`exempt` receives their PIDs; fathers#164)."""
-    found: dict[int, str] = {}
-    if sys.platform.startswith("linux"):
-        proc = Path(os.environ.get("SLOTFATHER_PROC", "/proc"))
-        try:
-            namespace = os.readlink(proc / "self/ns/mnt")
-        except OSError as error:
-            raise ProcsError(f"cannot read own mount namespace: {error}") from None
-        units: dict[tuple[bool, str], int] = {}
-        for pid, process in processes.items():
-            if process.uid != uid:
-                continue
-            try:
-                if os.readlink(proc / str(pid) / "ns/mnt") != namespace:
-                    continue
-                path = os.readlink(proc / str(pid) / "cwd")
-            except PermissionError:
-                if exempt is not None and _non_dumpable_service(pid, process, processes, uid, proc, units):
-                    exempt.add(pid)
-                continue
-            except OSError:
-                continue
-            if path.endswith(" (deleted)"):
-                path = path[:-len(" (deleted)")]
-            found[pid] = os.path.realpath(path)
-        return found
+    units: dict[tuple[bool, str], int] = {}
+
+    def on_denied(denied_pid: int) -> None:
+        if exempt is None:
+            return
+        proc = processes[denied_pid]
+        parent = processes.get(proc.ppid)
+        if _process.is_systemd_service_main(
+            denied_pid,
+            proc.ppid,
+            proc.cmd,
+            parent.cmd if parent is not None else None,
+            uid,
+            units,
+            fail_closed=True,
+            timeout=5,
+        ):
+            exempt.add(denied_pid)
+
     try:
-        result = subprocess.run(["lsof", "-a", "-d", "cwd", "-u", str(uid), "-w", "-Fpn"],
-                                capture_output=True, text=True, timeout=10)
-    except (OSError, subprocess.TimeoutExpired) as error:
-        raise ProcsError(f"cannot read working directories: {error}") from None
-    if result.returncode not in (0, 1) or not result.stdout.strip():
-        raise ProcsError(f"lsof could not read working directories (exit {result.returncode})")
-    current: int | None = None
-    for line in result.stdout.splitlines():
-        if line.startswith("p") and line[1:].isdigit():
-            current = int(line[1:])
-        elif line.startswith("n") and current in processes and processes[current].uid == uid:
-            found[current] = os.path.realpath(line[1:])
-    return found
+        found, _, _ = _process.working_dirs(
+            {number: proc.uid for number, proc in processes.items()},
+            uid,
+            timeout=10,
+            on_denied=on_denied if exempt is not None else None,
+            strict=True,
+        )
+    except _process.PsError as error:
+        raise ProcsError(str(error)) from None
+    return {number: item.path for number, item in found.items()}
 
 
 def recheck(processes: dict[int, Process], cwd_unknown: list[int],
@@ -255,7 +186,7 @@ def query(pid: int | None = None, cwd: str | None = None, directory: Path | None
     lease_specs = [_process.Lease(str(lease["lease"]), lease["pid"]) for lease in leases]
     entry_by_path = {str(path): entry for path, entry, _ in entries}
     lease_since = [_process.lease_started_epoch(entry_by_path.get(str(lease["lease"]), {})) for lease in leases]
-    if sys.platform == "darwin" and pid is None:
+    if platform.macos() and pid is None:
         membership = _process.lease_membership(
             parents, lease_specs, selected, detached_only=True,
             commands={number: process.cmd for number, process in processes.items()},
@@ -265,30 +196,17 @@ def query(pid: int | None = None, cwd: str | None = None, directory: Path | None
         )
     else:
         membership = _process.lease_membership(parents, lease_specs, selected, detached_only=True)
-        if sys.platform == "darwin" and pid in processes and leases \
-                and not membership.leases.get(pid) and _process.is_detached_browser_helper(processes[pid].cmd):
-            helper_ctx = _process.helper_snapshot()
-            if helper_ctx is not None and pid in helper_ctx.raw_starts and platform.same_holder(
-                    processes[pid].start, None, pid, helper_ctx.raw_starts[pid]):
-                valid_holders: list[object] = [
-                    lease.pid if (type(lease.pid) is int and lease.pid in helper_ctx.raw_starts
-                                  and lease.pid in processes
-                                  and platform.same_holder(processes[lease.pid].start, None, lease.pid,
-                                                           helper_ctx.raw_starts[lease.pid]))
-                    else None
-                    for lease in lease_specs
-                ]
-                attributed = _process.detached_browser_helpers(
-                    helper_ctx.parents, helper_ctx.commands, valid_holders,
-                    uids=helper_ctx.uids, starts=helper_ctx.starts, lease_since=lease_since,
-                )
-                matched = [(index, "helper") for index, helper_pids in sorted(attributed.items())
-                           if lease_specs[index].by_environment and pid in helper_pids]
-                if matched:
-                    membership = _process.Membership(
-                        {**membership.leases, pid: matched},
-                        [item_pid for item_pid in membership.unknown if item_pid != pid],
-                    )
+        if pid is not None and pid in processes and leases:
+            membership = _process.resolve_pid_helper_membership(
+                pid,
+                processes[pid].start,
+                parents,
+                lease_specs,
+                {number: process.start for number, process in processes.items()},
+                lease_since,
+                membership,
+                pid_cmd=processes[pid].cmd,
+            )
     unknown, lease_unknown, named = recheck(processes, unknown, membership.unknown)
     records: list[dict[str, Any]] = []
     for number in selected:

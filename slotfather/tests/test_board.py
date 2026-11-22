@@ -541,7 +541,7 @@ class MachineFactTests(unittest.TestCase):
     def test_a_failed_process_sample_is_not_returned_as_zero_cpu(self) -> None:
         tool = board()
         failure = subprocess.CompletedProcess(["ps"], 1, stdout="", stderr="unavailable")
-        with mock.patch.object(tool.subprocess, "run", return_value=failure):
+        with mock.patch.object(subprocess, "run", return_value=failure):
             with self.assertRaises(OSError):
                 tool.process_usage()
 

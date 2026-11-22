@@ -18,7 +18,6 @@ import datetime
 import os
 import re
 import subprocess
-import sys
 from typing import Any, Callable, Iterable, Mapping, NamedTuple, Sequence, cast
 
 from . import config as _config
@@ -31,7 +30,6 @@ USAGE = "pid=,ppid=,uid=,rss=,time=,lstart="  # usage_table(): the lease's sampl
 MEMBERS = "pid=,ppid=,uid=,tty=,stat=,lstart=,command="  # procs: identities, sessions and commands
 SWEEP = "pid=,ppid=,uid=,rss=,tty=,lstart=,command="  # the sweep's snapshot
 CPU = "pid=,ppid=,%cpu=,rss=,comm="  # the dashboard block's CPU sample
-CPU_FULL = "pid=,ppid=,uid=,%cpu=,rss=,lstart=,command="  # macOS dashboard sample with full commands
 HELPER_SNAPSHOT = "pid=,ppid=,uid=,lstart=,command="  # macOS detached browser/XPC correlation snapshot
 STARTS = "pid=,stat=,lstart="  # the sweep's check before a signal; running()
 OWNER = "uid="  # process_uid()
@@ -55,7 +53,7 @@ def ps_environment() -> dict[str, str] | None:
     locale (procps writes lstart in the locale's words; every client since #653 writes C there); macOS keeps the
     caller's locale and time zone, as every older client does, so that an older client still reads a current
     client's `start` exactly as it read its own (fathers#122). Current clients compare `started` instead."""
-    return _platform.c_locale() if sys.platform.startswith("linux") else None
+    return _platform.c_locale() if _platform.linux() else None
 
 
 def run(arguments: Sequence[str], *, env: Mapping[str, str] | None = None, timeout: float | None = None,
@@ -138,6 +136,240 @@ def cpu_table() -> tuple[dict[int, tuple[float, int, str]], dict[int, list[int]]
     return own, children
 
 
+class Process(NamedTuple):
+    """Locale-stable process row shared by `procs` and native macOS process reads."""
+    pid: int
+    ppid: int
+    uid: int
+    tty: str
+    start: str
+    cmd: str
+
+
+class Cwd(NamedTuple):
+    """Observed working directory and whether the kernel/filesystem marks it removed (None: unknown)."""
+    path: str
+    removed: bool | None
+
+
+def identity_table(required: set[int] | None = None) -> dict[int, tuple[int, str]] | None:
+    """Native macOS identity table for `status`, or None when unavailable or off macOS."""
+    if not _platform.macos() or required is None:
+        return None
+    from . import macos_process
+    try:
+        return macos_process.basic_snapshot(required)
+    except OSError:
+        return None
+
+
+def member_processes(
+    pid: int | None = None,
+    required: set[int] | None = None,
+    timeout: float = 5,
+) -> dict[int, Process]:
+    """One locale-stable process table (native macOS fast path for `--pid`, else `ps`); failure is never empty."""
+    if _platform.macos() and pid is not None:
+        try:
+            from .macos_process import snapshot
+            return {number: Process(*proc) for number, proc in snapshot(pid, required or set()).items()}
+        except (OSError, ValueError, AttributeError):
+            pass  # Unsupported native ABI or required identity: use the full ps adapter.
+    rows = table(["-ax", "-ww", "-o", MEMBERS], caller=False, env=_platform.c_locale(), timeout=timeout)
+    found: dict[int, Process] = {}
+    for line in rows:
+        parts = line.split(None, 10)
+        if len(parts) < 10 or not all(value.isdigit() for value in parts[:3]):
+            continue
+        if parts[4].startswith("Z"):
+            continue
+        number, ppid, uid = map(int, parts[:3])
+        found[number] = Process(
+            number,
+            ppid,
+            uid,
+            "" if parts[3] in ("?", "??", "-") else parts[3],
+            " ".join(parts[5:10]),
+            parts[10] if len(parts) > 10 else "",
+        )
+    if not found:
+        raise PsError("ps listed no live processes", "ps listed no live processes")
+    return found
+
+
+def working_dirs(
+    uids_by_pid: Mapping[int, int],
+    uid: int,
+    *,
+    timeout: float = 10,
+    check_removed: Callable[[str, int | None], bool | None] | None = None,
+    on_denied: Callable[[int], None] | None = None,
+    strict: bool = False,
+    use_proc: bool | None = None,
+) -> tuple[dict[int, Cwd], set[int], list[str]]:
+    """Read working directories for `uid`'s processes via `/proc/PID/cwd` (Linux) or `lsof` (macOS).
+
+    Returns `(cwds, foreign_mount_ns_pids, notes)`. With `strict=True` (used by `procs`), failures raise `PsError`
+    and paths are normalized with `os.path.realpath`. With `strict=False` (used by `sweep_os`), failures return
+    warning notes and removed-directory state is populated via `/proc` or `check_removed`.
+    """
+    found: dict[int, Cwd] = {}
+    foreign: set[int] = set()
+    notes: list[str] = []
+    linux_mode = _platform.linux() if use_proc is None else use_proc
+    if linux_mode:
+        own: str | None = None
+        try:
+            own = os.readlink(_platform.proc_path("self", "ns", "mnt"))
+        except OSError as error:
+            if strict:
+                raise PsError(f"cannot read own mount namespace: {error}", str(error)) from None
+            own = None
+        for pid, proc_uid in uids_by_pid.items():
+            if proc_uid != uid:
+                continue
+            try:
+                if own is not None and os.readlink(_platform.proc_path(str(pid), "ns", "mnt")) != own:
+                    foreign.add(pid)
+                    continue
+                link = os.readlink(_platform.proc_path(str(pid), "cwd"))
+            except PermissionError:
+                if on_denied is not None:
+                    on_denied(pid)
+                if not strict and own is not None:
+                    foreign.add(pid)
+                continue
+            except OSError:
+                if not strict and own is not None:
+                    foreign.add(pid)  # its namespace cannot be read: do not judge it
+                continue
+            if link.endswith(" (deleted)"):
+                path = link[:-len(" (deleted)")]
+                found[pid] = Cwd(os.path.realpath(path) if strict else path, True)
+                continue
+            if strict:
+                found[pid] = Cwd(os.path.realpath(link), None)
+                continue
+            try:
+                removed: bool | None = os.stat(_platform.proc_path(str(pid), "cwd")).st_nlink == 0
+            except OSError:
+                removed = None
+            found[pid] = Cwd(link, removed)
+        if foreign and not strict:
+            notes.append(f"{len(foreign)} process(es) in another mount namespace (a container) left out")
+        return found, foreign, notes
+    flags = "-Fpin" if check_removed is not None else "-Fpn"
+    try:
+        result = subprocess.run(
+            ["lsof", "-a", "-d", "cwd", "-u", str(uid), "-w", flags],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        if strict:
+            raise PsError(f"cannot read working directories: {error}", str(error)) from None
+        return found, foreign, [f"working directories unknown (lsof: {error})"]
+    if strict and (result.returncode not in (0, 1) or not result.stdout.strip()):
+        raise PsError(f"lsof could not read working directories (exit {result.returncode})",
+                      f"lsof exited {result.returncode}")
+    current: int | None = None
+    inode: int | None = None
+    for line in result.stdout.splitlines():
+        tag, value = line[:1], line[1:]
+        if tag == "p":
+            current, inode = (int(value) if value.isdigit() else None), None
+        elif tag == "i":
+            inode = int(value) if value.isdigit() else None
+        elif tag == "n" and current is not None:
+            if strict:
+                if uids_by_pid.get(current) == uid:
+                    found[current] = Cwd(os.path.realpath(value), None)
+            else:
+                found[current] = Cwd(value, check_removed(value, inode) if check_removed is not None else None)
+    return found, foreign, notes
+
+
+def adopted_by_manager(ppid: int, parent_cmd: str | None, *, is_linux: bool | None = None) -> bool:
+    """Whether launchd/init (or, on Linux, a user's systemd manager) adopted a process."""
+    if ppid == 1:
+        return True
+    linux_mode = _platform.linux() if is_linux is None else is_linux
+    return linux_mode and parent_cmd is not None and os.path.basename(_lineage.program(parent_cmd)) == "systemd"
+
+
+def is_systemd_service_main(
+    pid: int,
+    ppid: int,
+    cmd: str,
+    parent_cmd: str | None,
+    uid: int,
+    units: dict[tuple[bool, str], int],
+    *,
+    fail_closed: bool = True,
+    timeout: float = 5,
+    run_main_pid: Callable[[bool, str], int] | None = None,
+) -> bool:
+    """Whether a same-user Linux process is a managed systemd service main process (or systemd --user / (sd-pam)
+    when `fail_closed=True`). `units` caches `(is_user, unit) -> MainPID` across calls."""
+    if not adopted_by_manager(ppid, parent_cmd, is_linux=True):
+        return False
+    try:
+        lines = _platform.proc_path(str(pid), "cgroup").read_text().splitlines()
+    except OSError:
+        return False
+    if fail_closed:
+        cgroup = next((line.split(":", 2)[2].strip() for line in lines if line.startswith("0::")), "").rstrip("/")
+        manager_unit = f"/user@{uid}.service"
+        if cgroup.endswith((manager_unit, f"{manager_unit}/init.scope")):
+            exe = os.path.basename(_lineage.program(cmd))
+            if exe == "systemd" or cmd.strip().startswith("(sd-pam)"):
+                return True
+    key = _platform.service_of(lines)
+    if key is None:
+        return False
+    if key not in units:
+        units[key] = (
+            run_main_pid(*key)
+            if run_main_pid is not None
+            else _platform.main_pid(*key, subprocess.run, timeout=timeout)
+        )
+    return units[key] == pid if fail_closed else units[key] in (pid, -1)
+
+
+def launchd_pids(text: str, how: str) -> set[int]:
+    """The pids of running jobs in `launchctl list` (PID first on each line) or `launchctl print gui/UID` (its
+    services block: pid, status, label) output."""
+    found: set[int] = set()
+    if how == "list":
+        for line in text.splitlines()[1:]:
+            first = line.split("\t", 1)[0].strip()
+            if first.isdigit() and int(first) > 0:
+                found.add(int(first))
+        return found
+    inside = False
+    for line in text.splitlines():
+        if line.strip() == "services = {":
+            inside = True
+        elif inside and line.strip() == "}":
+            inside = False
+        elif inside:
+            first = (line.split() or [""])[0]
+            if first.isdigit() and int(first) > 0:
+                found.add(int(first))
+    return found
+
+
+def launchd_managed_pids(uid: int, timeout: float = 10) -> set[int]:
+    """PIDs of running launchd jobs for `uid` in both the caller's domain and `gui/<uid>`."""
+    found: set[int] = set()
+    for command in (["launchctl", "list"], ["launchctl", "print", f"gui/{uid}"]):
+        with contextlib.suppress(OSError, subprocess.TimeoutExpired):
+            result = subprocess.run(command, capture_output=True, text=True, timeout=timeout)
+            found |= launchd_pids(result.stdout, command[1])
+    return found
+
+
 class ProcessContext(NamedTuple):
     """Extra per-process metadata for detached macOS browser/XPC helper attribution."""
     parents: dict[int, int]
@@ -146,8 +378,6 @@ class ProcessContext(NamedTuple):
     raw_starts: dict[int, str]
     commands: dict[int, str]
 
-
-_BUNDLE_EXEC_RE = re.compile(r"^(/[^\n]*?\.(?:app|xpc)/Contents/MacOS/[^/\n]+?)(?=\s+-|\s+/|$)")
 
 _SYSTEM_BROWSER_PREFIXES = (
     "/System/",
@@ -208,51 +438,6 @@ _USER_BROWSER_PROFILE_SUBSTRINGS = (
     "/library/application support/arc",
     "/library/safari",
 )
-
-
-def _command_name(cmd: str) -> str:
-    """Executable basename from a full command line, keeping macOS .app/.xpc bundle names intact."""
-    stripped = cmd.strip()
-    if not stripped:
-        return ""
-    matched = _BUNDLE_EXEC_RE.match(stripped)
-    if matched:
-        return os.path.basename(matched.group(1))
-    return os.path.basename(stripped.split(None, 1)[0])
-
-
-def cpu_snapshot() -> tuple[dict[int, tuple[float, int, str]], dict[int, list[int]], ProcessContext | None]:
-    """One ps sample for the dashboard: (own, children, context). On macOS, reads full commands, uids and start
-    times in the same ps call so detached browser/XPC helpers can be attributed without a second scan; on other
-    platforms returns cpu_table() with context=None."""
-    if sys.platform != "darwin":
-        own, children = cpu_table()
-        return own, children, None
-    own: dict[int, tuple[float, int, str]] = {}
-    children: dict[int, list[int]] = {}
-    parents: dict[int, int] = {}
-    uids: dict[int, int] = {}
-    starts_map: dict[int, float | None] = {}
-    raw_starts: dict[int, str] = {}
-    cmds: dict[int, str] = {}
-    for line in table(["-axww", "-o", CPU_FULL], env=_platform.c_locale()):
-        parts = line.split(None, 10)
-        if len(parts) < 10 or not (parts[0].isdigit() and parts[1].isdigit() and parts[2].isdigit()):
-            continue
-        with contextlib.suppress(ValueError):
-            pid, ppid, uid = int(parts[0]), int(parts[1]), int(parts[2])
-            cpu_pct = float(parts[3].replace(",", "."))
-            rss = int(parts[4])
-            start_str = " ".join(parts[5:10])
-            cmd = parts[10].strip() if len(parts) > 10 else ""
-            own[pid] = (cpu_pct, rss, _command_name(cmd))
-            children.setdefault(ppid, []).append(pid)
-            parents[pid] = ppid
-            uids[pid] = uid
-            raw_starts[pid] = start_str
-            starts_map[pid] = _platform.started_at(start_str)
-            cmds[pid] = cmd
-    return own, children, ProcessContext(parents, uids, starts_map, raw_starts, cmds)
 
 
 def helper_snapshot(timeout: float = 5) -> ProcessContext | None:
@@ -831,3 +1016,56 @@ def lease_membership(parents: Mapping[int, int], leases: Sequence[Lease], pids: 
         if resolved and unknown:
             unknown = [pid for pid in unknown if pid not in resolved]
     return Membership(found, unknown)
+
+
+def resolve_pid_helper_membership(
+    pid: int,
+    pid_start: str,
+    parents: Mapping[int, int],
+    lease_specs: Sequence[Lease],
+    holder_starts: Mapping[int, str],
+    lease_since: Sequence[float | None],
+    membership: Membership,
+    *,
+    pid_cmd: str | None = None,
+) -> Membership:
+    """Targeted macOS detached browser/XPC helper fallback for a single-PID query (`status --pid`, `procs --pid`)."""
+    if not _platform.macos() or not lease_specs or parents.get(pid) != 1 or membership.leases.get(pid):
+        return membership
+    cmd = commands([pid]).get(pid, "") if pid_cmd is None else pid_cmd
+    if not cmd or not is_detached_browser_helper(cmd):
+        return membership
+    helper_ctx = helper_snapshot()
+    if helper_ctx is None or pid not in helper_ctx.raw_starts or not _platform.same_holder(
+        pid_start, None, pid, helper_ctx.raw_starts[pid]
+    ):
+        return membership
+    valid_holders: list[object] = [
+        lease.pid if (
+            type(lease.pid) is int
+            and lease.pid in helper_ctx.raw_starts
+            and lease.pid in holder_starts
+            and _platform.same_holder(holder_starts[lease.pid], None, lease.pid, helper_ctx.raw_starts[lease.pid])
+        )
+        else None
+        for lease in lease_specs
+    ]
+    attributed = detached_browser_helpers(
+        helper_ctx.parents,
+        helper_ctx.commands,
+        valid_holders,
+        uids=helper_ctx.uids,
+        starts=helper_ctx.starts,
+        lease_since=lease_since,
+    )
+    matched = [
+        (index, "helper")
+        for index, helper_pids in sorted(attributed.items())
+        if lease_specs[index].by_environment and pid in helper_pids
+    ]
+    if not matched:
+        return membership
+    return Membership(
+        {**membership.leases, pid: matched},
+        [item_pid for item_pid in membership.unknown if item_pid != pid],
+    )

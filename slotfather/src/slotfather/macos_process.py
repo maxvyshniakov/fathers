@@ -13,11 +13,10 @@ import errno
 import os
 import stat
 import struct
+import subprocess
 import sys
 import time
-from typing import NamedTuple
-
-from . import process as _process
+from typing import Callable, NamedTuple
 
 
 class NativeProcess(NamedTuple):
@@ -131,13 +130,26 @@ def start_text(seconds: int, padded_day: bool = False) -> str:
             f"{value.tm_hour:02}:{value.tm_min:02}:{value.tm_sec:02} {value.tm_year}")
 
 
-def argument_processes(pids: set[int]) -> dict[int, str]:
+def argument_processes(
+    pids: set[int],
+    run_ps: Callable[[set[int]], subprocess.CompletedProcess[str]] | None = None,
+) -> dict[int, str]:
     """One targeted ps snapshot supplies full argv without reading any environment."""
     if not pids:
         return {}
     try:
-        answer = _process.arguments(pids)
-    except _process.PsError as error:
+        answer = (
+            run_ps(pids)
+            if run_ps is not None
+            else subprocess.run(
+                ["/bin/ps", "-ww", "-p", ",".join(map(str, sorted(pids))), "-o", "pid=,command="],
+                capture_output=True,
+                text=True,
+                env={**os.environ, "LC_ALL": "C"},
+                timeout=5,
+            )
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
         raise OSError(errno.ETIMEDOUT, "ps did not read protected process identities in time") from error
     if answer.returncode not in (0, 1) or answer.returncode and answer.stderr.strip():
         raise OSError(errno.EACCES, "ps could not read protected process identities")
@@ -149,7 +161,12 @@ def argument_processes(pids: set[int]) -> dict[int, str]:
     return result
 
 
-def snapshot(pid: int, required: set[int] | None = None) -> dict[int, NativeProcess]:
+def snapshot(
+    pid: int,
+    required: set[int] | None = None,
+    *,
+    run_ps: Callable[[set[int]], subprocess.CompletedProcess[str]] | None = None,
+) -> dict[int, NativeProcess]:
     """Native identities needed for one PID's membership; one ps supplies ancestry argv."""
     libproc, libc = libraries()
     result: dict[int, NativeProcess] = {}
@@ -189,7 +206,7 @@ def snapshot(pid: int, required: set[int] | None = None) -> dict[int, NativeProc
             raise OSError(errno.ESRCH, "an ancestor exited during the native observation")
         chain.append(here)
         here = process.ppid
-    arguments = argument_processes(set(chain))
+    arguments = argument_processes(set(chain), run_ps=run_ps)
     for number in chain:
         command = arguments.get(number)
         prior = result[number]

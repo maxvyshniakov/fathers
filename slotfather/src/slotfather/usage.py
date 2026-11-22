@@ -7,7 +7,6 @@ import json
 import os
 from pathlib import Path
 import signal
-import sys
 import threading
 import time
 from typing import Any, Callable, cast
@@ -205,7 +204,7 @@ class Watch(threading.Thread):
         if rusage is None or not self.lock.acquire(timeout=_config.WATCH_JOIN):
             return None
         try:
-            peak = rusage.ru_maxrss // 1024 if sys.platform == "darwin" else rusage.ru_maxrss  # bytes on macOS
+            peak = _platform.ru_maxrss_kb(rusage.ru_maxrss)
             return self.usage.result(rusage.ru_utime + rusage.ru_stime, peak, wall)
         except Exception:  # noqa: BLE001 - measuring must never cost the lease its release
             return None
@@ -217,36 +216,29 @@ def machine_facts(directory: Path) -> dict[str, Any]:
     """One machine sample: load, cumulative CPU ticks (busy is the change between two samples), memory pressure,
     swap and the slots held."""
     held = [e for _, e in _state.entries(directory) if _entry.is_held(e)]
-    linux_facts = _platform.linux_memory() if _platform.linux() else None
-    swap: tuple[float, float] | None
-    level: float | None
-    free: int | None
-    if linux_facts is None:
-        swap = _platform.swap_usage()
-        level = _platform.pressure_level()
-        raw_free = _platform.sysctl("kern.memorystatus_level")
-        free = int(raw_free) if raw_free and raw_free.isdigit() else None
-    else:  # Linux: free memory is MemAvailable's share; no pressure level, PSI instead
-        swap = None if linux_facts["swap_total"] is None else (float(linux_facts["swap_total"]), float(linux_facts["swap_free"] or 0.0))
-        level = None
-        free = round(100 * float(linux_facts["available"]) / float(linux_facts["total"])) \
-            if linux_facts["available"] is not None and linux_facts["total"] else None
+    snap = _platform.memory_snapshot(include_free_pct=True, honor_memory_file=False)
     item: dict[str, Any] = {
         "v": _config.MACHINE_VERSION, "t": _config.now(), "at": round(time.time(), 2),
         "load": [round(v, 2) for v in os.getloadavg()], "ticks": _platform.cpu_ticks(), "cores": _config.cores(),
-        "pressure": level, "memory_free_pct": free,
-        "swap_total_mb": None if swap is None else round(swap[0]),
-        "swap_free_mb": None if swap is None else round(swap[1]),
+        "pressure": snap.pressure_level, "memory_free_pct": snap.free_pct,
+        "swap_total_mb": None if snap.swap_total_mb is None else round(snap.swap_total_mb),
+        "swap_free_mb": None if snap.swap_total_mb is None else round(snap.swap_free_mb or 0.0),
         "held": sum(int(e["count"]) for e in held), "leases": len(held),
     }
-    if linux_facts is not None:
-        avail = linux_facts["available"]
-        item.update(memory_available_mb=None if avail is None else round(float(avail)),
-                    psi_some=linux_facts["psi_some"], psi_full=linux_facts["psi_full"])
-        if linux_facts["cgroup"]:
-            cg_avail = linux_facts["cgroup_available"]
-            item.update(cgroup=linux_facts["cgroup"], cgroup_max_mb=round(float(linux_facts["cgroup_max"])),
-                        cgroup_available_mb=None if cg_avail is None else round(float(cg_avail)))
+    if _platform.linux():
+        item.update(
+            memory_available_mb=None if snap.available_mb is None else round(float(snap.available_mb)),
+            psi_some=snap.psi_some,
+            psi_full=snap.psi_full,
+        )
+        if snap.cgroup:
+            item.update(
+                cgroup=snap.cgroup,
+                cgroup_max_mb=None if snap.cgroup_max_mb is None else round(float(snap.cgroup_max_mb)),
+                cgroup_available_mb=(
+                    None if snap.cgroup_available_mb is None else round(float(snap.cgroup_available_mb))
+                ),
+            )
     with contextlib.suppress(_config.SlotError):
         item["capacity"] = _settings.total()
     return item

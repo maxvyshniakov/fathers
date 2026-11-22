@@ -151,7 +151,7 @@ class BoardSampleTests(unittest.TestCase):
         for name, run in {"a ps that times out": timeout,
                           "a table without the caller": answer(0, "    1     0  0.0  1000 launchd\n"),
                           "an empty table": answer(0, "")}.items():
-            with self.subTest(name), mock.patch.object(sf_board.subprocess, "run", side_effect=run):
+            with self.subTest(name), mock.patch.object(sf_process.subprocess, "run", side_effect=run):
                 with self.assertRaises(OSError):
                     sf_board.process_usage()
         own, _ = sf_board.process_usage()

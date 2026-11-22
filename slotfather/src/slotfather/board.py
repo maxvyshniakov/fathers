@@ -13,8 +13,6 @@ import math
 import os
 from pathlib import Path
 import re
-import subprocess
-import sys
 import time
 from typing import Any, Iterable, cast
 
@@ -92,37 +90,33 @@ def process_tree(pid: object, own: dict[int, tuple[float, int, str]],
     return [(member, *own[member]) for member in _lineage.tree(children, roots, own.__contains__)]
 
 
-def macos_used_memory(text: str) -> float | None:
-    """Physical MB in active, wired and compressor pages; inactive cache is excluded."""
-    page = re.search(r"page size of (\d+) bytes", text)
-    fields = dict(re.findall(r"^(Pages [^:]+):\s+(\d+)\.", text, re.MULTILINE))
-    names = ("Pages active", "Pages wired down", "Pages occupied by compressor")
-    if not page or any(name not in fields for name in names):
-        return None
-    return sum(int(fields[name]) for name in names) * int(page[1]) / (1024 * 1024)
+macos_used_memory = _platform.macos_used_memory
 
 
 def memory_facts() -> dict[str, Any]:
     """Free and total swap in MB and the kernel's memory-pressure level, as far as this host reports them."""
-    seam = _config.setting("MEMORY_FILE")
-    if seam:
-        with contextlib.suppress(OSError, ValueError):
-            free, level = (float(v) for v in Path(seam).read_text().split()[:2])
-            return {"swap_free": free, "swap_total": None, "level": level}
-        return {"swap_free": None, "swap_total": None, "level": None}
-    if _platform.linux():  # no pressure level: MemAvailable and PSI, as the memory policy reads them
-        facts = cast(dict[str, Any], cast(Any, _platform).linux_memory())
-        return {"swap_total": facts["swap_total"], "swap_free": facts["swap_free"], "level": None,
-                "available": facts["available"], "total": facts["total"], "psi_some": facts["psi_some"],
-                "psi_full": facts["psi_full"], "cgroup_available": facts.get("cgroup_available"),
-                "cgroup": facts.get("cgroup")}
-    total, free = _platform.swap_usage() or (None, None)
-    found: dict[str, Any] = {"swap_total": total, "swap_free": free, "level": _platform.pressure_level()}
-    with contextlib.suppress(OSError, ValueError, subprocess.TimeoutExpired):
-        physical = _platform.sysctl("hw.memsize")
-        stats = subprocess.run(["vm_stat"], capture_output=True, text=True, timeout=2)
-        if physical is not None:
-            found.update(total=int(physical) / (1024 * 1024), used=macos_used_memory(stats.stdout))
+    snap = _platform.memory_snapshot(include_vm_stat=True)
+    if snap.from_seam:
+        return {"swap_free": snap.swap_free_mb, "swap_total": None, "level": snap.pressure_level}
+    if _platform.linux():
+        return {
+            "swap_total": snap.swap_total_mb,
+            "swap_free": snap.swap_free_mb,
+            "level": None,
+            "available": snap.available_mb,
+            "total": snap.total_mb,
+            "psi_some": snap.psi_some,
+            "psi_full": snap.psi_full,
+            "cgroup_available": snap.cgroup_available_mb,
+            "cgroup": snap.cgroup,
+        }
+    found: dict[str, Any] = {
+        "swap_total": snap.swap_total_mb,
+        "swap_free": snap.swap_free_mb,
+        "level": snap.pressure_level,
+    }
+    if snap.total_mb is not None:
+        found.update(total=snap.total_mb, used=snap.used_mb)
     return found
 
 
@@ -136,7 +130,7 @@ def memory_low(memory: dict[str, Any]) -> bool | None:
         facts = dict(memory, swap_total=0, swap_free=None)
         for key in ("available", "psi_some", "psi_full"):
             facts.setdefault(key, None)
-        return bool(cast(Any, _platform).linux_short(facts))
+        return bool(_platform.linux_short(facts))
     return None
 
 
@@ -490,7 +484,7 @@ def dashboard_model(
     held, live_waiters = _entry.split(live)
     active_entries = [*held, *(e for _, e, _ in legacy)]
     detached: dict[int, set[int]] = {}
-    context = _process.helper_snapshot() if sys.platform == "darwin" and active_entries else None
+    context = _process.helper_snapshot() if _platform.macos() and active_entries else None
     if context is not None and active_entries:
         detached = _process.detached_browser_helpers(
             context.parents, context.commands, [e.get("pid") for e in active_entries],

@@ -30,10 +30,10 @@ Definitions: [glossary](../GLOSSARY.md). Naming and wire aliases: [terminology](
 | `leases` | The queue's transactions (fathers#37), each short and under the lock: a new request (`enqueue()`), `grant()`, yield requests, yields (also for a lock: `yield_for_lock()`, `lock_taken()`), `reprioritize()` and `release()`. |
 | `lineage` | Process trees and sessions on a table already read: parents, ancestors, descendants and the one session rule; it runs nothing. |
 | `lockwait` | `slotfather lock PATH -- COMMAND` (fathers#159): an flock whose wait gives the enclosing lease's slots up. |
-| `macos_process` | Read-only macOS `libproc` process identities and targeted `/bin/ps` argument reads with identity validation. |
-| `platform` | macOS/Linux inspection: process identity (`same_holder()`), memory, swap, PSI and cgroups. |
-| `process` | The one module that runs `ps`: the process tables with their column sets and failure policy (fathers#121), lease markers in environments, and `lease_membership()`, the one rule for which lease a process is in (fathers#38). |
-| `procs` | Read-only process queries for guards and other tools. |
+| `macos_process` | Pure leaf macOS `libproc` process identities, `KERN_PROCARGS2` environments, and targeted `/bin/ps` argument reads with identity validation (stdlib-only imports; loaded lazily on macOS). |
+| `platform` | macOS/Linux host inspection: `linux()`/`macos()` predicates, process identity (`same_holder()`), unified `memory_snapshot()`, swap, `vm_stat`, PSI, load, CPU ticks, and cgroups. |
+| `process` | The one module that observes live processes (`ps`, `lsof`, `/proc/PID/cwd`, `launchctl`/`systemctl` service managers, lazy native macOS dispatch): the process tables with their column sets and failure policy (fathers#121), lease markers in environments, detached browser helper attribution, and `lease_membership()`, the one rule for which lease a process is in (fathers#38). |
+| `procs` | Read-only process queries (`slotfather procs --json`) for guards and other tools, delegating OS process/CWD reads to `process`. |
 | `query` | Compatible queue snapshots and status output; `look()`, the one look under the queue lock that every reader takes (#20, fathers#36): `status`, `status --json` (with `--pid`, `--full`), the long-wait line, `available`, `advise`, `slots`, the dashboard block and the sweep's protection. |
 | `queue` | The queue as stored, read (fathers#36): the process table a look is judged on, reaping, the earlier queues' holders, unknown live entries, the lease this process runs under, lazy estimators, and live `schedule.Host` / `schedule.Admission` wiring (`live_host()`, `admission()`). |
 | `runner` | The command runner: `execute()` (environment, SIGTERM/SIGHUP forwarding, wait4, the usage `Watch`) and `run()`, `slotfather run`. |

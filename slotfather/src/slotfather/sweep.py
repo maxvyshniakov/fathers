@@ -48,6 +48,7 @@ from . import config as _config
 from . import events as _events
 from . import durations as _durations
 from . import lineage as _lineage
+from . import platform as _platform
 from . import process as _process
 from . import query as _query
 from . import settings as _settings
@@ -102,7 +103,7 @@ def protection(parents: dict[int, int], found: Labelled,
     helper_commands: dict[int, str] | None = None
     helper_uids: dict[int, int] | None = None
     helper_starts: dict[int, float | None] | None = None
-    if procs is not None and sys.platform == "darwin":
+    if procs is not None and _platform.macos():
         helper_commands = {pid: proc.cmd for pid, proc in procs.items()}
         helper_uids = {pid: proc.uid for pid, proc in procs.items()}
         helper_starts = {pid: proc.started for pid, proc in procs.items()}
@@ -296,7 +297,7 @@ def text(report: dict[str, Any], quiet: bool = False) -> str:
                      f"{item['restarts']} restarts, policy {item['policy']}, exit {item['exit_code']}")
     memory = report["memory"]
     if memory:
-        swap = "" if memory.get("swap_total_mb") is None else \
+        swap = "" if memory.get("swap_total_mb") is None or memory.get("swap_free_mb") is None else \
             f"swap {memory['swap_total_mb'] - memory['swap_free_mb']} of {memory['swap_total_mb']} MB used"
         if memory.get("short"):
             lines.append(f"  memory short: {memory['short']}" + (f"; {swap}" if swap else "") + "; largest:")

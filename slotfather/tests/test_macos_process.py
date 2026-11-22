@@ -15,6 +15,24 @@ sys.path.insert(0, str(ROOT / "src"))
 
 
 class ArgumentProcessTests(unittest.TestCase):
+    def test_macos_process_is_a_leaf_without_internal_package_imports(self):
+        import ast
+        source = (ROOT / "src" / "slotfather" / "macos_process.py").read_text()
+        tree = ast.parse(source)
+        internal = [
+            ast.dump(node)
+            for node in ast.walk(tree)
+            if (
+                isinstance(node, ast.ImportFrom)
+                and (node.level > 0 or (node.module is not None and node.module.split(".")[0] == "slotfather"))
+            )
+            or (
+                isinstance(node, ast.Import)
+                and any(alias.name.split(".")[0] == "slotfather" for alias in node.names)
+            )
+        ]
+        self.assertEqual([], internal)
+
     def test_argument_read_failure_is_not_a_short_name_fallback(self):
         native = importlib.import_module("slotfather.macos_process")
         with mock.patch("subprocess.run", side_effect=subprocess.TimeoutExpired("ps", 5)), \

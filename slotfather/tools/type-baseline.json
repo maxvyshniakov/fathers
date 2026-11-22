@@ -83,7 +83,6 @@
     "tests/test_slotfather.py|pyright|reportUnknownParameterType|Type of parameter \"start\" is unknown": 1,
     "tests/test_slotfather.py|pyright|reportUnknownParameterType|Type of parameter \"window\" is unknown": 1,
     "tests/test_sweep.py|pyright|reportUnknownArgumentType|Argument type is partially unknown\n  Argument corresponds to parameter \"b\" in function \"assertLessEqual\"\n  Argument type is \"set[Unknown]\"": 1,
-    "tests/test_usage.py|pyright|reportUnknownLambdaType|Return type of lambda, \"dict[Unknown, Unknown] | Literal[False]\", is partially unknown": 1,
     "tests/test_usage.py|pyright|reportUnknownLambdaType|Type of parameter \"directory\" is unknown": 3
   }
 }
