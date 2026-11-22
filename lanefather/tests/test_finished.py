@@ -237,6 +237,7 @@ class FinishedLaneTests(LaneCase):
         self.assertEqual(self.record("n")["status"], "planned")
 
     def test_a_process_in_the_scratch_or_build_directory_holds_the_lane(self):
+        self.use_real_process_scan()
         worktree = self.landed_unfinished("a", "lib/a.txt")
         scratch = pathlib.Path(self.record("a")["scratch"][0])
         child = subprocess.Popen([sys.executable, "-c", "import time; print('ready', flush=True); time.sleep(300)",

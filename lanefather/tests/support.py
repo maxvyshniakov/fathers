@@ -570,6 +570,62 @@ def project(repo: pathlib.Path) -> Iterator[Any]:
 _TEMPLATE: list[pathlib.Path] = []
 
 
+FAKE_PROCESS_SCAN = f'''"""Test stand-in for tools/process_scan.py (fathers#209).
+
+Returns an empty process table by default so unit tests do not run host-wide lsof + ps on every
+worktree candidate. Set FIXTURE_REAL_PROCESS_SCAN=1 (LaneCase.use_real_process_scan) to delegate
+to the frozen real scanner in tests/fixtures/process_scan.py.
+"""
+import importlib.machinery
+import importlib.util
+import os
+
+_REAL_PATH = {str(FIXTURES / "process_scan.py")!r}
+_REAL = None
+
+
+def _real():
+    global _REAL
+    if _REAL is None:
+        loader = importlib.machinery.SourceFileLoader("lanefather_fixture_real_process_scan", _REAL_PATH)
+        spec = importlib.util.spec_from_loader(loader.name, loader)
+        assert spec is not None
+        module = importlib.util.module_from_spec(spec)
+        loader.exec_module(module)
+        _REAL = module
+    return _REAL
+
+
+ScanError = _real().ScanError
+
+
+def table(deadline=None):
+    if os.environ.get("FIXTURE_REAL_PROCESS_SCAN") == "1":
+        return _real().table(deadline)
+    return {{}}
+
+
+def in_worktree(root, processes):
+    return _real().in_worktree(root, processes)
+
+
+def inside(path, root):
+    return _real().inside(path, root)
+
+
+def sort_for_removal(root, processes=None):
+    if processes is None and os.environ.get("FIXTURE_REAL_PROCESS_SCAN") != "1":
+        return [], []
+    return _real().sort_for_removal(root, processes)
+
+
+def stop(items, root=None):
+    if not items:
+        return []
+    return _real().stop(items, root)
+'''
+
+
 def template_repository() -> pathlib.Path:
     """The fixture repository with its base commit, built once per test process; each test copies it (fathers#95)."""
     if _TEMPLATE:
@@ -591,8 +647,9 @@ def template_repository() -> pathlib.Path:
         path.write_text(text)
     (repo / "verify.sh").write_text(FAKE_VERIFY)
     (repo / "verify.sh").chmod(0o755)
-    # Straylight's process scan (#661) as the project's process_scan hook, until slotfather procs answers.
-    shutil.copy2(FIXTURES / "process_scan.py", repo / "tools" / "process_scan.py")
+    # Fast stand-in for tools/process_scan.py (fathers#209): skips host-wide lsof + ps unless a test opts in
+    # with LaneCase.use_real_process_scan() (FIXTURE_REAL_PROCESS_SCAN=1), which delegates to fixtures/process_scan.py.
+    (repo / "tools" / "process_scan.py").write_text(FAKE_PROCESS_SCAN)
     # The real stamp tooling, which verify.py runs after a green full gate.
     for name in ("tools/verified-tree.sh", "tools/verified-tree-ledger.py"):
         shutil.copy2(FIXTURES / pathlib.Path(name).name, repo / name)
@@ -734,6 +791,10 @@ class LaneCase(unittest.TestCase):
         self.git(self.repo, "worktree", "add", "-q", "-b", "integrate/q", str(self.integration))
 
     # Helpers
+
+    def use_real_process_scan(self) -> None:
+        """Opt this test into the real lsof + ps process_scan fixture (fathers#209)."""
+        self.env["FIXTURE_REAL_PROCESS_SCAN"] = "1"
 
     def git(self, cwd: Any, *args: str) -> str:
         return subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True).stdout.strip()

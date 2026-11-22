@@ -252,6 +252,98 @@ class CommandTests(unittest.TestCase):
         self.assertGreater(int(ran[1]), 0)
 
 
+class ParallelRunnerTests(unittest.TestCase):
+    """Safe parallel test-file execution in tools/checks.py (fathers#209)."""
+
+    def test_workers_default_is_bounded_and_env_overridable(self) -> None:
+        default = checks.test_workers({})
+        self.assertGreaterEqual(default, 1)
+        self.assertLessEqual(default, checks.MAX_DEFAULT_TEST_WORKERS)
+        self.assertEqual(1, checks.test_workers({"FATHERS_TEST_WORKERS": "1"}))
+        self.assertEqual(3, checks.test_workers({"FATHERS_TEST_WORKERS": "3"}))
+        for bad in ("0", "-2", "lots"):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                checks.test_workers({"FATHERS_TEST_WORKERS": bad})
+
+    def test_discover_test_files_sorts_and_skips_non_package_subdirectories(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tests = root / "tests"
+            (tests / "fixtures").mkdir(parents=True)
+            (tests / "pkg").mkdir()
+            (tests / "pkg" / "__init__.py").write_text("")
+            (tests / "test_b.py").write_text("")
+            (tests / "test_a.py").write_text("")
+            (tests / "support.py").write_text("")
+            (tests / "fixtures" / "test_ignored.py").write_text("")
+            (tests / "pkg" / "test_nested.py").write_text("")
+            found, top = checks.discover_test_files(root, ["-s", "tests", "-p", "test_*.py"])
+            self.assertIsNone(top)
+            self.assertEqual(["tests/pkg/test_nested.py", "tests/test_a.py", "tests/test_b.py"],
+                             [path.relative_to(root).as_posix() for path in found])
+
+    def _run_parallel_helper(self, root: Path, workers: int) -> subprocess.CompletedProcess[str]:
+        script = (
+            f"import os, pathlib, sys; sys.path.insert(0, {str(ROOT / 'tools')!r}); "
+            "import checks; "
+            f"sys.exit(checks.run_unittest_parallel(pathlib.Path({str(root)!r}), "
+            f"['-s', 'tests', '-p', 'test_*.py'], dict(os.environ), {workers}))"
+        )
+        return subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, timeout=60)
+
+    def test_parallel_runner_aggregates_passing_files_and_skips(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tests = root / "tests"
+            tests.mkdir()
+            (tests / "test_a.py").write_text(
+                "import unittest\n"
+                "class A(unittest.TestCase):\n"
+                "    def test_one(self): self.assertEqual(1, 1)\n"
+                "    @unittest.skip('demo')\n"
+                "    def test_skip(self): pass\n"
+            )
+            (tests / "test_b.py").write_text(
+                "import unittest\n"
+                "class B(unittest.TestCase):\n"
+                "    def test_two(self): self.assertEqual(2, 2)\n"
+            )
+            result = self._run_parallel_helper(root, workers=2)
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertRegex(result.stderr, r"(?m)^Ran 3 tests in ")
+            self.assertIn("OK (skipped=1)", result.stderr)
+
+    def test_parallel_runner_reports_failures_in_deterministic_order(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tests = root / "tests"
+            tests.mkdir()
+            (tests / "test_a.py").write_text(
+                "import unittest\n"
+                "class A(unittest.TestCase):\n"
+                "    def test_fail_a(self): self.fail('boom-a')\n"
+            )
+            (tests / "test_b.py").write_text(
+                "import unittest\n"
+                "class B(unittest.TestCase):\n"
+                "    def test_ok(self): pass\n"
+            )
+            (tests / "test_c.py").write_text(
+                "import unittest\n"
+                "class C(unittest.TestCase):\n"
+                "    def test_fail_c(self): self.fail('boom-c')\n"
+            )
+            result = self._run_parallel_helper(root, workers=3)
+            self.assertNotEqual(0, result.returncode)
+            pos_a = result.stderr.find("=== FAIL: tests/test_a.py")
+            pos_c = result.stderr.find("=== FAIL: tests/test_c.py")
+            self.assertGreaterEqual(pos_a, 0, result.stderr)
+            self.assertGreater(pos_c, pos_a, result.stderr)
+            self.assertIn("boom-a", result.stderr)
+            self.assertIn("boom-c", result.stderr)
+            self.assertIn("FAILED (files=2: tests/test_a.py, tests/test_c.py)", result.stderr)
+
+
 class RepositoryRuleTests(unittest.TestCase):
     """One lint gate for the four packages: the same file, the same pinned tools, the shared Ruff rules."""
 
