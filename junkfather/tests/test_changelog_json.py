@@ -1,4 +1,7 @@
-"""`junkfather changelog --json`: the installed release's CHANGELOG for Godfather's what's new (fathers#105)."""
+"""`junkfather changelog --json`: the installed release's CHANGELOG for Godfather's what's new (fathers#105).
+
+Shared Markdown parsing (`fathers_common.changelog`) is covered by `common/tests/test_kit.py`.
+"""
 from __future__ import annotations
 
 import json
@@ -8,71 +11,6 @@ import unittest
 from support import ROOT, Case
 
 from junkfather import __version__
-from junkfather import changelog
-
-EDGES = """# Junkfather Changelog
-
-Versions and release rules: somewhere.
-
-## Unreleased
-
-### Added
-
-- Not released yet.
-
-## 0.10.0 - 2026-12-01
-
-### Breaking
-
-- `own` takes **one** command; see [the reference](docs/reference.md).
-  Its old form is gone,
-  and says so.
-
-### Fixed
-
-  not a continuation: no entry under Fixed yet
-- A fix.
-
-## 0.9.1 - 2026-11-20
-
-## 0.2.0 - 2026-11-15
-
-### Added
-
-- First.
-- Second.
-
-### Notes
-
-- not a Sid-Kit section, still an entry
-"""
-
-
-class ParseTests(unittest.TestCase):
-    def test_unreleased_first_with_the_installed_commit_then_releases_newest_first_continuations_joined(self) -> None:
-        self.assertEqual([
-            {"version": None, "unreleased": True, "date": None, "source": "81abd86c0ffe", "section": "Added",
-             "text": "Not released yet."},
-            {"version": "0.10.0", "date": "2026-12-01", "section": "Breaking",
-             "text": "`own` takes **one** command; see [the reference](docs/reference.md). Its old form is gone, "
-                     "and says so."},
-            {"version": "0.10.0", "date": "2026-12-01", "section": "Fixed", "text": "A fix."},
-            {"version": "0.2.0", "date": "2026-11-15", "section": "Added", "text": "First."},
-            {"version": "0.2.0", "date": "2026-11-15", "section": "Added", "text": "Second."},
-            {"version": "0.2.0", "date": "2026-11-15", "section": "Notes",
-             "text": "not a Sid-Kit section, still an entry"},
-        ], changelog.entries(EDGES, commit="81abd86c0ffe"))
-        self.assertIsNone(changelog.entries(EDGES)[0]["source"], "a checkout: no commit")
-
-    def test_since_keeps_only_newer_releases_by_number_not_text(self) -> None:
-        self.assertEqual({None, "0.10.0"}, {e["version"] for e in changelog.entries(EDGES, since="0.9.1")})
-        self.assertEqual([None], [e["version"] for e in changelog.entries(EDGES, since="0.10.0")],
-                         "Unreleased is newer than any release")
-        self.assertEqual(6, len(changelog.entries(EDGES, since="0.1.9")))
-
-    def test_nothing_to_read(self) -> None:
-        self.assertEqual([], changelog.entries(""))
-        self.assertEqual([], changelog.entries("# Junkfather Changelog\n\n## Unreleased\n\n- no section\n"))
 
 
 class CommandTests(Case):

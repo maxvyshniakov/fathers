@@ -186,14 +186,13 @@ class SavedValuesTests(SettingsCase):
 
     def test_own_and_adopt_take_the_saved_default_ttl(self):
         self.settings("set", "own.default_ttl", "30m")
-        child = self.spawn("sleep", "600", start_new_session=True)
-        self.wait_for(lambda: procs.Table.read().get(child.pid) is not None, what="the child")
+        child = self.fake_proc(4200, cmd="sleep 600")
         result = self.cli("adopt", str(child.pid))
         self.assertEqual(0, result.returncode, result.stderr)
         (entry,) = self.store.entries()
         self.assertEqual(1800, entry["ttl"])
-        self.assertEqual(0, self.cli("reap", "--id", entry["id"], "--grace", "1").returncode)
-        explicit = self.cli("own", "--ttl", "1h", "--", "true")
+        explicit = self.cli("own-resource", "--kind", "command", "--id", "check", "--alive", "true", "--stop", "true",
+                            "--ttl", "1h")
         self.assertEqual(0, explicit.returncode, explicit.stderr)
         self.assertEqual([1800, 3600], [e["ttl"] for e in self.store.entries()], "--ttl still wins")
 
@@ -206,12 +205,10 @@ class SavedValuesTests(SettingsCase):
         self.assertEqual(120, plistlib.loads(given.stdout.encode())["StartInterval"], "--interval still wins")
 
     def owned_child(self, entry_id: str) -> Dict[str, Any]:
-        child = self.spawn("sleep", "600", start_new_session=True)
-        mine = procs.Table.read().get(child.pid)
-        assert mine is not None
+        mine = self.fake_proc(4201, cmd="sleep 600")
         record: Dict[str, Any] = {
-            "id": entry_id, "state": "running", "pid": child.pid, "pgid": child.pid, "start": mine.start,
-            "seen": mine.cmd, "group": True, "known": [[child.pid, mine.start]], "argv": ["sleep", "600"],
+            "id": entry_id, "state": "running", "pid": mine.pid, "pgid": mine.pid, "start": mine.start,
+            "seen": mine.cmd, "group": True, "known": [[mine.pid, mine.start]], "argv": ["sleep", "600"],
             "expires": 0, "keep": "owner", "owner": {}, "created": 1.0}
         self.store.save(as_entry(record))
         return record
@@ -223,7 +220,8 @@ class SavedValuesTests(SettingsCase):
 
         def stopper(targets: List[procs.Proc], grace: float) -> Dict[str, Any]:
             graces.append(grace)
-            return reap.stop(targets, 0.5)
+            self.fake_procs.pop(4201, None)
+            return {"result": "stopped", "signalled": [p.pid for p in targets], "left": []}
 
         self.assertEqual("stopped", reap.reap(self.store, "jgrace", "test", stopper=stopper)["result"])
         self.assertEqual(2.5, graces[0])

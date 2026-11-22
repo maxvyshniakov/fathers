@@ -560,7 +560,9 @@ def own_resource(store: Store, kind: str, given: str, ttl: float, keep: str, lab
 
 
 def own_wrapped(store: Store, kind: str, argv: List[str], ttl: float, keep: str, label: Optional[str],
-                owner: Dict[str, Any], remove: bool = False, quiet: bool = False) -> int:
+                owner: Dict[str, Any], remove: bool = False, quiet: bool = False,
+                clock: Callable[[], float] = time.monotonic,
+                pause: Callable[[float], None] = time.sleep) -> int:
     """`own --kind KIND -- CMD`: run the command that makes the resource, then own what it made. Nothing it made
     already ran before, and only what it names or what newly appeared counts."""
     found = copy.copy(KINDS[kind])  # prepare() keeps per-command state: never on the shared instance
@@ -584,7 +586,7 @@ def own_wrapped(store: Store, kind: str, argv: List[str], ttl: float, keep: str,
         print(f"junkfather: {shlex.join(argv)} exited {done.returncode}; nothing owned", file=sys.stderr)
         return done.returncode
     named = found.named(argv, done.stdout)
-    made, why = made_by(found, before, named, started, table)
+    made, why = made_by(found, before, named, started, table, clock=clock, pause=pause)
     if not made:
         print(f"junkfather: {shlex.join(argv)}: {why}; nothing owned (own one that runs: junkfather own-resource "
               f"--kind {kind} --id ID)", file=sys.stderr)
@@ -604,13 +606,14 @@ def own_wrapped(store: Store, kind: str, argv: List[str], ttl: float, keep: str,
     return code
 
 
-def made_by(found: Kind, before: Listing, named: List[str], started: float, table: Optional[_procs.Table]
-            ) -> Tuple[List[str], str]:
+def made_by(found: Kind, before: Listing, named: List[str], started: float, table: Optional[_procs.Table],
+            clock: Callable[[], float] = time.monotonic,
+            pause: Callable[[float], None] = time.sleep) -> Tuple[List[str], str]:
     """What the command made, or [] and why not. What it names counts once it shows as new or changed; otherwise
     exactly one new or changed item, from one listing right after it (safari-tp: within SETTLE seconds, its main
     process started after the command did). Never everything that runs, never two unnamed items at once: another
     agent's or a person's resource could be among them."""
-    deadline = time.monotonic() + SETTLE
+    deadline = clock() + SETTLE
     while True:
         after = found.listing(_table())
         if after is not None:
@@ -627,8 +630,8 @@ def made_by(found: Kind, before: Listing, named: List[str], started: float, tabl
                     return fresh, ""
                 if len(fresh) > 1:
                     return [], f"{len(fresh)} new {found.name} items appeared together, and it names none of them"
-        if (named or found.name == "safari-tp") and time.monotonic() < deadline:
-            time.sleep(0.5)
+        if (named or found.name == "safari-tp") and clock() < deadline:
+            pause(0.5)
             continue
         if before is None and not named:
             return [], f"the {found.name} listing could not be read before it ran, and it names nothing"
@@ -645,7 +648,8 @@ def _table() -> Optional[_procs.Table]:
 # Stopping
 
 def stop(resource: Mapping[str, Any], grace: float, alive: Callable[[], Optional[bool]],
-         pause: Callable[[float], None] = time.sleep, commands: Optional[List[List[str]]] = None) -> Dict[str, Any]:
+         pause: Callable[[float], None] = time.sleep, commands: Optional[List[List[str]]] = None,
+         clock: Callable[[], float] = time.monotonic) -> Dict[str, Any]:
     """Run the kind's stop commands (or `commands`, already planned and guarded), then wait up to `grace` seconds
     (at least 5) for the resource to be gone. Returns {"result": stopped|gone|failed, "steps": [...], "error"};
     failed when a step failed, timed out, or the resource still runs (or cannot be told) afterwards."""
@@ -671,9 +675,9 @@ def stop(resource: Mapping[str, Any], grace: float, alive: Callable[[], Optional
             if alive() is False:
                 return {"result": "stopped", "steps": steps}
             return {"result": "failed", "steps": steps, "error": ran.why()}
-    deadline = time.monotonic() + max(grace, 5.0)
+    deadline = clock() + max(grace, 5.0)
     state = alive()
-    while state is not False and time.monotonic() < deadline:
+    while state is not False and clock() < deadline:
         pause(0.5)
         state = alive()
     if state is False:

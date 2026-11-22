@@ -37,7 +37,7 @@ class WithoutJsonTests(Case):
             self.assertIsInstance(json.loads(self.cli(command, "--json").stdout), dict, command)
 
     def test_status_text_lists_entries_unowned_items_and_the_last_sweep(self):
-        child = self.spawn("sleep", "600", start_new_session=True)
+        child = self.fake_proc(4200, cmd="sleep 600")
         self.assertEqual(0, self.cli("adopt", str(child.pid), "--ttl", "1h", "--label", "web").returncode)
         (entry,) = self.store.entries()
         (self.state / "unowned.json").write_text(json.dumps({"v": 1, "items": [
@@ -116,15 +116,17 @@ class ConventionTests(Case):
         self.assertEqual(flag.stdout, command.stdout)
 
     def test_hand_and_extend_tell_a_missing_entry_from_a_finished_one(self):
+        from junkfather import entry as entry_module
         for argv in (("hand", "jnosuch", "--to", "s2"), ("extend", "jnosuch", "--ttl", "1h")):
             result = self.cli(*argv)
             self.assertEqual((6, "", "junkfather: no entry jnosuch\n"),
                              (result.returncode, result.stdout, result.stderr), argv)
-        self.assertEqual(0, self.cli("own", "--ttl", "1m", "--quiet", "--", "true").returncode)
-        (entry,) = self.store.entries()
-        for argv in (("hand", entry["id"], "--to", "s2"), ("extend", entry["id"], "--ttl", "1h")):
+        finished = entry_module.new(self.store, ["true"], 60.0, "owner", None, {"kind": "shell"}, "attached", "/")
+        finished["state"] = entry_module.EXITED
+        self.store.save(finished)
+        for argv in (("hand", finished["id"], "--to", "s2"), ("extend", finished["id"], "--ttl", "1h")):
             result = self.cli(*argv)
-            self.assertEqual((3, f"junkfather: {entry['id']} is not running (exited)\n"),
+            self.assertEqual((3, f"junkfather: {finished['id']} is not running (exited)\n"),
                              (result.returncode, result.stderr), argv)
 
     def test_a_blank_stop_or_alive_command_is_refused_at_registration(self):
@@ -156,8 +158,7 @@ class ConventionTests(Case):
         self.assertIn("RuntimeError: boom", logged)
 
     def test_reap_pid_force_never_reaps_a_running_owned_entry(self):
-        child = self.spawn("sleep", "600", start_new_session=True)
-        self.runs_600(child)
+        child = self.fake_proc(4200, cmd="sleep 600")
         self.assertEqual(0, self.cli("adopt", str(child.pid), "--ttl", "1h").returncode)
         (owned,) = self.store.entries()
         unlisted = self.cli("reap", "--pid", str(child.pid), "--force")
@@ -174,8 +175,7 @@ class ConventionTests(Case):
 
     def test_reap_expired_reports_not_expired_when_extended_before_claim(self):
         from junkfather import entry as entry_module
-        child = self.spawn("sleep", "600", start_new_session=True)
-        self.runs_600(child)
+        child = self.fake_proc(4200, cmd="sleep 600")
         self.assertEqual(0, self.cli("adopt", str(child.pid), "--ttl", "1h").returncode)
         (owned,) = self.store.entries()
         self.store.update(owned["id"], lambda e: e.update(expires=0.0))
@@ -197,8 +197,7 @@ class ConventionTests(Case):
 
     def test_reap_owner_and_lane_recheck_under_lock_without_expired(self):
         from junkfather import entry as entry_module
-        child = self.spawn("sleep", "600", start_new_session=True)
-        self.runs_600(child)
+        child = self.fake_proc(4200, cmd="sleep 600")
         self.assertEqual(0, self.cli("adopt", str(child.pid), "--ttl", "1h", "--lane", "lane-a").returncode)
         (owned,) = self.store.entries()
         self.store.update(owned["id"], lambda e: e.update(owner={"kind": "claude", "session": "s1", "lane": "lane-a"}))
@@ -223,8 +222,7 @@ class ConventionTests(Case):
                 self.assertTrue(self.runs(child.pid))
 
     def test_reap_pid_expired_on_unexpired_owned_entry_does_not_fall_through_to_unowned(self):
-        child = self.spawn("sleep", "600", start_new_session=True)
-        self.runs_600(child)
+        child = self.fake_proc(4200, cmd="sleep 600")
         self.assertEqual(0, self.cli("adopt", str(child.pid), "--ttl", "1h").returncode)
         (owned,) = self.store.entries()
         result = self.cli("reap", "--pid", str(child.pid), "--expired", "--json")

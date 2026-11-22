@@ -64,15 +64,16 @@ def end_child(child: subprocess.Popen[bytes], grace: float = SIGNAL_GRACE) -> No
 
 def record_child(store: Store, entry_id: str, child: subprocess.Popen[bytes], supervisor: int,
                  timer: Optional[_supervise.Timer] = None,
-                 reader: Callable[[], _procs.Table] = _procs.Table.read) -> Optional[Entry]:
+                 reader: Optional[Callable[[], _procs.Table]] = None) -> Optional[Entry]:
     """Fill in the leader's identity right after it started (Popen returns once the exec succeeded). Without a
     readable process table, or when the entry stopped starting meanwhile (a reap of its owner), the child is
     stopped and the entry fails: an entry whose identity is unknown could never be reaped safely."""
     timer = timer or _supervise.Timer()
+    read = reader or _procs.Table.read
     table = proc = None
     for attempt in range(3):
         try:
-            table = reader()
+            table = read()
             proc = table.get(child.pid)
             break
         except _procs.ProcError:
@@ -103,7 +104,7 @@ class ChildDriver:
                  attached: bool = True, catcher: Optional["Catcher"] = None,
                  timer: Optional[_supervise.Timer] = None,
                  reaper: Optional[_supervise.Reaper] = None,
-                 reader: Callable[[], _procs.Table] = _procs.Table.read):
+                 reader: Optional[Callable[[], _procs.Table]] = None):
         self.id = entry_id
         self.child = child
         self.quiet = quiet
@@ -111,7 +112,7 @@ class ChildDriver:
         self.catcher = catcher or Catcher()
         self.timer = timer or _supervise.Timer()
         self.reaper = reaper or _reap.reap
-        self.reader = reader
+        self.reader = reader or _procs.Table.read
         self.next_known = self.timer.clock() + KNOWN_EVERY
         self.code: Optional[int] = None
         self._exit_handled = False
@@ -206,7 +207,7 @@ class Supervisor:
                  attached: bool = True, catcher: Optional["Catcher"] = None,
                  clock: Callable[[], float] = time.monotonic, pause: Callable[[float], None] = time.sleep,
                  reaper: Optional[Callable[..., Dict[str, Any]]] = None, wall: Callable[[], float] = time.time,
-                 reader: Callable[[], _procs.Table] = _procs.Table.read):
+                 reader: Optional[Callable[[], _procs.Table]] = None):
         self.store, self.id, self.child, self.quiet, self.attached = store, entry_id, child, quiet, attached
         self.timer = _supervise.Timer(clock=clock, wall=wall, pause=pause)
         self.reaper = reaper or _reap.reap
@@ -226,9 +227,8 @@ class Supervisor:
         self.driver.notice(text)
 
     def run(self) -> int:
-        reader = None if self.reader is _procs.Table.read else self.reader
         return _supervise.run(
-            self.store, self.id, self.driver, timer=self.timer, reaper=self.reaper, reader=reader,
+            self.store, self.id, self.driver, timer=self.timer, reaper=self.reaper, reader=self.reader,
         )
 
     def refresh(self, code: Optional[int]) -> Tuple[bool, int]:

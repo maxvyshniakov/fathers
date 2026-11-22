@@ -44,7 +44,17 @@ class Recorder:
         return pid
 
     def run(self, *args: str, env: Dict[str, str], input: Optional[str] = None) -> subprocess.CompletedProcess[str]:
-        result = self.case.cli(*args, env=env, input=input)
+        if args[:1] == ("own",) and "--detach" not in args:
+            sup = self.case.fake_proc(cmd="python3")
+            real_record = launch.record_child
+
+            def record_with_sup(store: Any, entry_id: str, child: Any, _sup: int) -> Any:
+                return real_record(store, entry_id, child, sup.pid)
+
+            with mock.patch.object(launch, "record_child", side_effect=record_with_sup):
+                result = self.case.cli(*args, env=env, input=input)
+        else:
+            result = self.case.cli(*args, env=env, input=input)
         self.steps.append({"args": list(args), "code": result.returncode, "out": result.stdout,
                            "err": result.stderr})
         return result

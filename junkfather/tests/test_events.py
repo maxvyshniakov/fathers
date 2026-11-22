@@ -86,10 +86,11 @@ class EventLogTests(Case):
         self.assertEqual(400, len(event["details"]["cmd"]))
         self.assertEqual(1000, len(event["details"]["note"]))
 
-    def test_the_log_rotates_past_four_mebibytes(self):
+    def test_the_log_rotates_past_the_size_limit(self):
         self.state.mkdir(parents=True)
-        (self.state / "events.jsonl").write_bytes(b"{}\n" * ((4 << 20) // 3 + 1))
-        events.write(self.state, "sweep.finished", {"type": "sweep", "id": "x"}, events.tool("sweep"), {})
+        (self.state / "events.jsonl").write_bytes(b"{}\n" * 25)
+        events.write(self.state, "sweep.finished", {"type": "sweep", "id": "x"}, events.tool("sweep"), {},
+                     max_bytes=64)
         self.assertTrue((self.state / "events.jsonl.1").exists())
         self.assertEqual(1, len(self.lines()))
 

@@ -96,6 +96,7 @@ class BackgroundTests(Case):
 
     def setUp(self) -> None:
         super().setUp()
+        self.use_real_procs()
         self.claude = self.fake_claude("s1")
         self.session_env = self.claude_env("s1", self.claude)
         self.work = self.tmp / "work"

@@ -317,6 +317,10 @@ class TailscaleTests(ResourceCase):
 
 
 class SafariTests(ResourceCase):
+    def setUp(self) -> None:
+        super().setUp()
+        self.use_real_procs()
+
     def test_the_instance_an_open_starts_is_owned_and_quit(self):
         entry = self.own("--kind", "safari-tp", "--", "open", "-g", "-a", "Safari Technology Preview")
         pid = entry["resource"]["pid"]
@@ -430,12 +434,62 @@ class EventKindsTests(ResourceCase):
 
     def test_a_stop_command_that_hangs_times_out(self):
         original = resources.STOP_TIMEOUT
-        resources.STOP_TIMEOUT = 0.5
+        resources.STOP_TIMEOUT = 0.05
         try:
-            outcome = resources.stop({"kind": "command", "id": "x", "stop": ["sleep", "30"]}, 0.5, lambda: True,
+            outcome = resources.stop({"kind": "command", "id": "x", "stop": ["sleep", "30"]}, 0.05, lambda: True,
                                      pause=lambda _s: None)
         finally:
             resources.STOP_TIMEOUT = original
         self.assertEqual("failed", outcome["result"])
         self.assertIn("did not answer", outcome["error"])  # `sleep 30` exits 0: only the timeout says this
+
+    def test_wait_loops_use_injected_clock_and_pause_without_wall_sleeps(self):
+        from unittest import mock
+
+        # resources.stop polls every 0.5s up to max(grace, 5.0)
+        now = [100.0]
+        pauses: List[float] = []
+
+        def pause(seconds: float) -> None:
+            pauses.append(seconds)
+            now[0] += seconds
+
+        alive_answers = iter([True, True, True, False])
+        outcome = resources.stop({"kind": "command", "id": "x", "stop": ["true"]}, 1.0,
+                                 lambda: next(alive_answers), pause=pause, clock=lambda: now[0])
+        self.assertEqual("stopped", outcome["result"])
+        self.assertEqual([0.5, 0.5], pauses)
+
+        # resources.stop times out at max(grace, 5.0) via injected clock
+        now_timeout = [0.0]
+        pauses_timeout: List[float] = []
+
+        def pause_timeout(seconds: float) -> None:
+            pauses_timeout.append(seconds)
+            now_timeout[0] += seconds
+
+        failed = resources.stop({"kind": "command", "id": "x", "stop": ["true"]}, 1.0,
+                                lambda: True, pause=pause_timeout, clock=lambda: now_timeout[0])
+        self.assertEqual(("failed", "it still runs after its stop command"), (failed["result"], failed["error"]))
+        self.assertEqual([0.5] * 10, pauses_timeout)
+
+        # resources.made_by polls every 0.5s up to SETTLE (5.0s) via injected clock
+        now_made = [0.0]
+        pauses_made: List[float] = []
+
+        def pause_made(seconds: float) -> None:
+            pauses_made.append(seconds)
+            now_made[0] += seconds
+
+        sim_kind = resources.KINDS["simulator"]
+        listings: List[Dict[str, Dict[str, Any]]] = [{}, {}, {SIM: {"name": "iPhone 18 Pro", "runtime": "iOS-27-0"}}]
+
+        def next_listing(_table: Any) -> resources.Listing:
+            return listings.pop(0) if listings else {}
+
+        with mock.patch.object(sim_kind, "listing", side_effect=next_listing):
+            made, why = resources.made_by(sim_kind, {}, [SIM], 1000.0, None,
+                                          clock=lambda: now_made[0], pause=pause_made)
+        self.assertEqual(([SIM], ""), (made, why))
+        self.assertEqual([0.5, 0.5], pauses_made)
 

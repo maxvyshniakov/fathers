@@ -93,6 +93,7 @@ def line(kind: str, subject_: Mapping[str, Any], actor: Mapping[str, Any], detai
 
 
 def write(root: Path, kind: str, subject_: Mapping[str, Any], actor: Mapping[str, Any],
-          details: Optional[Mapping[str, Any]] = None, level: Optional[str] = None) -> None:
+          details: Optional[Mapping[str, Any]] = None, level: Optional[str] = None,
+          max_bytes: int = ROTATE) -> None:
     built = _common_events.build_event(SOURCE, kind, subject_, actor, details or {}, level=level)
-    _common_events.append_event(root / "events.jsonl", built, rotate_at=ROTATE, lock_wait=LOCK_WAIT)
+    _common_events.append_event(root / "events.jsonl", built, rotate_at=max_bytes, lock_wait=LOCK_WAIT)

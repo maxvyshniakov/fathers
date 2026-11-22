@@ -171,8 +171,7 @@ class ReviewFixTests(Case):
         record = entry(pid=None)
         record["state"] = "reaped"
         self.store.save(record)
-        child = subprocess.Popen(["sleep", "600"], start_new_session=True)
-        self.children.append(child)
+        child = self.spawn("sleep", "600", start_new_session=True)
         self.assertIsNone(launch.record_child(self.store, "jtest", child, os.getpid()))
         self.assertIsNotNone(child.poll())
         self.assertEqual("reaped", self.state_of("jtest"))

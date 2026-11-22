@@ -25,7 +25,8 @@ def killpg(pgid: int) -> None:
 
 class OwnTests(Case):
     def test_attached_passes_output_and_exit_status_through(self):
-        result = self.cli("own", "--ttl", "1m", "--", "sh", "-c", "echo out; echo err >&2; exit 7")
+        result = self.cli("own", "--ttl", "1m", "--", "sh", "-c", "echo out; echo err >&2; exit 7",
+                          in_process=False)
         self.assertEqual(7, result.returncode)
         self.assertEqual("out\n", result.stdout)
         self.assertIn("err", result.stderr)
@@ -229,6 +230,7 @@ class AdoptTests(Case):
 
 class UnownedTests(Case):
     def test_unowned_scratchpad_processes_are_reported_never_stopped(self):
+        self.use_real_procs(lsof=True)
         scratch = self.tmp / "scratch"
         (scratch / "session").mkdir(parents=True)
         env = {**self.env, "JUNKFATHER_SCRATCH_ROOTS": str(scratch)}

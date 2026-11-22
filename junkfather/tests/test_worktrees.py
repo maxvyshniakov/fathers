@@ -136,6 +136,7 @@ class GuardTests(WorktreeCase):
         self.assertIsNone(worktrees.branch_tip(str(self.repo), "main", items, str(path)))
 
     def test_a_process_inside_keeps_it_and_so_does_the_sweep_being_inside(self):
+        self.use_real_procs(lsof=True)
         path = self.worktree("busy", "busy")
         self.spawn("sleep", "600", cwd=str(path))
         self.wait_for(lambda: (self.refusal(path) or "").startswith("in use by pid"), what="the process inside")

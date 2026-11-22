@@ -49,6 +49,7 @@ class RefusalTests(Case):
 
     def test_another_users_process_is_never_adopted(self):
         """Any process of another user (none under a single-user container: then there is nothing to test)."""
+        self.use_real_procs()
         other = next((p for p in procs.Table.read().procs.values() if p.uid != os.getuid() and p.pid > 1), None)
         if other is None:
             self.skipTest("no process of another user runs here")
