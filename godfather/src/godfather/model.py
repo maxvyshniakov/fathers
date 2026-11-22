@@ -236,6 +236,7 @@ class Entry(TypedDict):
     age: float
     ttl: Optional[float]
     ttl_left: float
+    no_ttl: bool
     keep: Optional[str]
     pid: Optional[int]
     pgid: Optional[int]

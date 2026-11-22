@@ -87,6 +87,39 @@ class DecodeTests(unittest.TestCase):
         self.assertEqual("simulator", (simulator["resource"] or {})["kind"])
         self.assertIsNone(simulator["pid"])
 
+    def test_no_ttl_flag_is_preserved_and_defaults_to_false(self) -> None:
+        sentinel = 100 * 365 * 86400.0
+        raw = snapshot()
+        # Older snapshots without `no_ttl` keep working unchanged and default to False
+        self.assertTrue(all(found["no_ttl"] is False for found in junkfather.entries(decoded())))
+        raw["entries"] = [
+            {
+                "id": "jbg0001", "state": "running", "owner": "claude 4bceaaaf", "session": "4bceaaaf",
+                "agent": None, "lane": None, "owner_alive": True, "age": 120, "ttl": sentinel,
+                "ttl_left": sentinel - 120, "no_ttl": True, "keep": "owner", "pid": 44100, "pgid": 44100,
+                "processes": 1, "label": "bg dev", "mode": "background", "cwd": "/fixture/straylight",
+                "argv": ["bun", "run", "dev"], "log": None, "end": None, "exit": None, "resource": None,
+            },
+            {
+                "id": "jbg0002", "state": "running", "owner": "claude 4bceaaaf", "owner_alive": True,
+                "age": 120, "ttl": sentinel, "ttl_left": -10, "no_ttl": True,
+            },
+            {
+                "id": "jlegacy", "state": "running", "owner": "claude 4bceaaaf", "owner_alive": True,
+                "age": 120, "ttl": 7200, "ttl_left": 3600, "no_ttl": "true",
+            },
+        ]
+        found = junkfather.decode(raw)
+        by_id = {row["id"]: row for row in junkfather.entries(found)}
+        self.assertTrue(by_id["jbg0001"]["no_ttl"])
+        self.assertEqual("running", by_id["jbg0001"]["state"])
+        self.assertEqual("—", junkfather.ttl_text(by_id["jbg0001"], 30.0))
+        self.assertTrue(by_id["jbg0002"]["no_ttl"])
+        self.assertEqual("running", by_id["jbg0002"]["state"])
+        self.assertEqual("—", junkfather.ttl_text(by_id["jbg0002"]))
+        self.assertFalse(by_id["jlegacy"]["no_ttl"])
+        self.assertEqual("1h00m", junkfather.ttl_text(by_id["jlegacy"]))
+
 
 class JoinTests(unittest.TestCase):
     def test_pid_in_the_tree_and_the_group_leader(self) -> None:
@@ -291,6 +324,35 @@ class PageTests(Case):
         self.assertEqual("processes", state.page, "Esc goes back where the link came from")
         state = self.keys(state, "esc")
         self.assertEqual("lanes", state.page)
+
+    def test_no_ttl_entry_renders_dash_in_processes_table_details_and_links(self) -> None:
+        sentinel = 100 * 365 * 86400.0
+        raw = snapshot()
+        raw["entries"] = [
+            {
+                "id": "jbg0001", "state": "running", "owner": "claude 4bceaaaf", "session": "4bceaaaf",
+                "agent": None, "lane": None, "owner_alive": True, "age": 1800, "ttl": sentinel,
+                "ttl_left": sentinel - 1800, "no_ttl": True, "keep": "owner", "pid": 55001, "pgid": 10000,
+                "processes": 2, "label": "bg dev server", "mode": "background", "cwd": "/fixture/straylight",
+                "argv": ["bun", "run", "dev"], "log": None, "end": None, "exit": None, "resource": None,
+            },
+        ]
+        self.tools["junkfather"] = state_module.Tool("junkfather", "ok", None, junkfather.decode(raw),
+                                                     actions=("reap", "extend"))
+        state = self.screen([self.lease()])
+        overview = self.text()
+        self.assertIn("bg dev server · running · —", overview)
+        self.assertNotIn("876000h", overview)
+        self.assertNotIn("875999h", overview)
+        self.keys(state, "3")
+        screen = self.text()
+        _, row_y = self.at("bg dev server")
+        table = self.canvas.tables["procs"]
+        row_text = "".join(str(cell[0]) for cell in self.canvas.cells[row_y][table["x"] + 1:table["x"] + table["width"] - 1])
+        self.assertIn("—", row_text)
+        self.assertNotIn("876000h", row_text)
+        self.assertNotIn("875999h", row_text)
+        self.assertRegex(screen, r"ttl left\s+—\s")
 
     def test_absent_and_unsupported(self) -> None:
         self.tools = {name: tool for name, tool in self.tools.items() if name != "junkfather"}

@@ -27,8 +27,8 @@ v                   1 | 2
 host, time          str, RFC 3339 UTC
 entries             [entry]           the active owned entries (running, starting, reaping)
 entry               id, state, owner (described), session, agent, lane, owner_alive (bool | null), age (s),
-                    ttl (s | null), ttl_left (s), keep, pid, pgid, processes (int | null), label, mode, cwd, argv,
-                    log, end, exit, resource ({kind, id, name} | null: a resource entry)
+                    ttl (s | null), ttl_left (s), no_ttl (bool), keep, pid, pgid, processes (int | null), label, mode,
+                    cwd, argv, log, end, exit, resource ({kind, id, name} | null: a resource entry)
 unowned             [{pid, start, cmd, cwd, root, why, age, alive}]   the last sweep's unowned processes
 unowned_resources   [{kind, id, name, why, and for a worktree repo, branch, age, size}]
 sweep               {time, result}
@@ -43,8 +43,8 @@ leaves the last good snapshot on screen, dimmed, with `stale since` in the page'
 
 ### What Godfather computes from it
 
-- An entry's state on the page: `orphan` when `owner_alive` is false, else `expired` when it has a TTL and
-  `ttl_left` is not above 0, else `running`.
+- An entry's state on the page: `orphan` when `owner_alive` is false, else `expired` when it has a TTL (`ttl` set and
+  not `no_ttl`) and `ttl_left` is not above 0, else `running`.
 - The procs summary: the entries, then orphan, expired, live unowned processes (`alive` not false), and unowned
   resources, each only when not zero.
 - request ↔ entry: the entry's `pid` or `pgid` is the request's holder or in its process tree, or the entry belongs to
