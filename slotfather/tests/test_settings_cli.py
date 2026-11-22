@@ -6,6 +6,8 @@ import sys as _path_sys
 from pathlib import Path as _Path
 _path_sys.path.insert(0, str(_Path(__file__).resolve().parents[1] / "src"))
 from slotfather import cli as sf_cli
+from slotfather import config as sf_config
+from slotfather import settings_cli as sf_settings_cli
 
 import contextlib
 import io
@@ -188,3 +190,40 @@ class SettingsCliTests(SlotCase):
     def test_usage_needs_json(self) -> None:
         self.assertEqual(0, self.tool("settings").returncode)
         self.assertEqual(2, self.tool("settings", "set", "capacity.slots", "--json").returncode)
+
+    def test_settings_cli_direct_helpers_and_validation(self) -> None:
+        self.assertEqual(("1.5", "1 slot", "3 slots"),
+                         (sf_settings_cli.number(1.5), sf_settings_cli.plural(1, "slot"),
+                          sf_settings_cli.plural(3, "slot")))
+        self.assertEqual("", sf_settings_cli.drain_note(4, 2))
+        self.assertIn("will drain 2", sf_settings_cli.drain_note(2, 4))
+        self.assertEqual(2, sf_settings_cli.starts(4, 1, [2, 1, 2]))
+        self.assertEqual(("→ 2 slots · will drain 1: running work keeps its slots", "warn"),
+                         sf_settings_cli.effect(2, 3, [1]))
+        self.assertEqual(("→ 4 slots · will start 1 waiting", "dim"),
+                         sf_settings_cli.effect(4, 2, [2, 2]))
+        with mock.patch.dict(os.environ, self.env, clear=True):
+            self.assertEqual(48, sf_settings_cli.most_slots())
+            self.assertEqual((None, "Enter a number between 0 and 1."),
+                             sf_settings_cli.parse("memory_share", "1.5", "automatic"))
+            self.assertEqual((None, "Enter GiB per slot, more than 0."),
+                             sf_settings_cli.parse("amount", "0", "memory"))
+            self.assertEqual((90.0, ""), sf_settings_cli.parse("warn_wait", "1m30s", "automatic"))
+            self.assertEqual(4, sf_settings_cli.capacity_slots("automatic", None))
+            with self.assertRaisesRegex(sf_config.SlotError, "above the most the panel saves"):
+                sf_settings_cli.capacity_value("memory", 0.5)
+            fixed_basis = {"mode": "fixed", "slots": 6, "cpu_slots": 4, "cores": 12,
+                           "memory_slots": None, "memory_gib": None, "gib_per_slot": None}
+            filled = sf_settings_cli.filled_basis(fixed_basis)
+            self.assertEqual((16, 64.0), (filled["memory_slots"], filled["memory_gib"]))
+            unavailable = {
+                label: val
+                for label, val, _ in sf_settings_cli.status_rows(filled, None, where="~/.local/state/slotfather")
+            }
+            self.assertEqual("queue unavailable", unavailable["slots"])
+            self.assertEqual({"capacity.json": None, "order.json": None}, sf_settings_cli.reset_change("--all"))
+            with self.assertRaises(sf_settings_cli.Invalid):
+                sf_settings_cli.reset_change("bad.key")
+            for bad_argv in (["set", "capacity.slots", "4"], ["--json", "--revision"], ["--json", "unknown"]):
+                with self.subTest(bad_argv=bad_argv), self.assertRaises(sf_config.SlotError):
+                    sf_settings_cli.command(bad_argv)

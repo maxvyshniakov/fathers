@@ -26,6 +26,7 @@ from slotfather import config as sf_config
 from slotfather import entry as sf_entry
 from slotfather import leases as sf_leases
 from slotfather import lockwait as sf_lockwait
+from slotfather import session as sf_session
 from slotfather import state as sf_state
 from slotfather import process as sf_process
 
@@ -111,7 +112,8 @@ exec /bin/ps "$@"
         early = self.request("early", 1)
         self.started("early")
         starting = self.start("perf", "--idle", "60", background=True)
-        time.sleep(0.4)
+        self.wait_for(lambda: bool(self.session("perf") and self.session("perf")["state"] == "waiting"),
+                      "the session to queue behind early")
         self.assertIsNone(starting.poll(), "the session waits for the running lease, as -n all does")
         self.release("early")
         self.finish(early)
@@ -131,7 +133,8 @@ exec /bin/ps "$@"
         self.assertEqual(["start early", "end early", "start m1", "end m1", "start m2", "end m2"], self.events())
 
         late = self.request("late", 1)
-        time.sleep(0.4)
+        self.wait_for(lambda: any(e["label"] == "late" and e["state"] == "waiting" for e in self.entries()),
+                      "late to queue behind the idle session")
         self.assertNotIn("start late", self.events(), "between runs the session keeps the machine")
         self.assertEqual(2, self.session("perf")["session"]["runs"])
         stop = self.tool("session", "stop", "perf")
@@ -535,6 +538,22 @@ wait "$reader"'''
         assert after is not None
         self.assertEqual(second_lock, sf_entry.lock_of(after))
         self.assertEqual(owner2, sf_entry.lock_owner(after))
+
+    def test_parse_start_and_prune_helpers(self) -> None:
+        spec = sf_session.parse_start(["--label", "perf", "-n", "2", "--idle", "1m", "--expect", "5m",
+                                       "--priority", "batch", "--ticket", "96", "--meta", "k=v"])
+        self.assertEqual(("perf", 2, 60.0, 300.0, "batch", "96", {"k": "v"}),
+                         (spec["name"], spec["count"], spec["idle"], spec["expect"],
+                          spec["priority"], spec["ticket"], spec["meta"]))
+        for bad in (["--label", "BAD"], ["--label", "perf", "-n", "0"], ["--label", "perf", "--idle", "0"],
+                    ["--label", "perf", "--priority", "urgent"], ["--label", "perf", "--unknown", "1"]):
+            with self.subTest(bad=bad), self.assertRaises(sf_config.SlotError):
+                sf_session.parse_start(bad)
+        uses: dict[str, Any] = {"active": {"99999999": {"start": "Wed Nov 11 00:00:00 2026", "started": 1}},
+                                "last_use": 0.0}
+        self.assertTrue(sf_session.prune(uses, {os.getpid(): (1, "now")}, 123.0))
+        self.assertEqual({}, uses["active"])
+        self.assertEqual(123.0, uses["last_use"])
 
 
 if __name__ == "__main__":

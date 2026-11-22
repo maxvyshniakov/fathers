@@ -3,14 +3,20 @@
 the ask-vs-use hint of `run`, `stats --by family` asks, and another host's history kept beside this one's."""
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import os
 import subprocess
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
+from unittest import mock
 
 from test_slotfather import TOOL, SlotCase
+from slotfather import archive as sf_archive
+from slotfather import cli as sf_cli
 
 
 def git(directory: Path, *args: str) -> str:
@@ -157,8 +163,15 @@ class HostHistoryTests(SlotCase):
 
     def import_lines(self, host: str, items: list[dict[str, Any]], raw: str = "") -> subprocess.CompletedProcess[str]:
         data = raw + "".join(json.dumps(i) + "\n" for i in items)
-        return subprocess.run([TOOL, "history", "import", host], input=data, env=self.env, capture_output=True,
-                              text=True, timeout=20)
+        stdout, stderr = io.StringIO(), io.StringIO()
+        fake_stdin = SimpleNamespace(buffer=io.BytesIO(data.encode()), isatty=lambda: False)
+        with (mock.patch.dict(os.environ, self.env, clear=True),
+              mock.patch("sys.stdin", fake_stdin),
+              contextlib.redirect_stdout(stdout),
+              contextlib.redirect_stderr(stderr)):
+            code = sf_cli.main(["history", "import", host])
+        return subprocess.CompletedProcess([TOOL, "history", "import", host], code,
+                                           stdout.getvalue(), stderr.getvalue())
 
     def test_import_keeps_another_hosts_history_once_beyond_its_rotation(self):
         first = [line("ci-1", 2, 100, ended="2026-11-10T10:00:00Z", cores=6, capacity=2),
@@ -182,6 +195,12 @@ class HostHistoryTests(SlotCase):
             result = self.import_lines(bad, [line("ci-1", 1, 1)])
             self.assertEqual(2, result.returncode, bad)
         self.assertEqual(2, self.tool("stats", "--host", "nowhere").returncode)
+        # Direct archive.merge and file import path.
+        src_file = self.tmp / "export.jsonl"
+        src_file.write_text(json.dumps(line("ci-file", 1, 10)) + "\n")
+        with mock.patch.dict(os.environ, self.env, clear=True), contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(0, sf_archive.command(["import", "vm111", str(src_file)]))
+        self.assertTrue((sf_archive.host_dir("vm111", self.state) / "history.jsonl").exists())
 
 
 if __name__ == "__main__":

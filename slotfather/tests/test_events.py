@@ -12,7 +12,6 @@ import json
 import os
 import re
 import stat
-import time
 from typing import Any
 import unittest
 from unittest import mock
@@ -65,8 +64,13 @@ class EventLogTests(SlotCase):
         gate = self.request("gate", 4, "sh", "-c", YIELDER, "work", "gate",
                             options=("--priority", "batch", "--yieldable", "--meta", "lane=l-9"))
         self.started("gate")
-        time.sleep(1.1)
+        self.backdate_entry("gate", 5.0)
         quick = self.request("quick", 1, options=("--priority", "interactive"))
+        self.wait_for(lambda: "waiting: 1 slot(s) quick" in self.status() or "start quick" in self.events(),
+                      "quick to queue or start")
+        if "start quick" not in self.events():
+            self.backdate_entry("quick", 5.0)
+            self.flush_looks(1)
         self.started("quick")
         late = self.request("late", 4)
         self.wait_for(lambda: "waiting: 4 slot(s) late" in self.status(), "late to queue")

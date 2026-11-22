@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import contextlib
 import io
-import importlib
 import json
 import os
 from pathlib import Path
@@ -16,7 +15,7 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
-cli = importlib.import_module("slotfather.cli")
+from slotfather import cli, lane_admission as sf_lane_admission  # noqa: E402
 
 
 def physical_pages(name: str) -> int:
@@ -31,12 +30,20 @@ class LaneAdmissionTests(unittest.TestCase):
                     "memory_gib": {"value": 32, "source": "fixture"},
                     "load15": {"value": 18, "source": "fixture"}}, **changes}
 
-    def command(self, request: object, **env: str) -> subprocess.CompletedProcess[str]:
-        return subprocess.run([sys.executable, str(ROOT / "slotfather"), "lane-admission", "--json"],
-                              input=json.dumps(request), text=True, capture_output=True,
-                              env={**os.environ, **env}, timeout=10)
+    def command(self, request: object, *, raw: str | None = None, **env: str) -> subprocess.CompletedProcess[str]:
+        payload = json.dumps(request) if raw is None else raw
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with (patch.dict(os.environ, {**os.environ, **env}, clear=True),
+              patch("sys.stdin", io.StringIO(payload)),
+              contextlib.redirect_stdout(stdout),
+              contextlib.redirect_stderr(stderr)):
+            code = cli.main(["lane-admission", "--json"])
+        return subprocess.CompletedProcess(["slotfather", "lane-admission", "--json"], code,
+                                           stdout.getvalue(), stderr.getvalue())
 
     def test_exact_load_boundary_allows_registration_without_leasing(self) -> None:
+        direct = sf_lane_admission.advise(self.request())
+        self.assertTrue(direct["allowed"])
         result = self.command(self.request())
         self.assertEqual(0, result.returncode, result.stderr)
         response = json.loads(result.stdout)
@@ -157,8 +164,7 @@ class LaneAdmissionTests(unittest.TestCase):
         for raw in ("{", '{"v":1,"v":1}', " " * 65537, "[" * 2000,
                     json.dumps(self.request(sample_overrides={"disk_free_gb": {"value": 1000, "source": "x"}}))):
             with self.subTest(raw=raw[:40]):
-                result = subprocess.run([sys.executable, str(ROOT / "slotfather"), "lane-admission", "--json"],
-                                        input=raw, capture_output=True, text=True, timeout=10)
+                result = self.command(None, raw=raw)
                 self.assertEqual(75, result.returncode, result.stderr)
                 self.assertEqual("invalid_request", json.loads(result.stdout)["error"]["code"])
                 self.assertNotIn("Traceback", result.stderr)

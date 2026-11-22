@@ -13,19 +13,18 @@ from slotfather import client as sf_client
 from slotfather import schedule as sf_schedule
 from slotfather import settings as sf_settings
 from slotfather import state as sf_state
+from slotfather import stats as sf_stats
 
 
 import json
 import os
 import pathlib
-import time
 import unittest
 from unittest import mock
 from typing import Any
 
 from test_order import M, PlanCase, holder, runs, stamp, waiter
 from test_slotfather import TOOL, WORK, SlotCase
-from test_usage import load
 
 
 # A client that keeps the protocol: between steps (every 50 ms) it looks for its yield request and yields.
@@ -323,8 +322,13 @@ class ProtocolTests(SlotCase):
     def test_a_yieldable_holder_yields_between_steps_and_resumes_after_the_interactive_request(self):
         gate = self.gate("--yieldable")
         self.started("gate")
-        time.sleep(1.1)  # a holder is asked only after it held its slots yield_after seconds
+        self.backdate_entry("gate", 5.0)  # a holder is asked only after it held its slots yield_after seconds
         quick = self.request("quick", 1, options=("--priority", "interactive"))
+        self.wait_for(lambda: "waiting: 1 slot(s) quick" in self.status() or "start quick" in self.events(),
+                      "quick to queue or start")
+        if "start quick" not in self.events():
+            self.backdate_entry("quick", 5.0)
+            self.flush_looks(1)
         self.started("quick")
         self.assertEqual(["start gate", "yield gate", "start quick"], self.events())
         found = {e["label"]: e for e in json.loads(self.tool("status", "--json").stdout)["entries"]}
@@ -355,9 +359,11 @@ class ProtocolTests(SlotCase):
     def test_a_holder_that_did_not_opt_in_is_never_asked(self):
         gate = self.gate()
         self.started("gate")
+        self.backdate_entry("gate", 5.0)
         quick = self.request("quick", 1, options=("--priority", "interactive"))
         self.wait_for(lambda: "waiting: 1 slot(s) quick" in self.status(), "quick to queue")
-        time.sleep(2.5)  # past yield_after, several looks
+        self.backdate_entry("quick", 5.0)
+        self.flush_looks()  # past yield_after, several looks
         self.assertEqual([], list((self.state / "queue").glob("*.yield")))
         self.assertEqual(["start gate"], self.events())
         self.release("gate")
@@ -369,8 +375,13 @@ class ProtocolTests(SlotCase):
     def test_a_request_is_shown_until_it_is_withdrawn_when_the_asker_leaves(self):
         gate = self.gate("--yieldable", script=WORK.replace("$1", "gate"))  # opted in, but never looks
         self.started("gate")
-        time.sleep(1.1)
-        quick = self.request("quick", 1, options=("--priority", "interactive", "--wait", "4"))
+        self.backdate_entry("gate", 5.0)
+        quick = self.request("quick", 1, options=("--priority", "interactive", "--wait", "2"))
+        self.wait_for(lambda: "waiting: 1 slot(s) quick" in self.status()
+                      or list((self.state / "queue").glob("*.yield")), "quick to queue")
+        if not list((self.state / "queue").glob("*.yield")):
+            self.backdate_entry("quick", 5.0)
+            self.flush_looks(1)
         self.wait_for(lambda: list((self.state / "queue").glob("*.yield")), "the yield request")
         self.assertIn("yieldable asked-to-yield-for=quick", self.status())
         [entry] = [e for e in json.loads(self.tool("status", "--json").stdout)["entries"] if e["label"] == "gate"]
@@ -454,9 +465,8 @@ class ProtocolTests(SlotCase):
 
 class StatsTests(unittest.TestCase):
     def test_cores_per_slot_leave_out_the_time_a_lease_yielded(self):
-        stats = load(TOOL + "-stats", "slotfather_stats_classes")
-        self.assertEqual(600.0, stats.wall_of({"wall": 900.0, "yielded": 300}))
-        self.assertEqual(900.0, stats.wall_of({"wall": 900.0}))
+        self.assertEqual(600.0, sf_stats.wall_of({"wall": 900.0, "yielded": 300}))
+        self.assertEqual(900.0, sf_stats.wall_of({"wall": 900.0}))
 
 
 if __name__ == "__main__":

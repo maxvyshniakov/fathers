@@ -6,10 +6,8 @@ import json
 from typing import Any
 import unittest
 
-from test_slotfather import TOOL, SlotCase
-from test_usage import load
-
-stats: Any = load(TOOL + "-stats", "slotfather_stats_under_test")
+from test_slotfather import SlotCase
+from slotfather import stats
 
 
 V1: dict[str, Any] = {

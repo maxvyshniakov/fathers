@@ -12,7 +12,6 @@ import os
 import shutil
 import subprocess
 import tempfile
-import time
 import unittest
 from typing import Any, Callable
 from unittest import mock
@@ -93,14 +92,14 @@ class ProcessTableTests(unittest.TestCase):
     def test_a_ps_that_hangs_is_given_up_after_the_timeout(self) -> None:
         bins = self.dir / "bin"
         bins.mkdir()
-        (bins / "ps").write_text("#!/bin/sh\nsleep 10\n")
+        done = self.dir / "ps-done"
+        (bins / "ps").write_text(f'#!/bin/sh\nsleep 10\necho done > "{done}"\n')
         (bins / "ps").chmod(0o755)
-        began = time.monotonic()
         with mock.patch.dict(os.environ, {"PATH": f"{bins}{os.pathsep}{os.environ.get('PATH', '')}"}), \
-                mock.patch.object(sf_config, "PS_TIMEOUT", 0.3):
-            with self.assertRaises(sf_config.ProcessTableError):
+                mock.patch.object(sf_config, "PS_TIMEOUT", 0.1):
+            with self.assertRaisesRegex(sf_config.ProcessTableError, r"timed out after 0\.1 seconds"):
                 sf_process.processes()
-        self.assertLess(time.monotonic() - began, 5)
+        self.assertFalse(done.exists(), "ps was terminated on timeout before completing its sleep")
 
     def test_no_look_reaps_on_a_bad_table_and_the_next_good_table_reaps(self) -> None:
         read_only: dict[str, Callable[[], Any]] = {

@@ -195,17 +195,28 @@ class WatchTests(unittest.TestCase):
         self.assertEqual([False], held)
 
     def test_a_stalled_ps_does_not_hold_up_finish(self) -> None:
+        started = threading.Event()
         release = threading.Event()
         self.addCleanup(release.set)
-        self.patch("usage_table", lambda: release.wait(60) and {})
+        calls = 0
+
+        def stalled_table() -> dict[int, tuple[Any, ...]]:
+            nonlocal calls
+            calls += 1
+            started.set()
+            release.wait(60)
+            return {}
+
+        self.patch("usage_table", stalled_table)
         self.patch("sample_machine", lambda directory: None)
         watch = self.watch()
-        watch.start()
-        time.sleep(0.2)  # the thread is now inside the stalled ps
-        began = time.monotonic()
-        rusage = mock.Mock(ru_utime=1.0, ru_stime=0.5, ru_maxrss=0)
-        found = watch.finish(rusage, 2.0)
-        self.assertLess(time.monotonic() - began, sf_config.WATCH_JOIN + 2)
+        with mock.patch.object(sf_config, "WATCH_JOIN", 0.05):
+            watch.start()
+            self.assertTrue(started.wait(10))  # the thread is now inside the stalled ps
+            rusage = mock.Mock(ru_utime=1.0, ru_stime=0.5, ru_maxrss=0)
+            found = watch.finish(rusage, 2.0)
+        self.assertTrue(watch.is_alive(), "finish returned without waiting for the stalled ps to exit")
+        self.assertEqual(1, calls, "finish skipped the final observe() while the sampler was stuck")
         assert found is not None
         self.assertEqual(1.5, found["cpu"], "the usage so far, without a last look")
 
@@ -263,11 +274,14 @@ class RunUsageTests(SlotCase):
                          r"released: 1 slot\(s\) tree waited \d+s ran \d+s exit 0 used \d+\.\d cores, \d+ MB cmd=sh")
 
     def test_a_launchd_child_that_carries_the_lease_is_counted(self):
-        probe = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(5)"],
-                                 env={**os.environ, "SLOTFATHER_LEASE": "/probe"})
+        probe = subprocess.Popen([sys.executable, "-c", "import time; print('ready', flush=True); time.sleep(5)"],
+                                 env={**os.environ, "SLOTFATHER_LEASE": "/probe"},
+                                 stdout=subprocess.PIPE, text=True)
+        self.addCleanup(lambda: probe.stdout and probe.stdout.close())
         self.addCleanup(probe.wait)
         self.addCleanup(probe.kill)
-        time.sleep(0.3)
+        assert probe.stdout is not None
+        self.assertEqual("ready", probe.stdout.readline().strip())
         if probe.pid not in sf_process.carrying([probe.pid], "/probe"):
             self.skipTest(f"ps shows no environment for {sys.executable} on this host")
         done = self.tmp / "detached-done"

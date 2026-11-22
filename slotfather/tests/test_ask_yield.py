@@ -7,7 +7,6 @@ from pathlib import Path as _Path
 _path_sys.path.insert(0, str(_Path(__file__).resolve().parents[1] / "src"))
 
 import json
-import time
 from typing import Any
 
 from test_classes import YIELDER
@@ -59,7 +58,7 @@ class AskYieldTests(SlotCase):
         self.wait_for(lambda: "waiting: 1 slot(s) quick" in self.status(), "quick to queue")
         held = self.entries()["gate"]
         self.assertEqual(0, self.tool("ask-yield", str(held["pid"]), "--start", held["start"]).returncode)
-        time.sleep(0.6)  # several looks of the waiting client: a request by hand is not withdrawn while quick waits
+        self.flush_looks()  # several looks of the waiting client: a request by hand is not withdrawn while quick waits
         self.assertEqual("quick", self.entries()["gate"]["yield_asked"]["label"])
         self.assertRegex(self.status(), r"held: 4 slot\(s\) gate .*asked-to-yield-for=quick")
         full = json.loads(self.tool("status", "--json", "--full").stdout)

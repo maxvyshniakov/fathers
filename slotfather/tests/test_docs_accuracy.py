@@ -3,11 +3,13 @@
 Verifies that:
 - Every non-dunder module in `src/slotfather/` is documented in `docs/architecture.md`'s module table (and no
   removed module remains listed).
+- Every non-dunder module in `src/slotfather/` is directly imported by at least one `tests/test_*.py` file.
 - Executable counts in `docs/architecture.md` and `docs/installation.md` match `install.py`'s `COMMANDS`.
 - Removed historical review/experiment files stay deleted and unlinked.
 """
 from __future__ import annotations
 
+import ast
 import importlib.util
 from pathlib import Path
 import re
@@ -16,8 +18,43 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src" / "slotfather"
+TESTS = ROOT / "tests"
 DOCS = ROOT / "docs"
 REMOVED_DOCS = ("review-issue1.md", "review-issue2.md", "scheduler-experiments.md")
+
+
+def imported_modules() -> set[str]:
+    """Every `slotfather.<module>` directly imported across `tests/test_*.py`."""
+    known = {path.stem for path in SRC.glob("*.py") if not path.name.startswith("__")}
+    found: set[str] = set()
+    for path in sorted(TESTS.glob("test_*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    parts = alias.name.split(".")
+                    if len(parts) >= 2 and parts[0] == "slotfather" and parts[1] in known:
+                        found.add(parts[1])
+            elif isinstance(node, ast.ImportFrom):
+                if node.module == "slotfather":
+                    for alias in node.names:
+                        if alias.name in known:
+                            found.add(alias.name)
+                elif node.module and node.module.startswith("slotfather."):
+                    mod = node.module.split(".")[1]
+                    if mod in known:
+                        found.add(mod)
+            elif (isinstance(node, ast.Call)
+                  and isinstance(node.func, ast.Attribute)
+                  and node.func.attr == "import_module"
+                  and node.args
+                  and isinstance(node.args[0], ast.Constant)
+                  and isinstance(node.args[0].value, str)
+                  and node.args[0].value.startswith("slotfather.")):
+                mod = node.args[0].value.split(".")[1]
+                if mod in known:
+                    found.add(mod)
+    return found
 
 
 def architecture_modules() -> set[str]:
@@ -48,6 +85,12 @@ class DocsAccuracyTests(unittest.TestCase):
         stale = sorted(documented - actual)
         self.assertEqual([], missing, f"modules missing from docs/architecture.md: {missing}")
         self.assertEqual([], stale, f"modules in docs/architecture.md that do not exist: {stale}")
+
+    def test_every_source_module_is_directly_imported_by_tests(self) -> None:
+        actual = {path.stem for path in SRC.glob("*.py") if not path.name.startswith("__")}
+        tested = imported_modules()
+        missing = sorted(actual - tested)
+        self.assertEqual([], missing, f"module-test-presence: modules not directly imported by tests/test_*.py: {missing}")
 
     def test_executable_counts_match_installer_commands(self) -> None:
         spec = importlib.util.spec_from_file_location("slotfather_installer_docs_check", ROOT / "install.py")

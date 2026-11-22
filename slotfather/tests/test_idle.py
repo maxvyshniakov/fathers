@@ -241,7 +241,7 @@ class QueueTests(SlotCase):
         self.wait_for(lambda: " idle=" in self.status(), "the quiet command to turn idle")
         waiter = self.request("next", 1)
         self.wait_for(lambda: "waiting: 1 slot(s) next" in self.status(), "the waiter to queue")
-        time.sleep(1)  # several of the waiter's looks
+        self.flush_looks()  # several of the waiter's looks
         self.assertEqual([], list((self.state / "queue").glob("*.yield")))
         stuck.terminate()
         stuck.wait()

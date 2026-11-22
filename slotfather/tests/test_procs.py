@@ -14,6 +14,7 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
+from slotfather import lineage as sf_lineage  # noqa: E402
 
 
 class ProcsTests(unittest.TestCase):
@@ -463,6 +464,44 @@ class LinuxNonDumpableTests(unittest.TestCase):
                 self.skipTest("CAP_SYS_PTRACE/root allows reading non-dumpable /proc/PID/cwd here")
             found = self.procs.query(cwd=str(self.worktree))
         self.assertIn(child.pid, found["cwd_unknown"])
+
+
+class LineageTests(unittest.TestCase):
+    def test_children_ancestors_tree_and_descendants(self) -> None:
+        rows = {
+            10: (1, "t10"),
+            11: (10, "t11"),
+            12: (10, "t12"),
+            13: (11, "t13"),
+        }
+        parents = sf_lineage.parents_of(rows)
+        self.assertEqual({10: 1, 11: 10, 12: 10, 13: 11}, parents)
+        children = sf_lineage.children_of(parents)
+        self.assertEqual({1: [10], 10: [11, 12], 11: [13]}, children)
+        self.assertEqual([11, 10], sf_lineage.ancestors(parents, 13))
+        self.assertEqual([], sf_lineage.ancestors(parents, 10))
+        self.assertEqual([], sf_lineage.ancestors(parents, 999))
+        # Cycle in parent links terminates without looping.
+        self.assertEqual([30], sf_lineage.ancestors({20: 30, 30: 20}, 20))
+        # tree() skips non-ints (including bool), absent pids, and already-visited nodes.
+        visited = sf_lineage.tree(children, [None, True, "10", 10, 10], lambda pid: pid != 12)
+        self.assertEqual({10, 11, 13}, set(visited))
+        self.assertEqual([10, 11, 12, 13], sf_lineage.descendants(rows, 10))
+        self.assertEqual([], sf_lineage.descendants(rows, 999))
+        self.assertEqual([], sf_lineage.descendants(rows, True))
+        self.assertEqual([], sf_lineage.descendants(rows, None))
+
+    def test_program_and_session_command(self) -> None:
+        self.assertEqual("", sf_lineage.program("   "))
+        self.assertEqual("python3", sf_lineage.program("python3 -m unittest"))
+        bundle = "/Applications/Google Chrome.app/Contents/MacOS/chrome --headless /tmp/x"
+        self.assertEqual("/Applications/Google Chrome.app/Contents/MacOS/chrome", sf_lineage.program(bundle))
+        self.assertTrue(sf_lineage.session_command("python3 worker.py", tty="ttys002"))
+        self.assertFalse(sf_lineage.session_command("python3 worker.py", tty=""))
+        for cmd in ("claude --resume", "/usr/local/bin/codex", "tmux new -s dev",
+                    "/Users/u/.local/share/claude/versions/2.1.293 --print", "/opt/actions/Runner.Worker"):
+            with self.subTest(cmd=cmd):
+                self.assertTrue(sf_lineage.session_command(cmd))
 
 
 if __name__ == "__main__":

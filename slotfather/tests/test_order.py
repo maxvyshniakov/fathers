@@ -572,7 +572,7 @@ class OrderTests(SlotCase):
         self.wait_for(lambda: "waiting: 4 slot(s) gate" in self.status(), "the gate to queue")
         short = self.request("short", 1)
         self.wait_for(lambda: "waiting: 1 slot(s) short" in self.status(), "the short request to queue")
-        time.sleep(0.6)  # a few looks at the queue
+        self.flush_looks()  # a few looks at the queue
         self.assertNotIn("start short", self.events())
         self.release("one")
         self.started("gate")

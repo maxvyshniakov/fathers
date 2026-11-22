@@ -18,6 +18,8 @@ import unittest
 from typing import Any, cast
 from unittest import mock
 
+from slotfather import capabilities as sf_capabilities
+from slotfather import lane_context as sf_lane_context
 from test_slotfather import ROOT, SlotCase
 
 # Facts that move between two looks a moment apart: process samples, the clock and what is computed from it.
@@ -194,6 +196,8 @@ class BoardTests(SlotCase):
         result = self.tool("capabilities", "--json")
         self.assertEqual(0, result.returncode, result.stderr)
         found = json.loads(result.stdout)
+        with mock.patch.dict(os.environ, self.env, clear=True):
+            self.assertEqual(found, sf_capabilities.capabilities())
         self.assertEqual((1, "slotfather"), (found["v"], found["tool"]))
         version = importlib.import_module("slotfather.version").VERSION
         self.assertEqual(version, found["version"])
@@ -540,6 +544,96 @@ class MachineFactTests(unittest.TestCase):
         with mock.patch.object(tool.subprocess, "run", return_value=failure):
             with self.assertRaises(OSError):
                 tool.process_usage()
+
+
+class LaneContextTests(unittest.TestCase):
+    def setUp(self) -> None:
+        sf_lane_context._CACHE.clear()  # pyright: ignore[reportPrivateUsage]
+        self.addCleanup(sf_lane_context._CACHE.clear)  # pyright: ignore[reportPrivateUsage]
+
+    def test_missing_or_relative_reference_is_rejected_without_process_spawn(self) -> None:
+        for ctx, cwd in (({}, "/abs/work"), ({"lane": ""}, "/abs/work"), ({"lane": "../bad"}, "/abs/work"),
+                         ({"lane": "a" * 65}, "/abs/work"), ({"lane": "lane-1"}, "relative/path"),
+                         ({"lane": "lane-1", "lanefather.state": "rel/state"}, "")):
+            with self.subTest(ctx=ctx, cwd=cwd), mock.patch.object(sf_lane_context.subprocess, "run") as run:
+                self.assertEqual({"error": "lane reference missing"}, sf_lane_context.fetch(ctx, cwd))
+                run.assert_not_called()
+
+    def test_missing_binary_and_process_failures_report_clean_errors(self) -> None:
+        with mock.patch.object(sf_lane_context.shutil, "which", return_value=None):
+            self.assertEqual({"error": "lanefather not installed"},
+                             sf_lane_context.fetch({"lane": "l1"}, "/work/p1"))
+        sf_lane_context._CACHE.clear()  # pyright: ignore[reportPrivateUsage]
+
+        failed = subprocess.CompletedProcess(["lanefather"], 1, stdout="{}", stderr="err")
+        oversized = subprocess.CompletedProcess(["lanefather"], 0, stdout="x" * 65537, stderr="")
+        for reply in (failed, oversized):
+            sf_lane_context._CACHE.clear()  # pyright: ignore[reportPrivateUsage]
+            with mock.patch.object(sf_lane_context.shutil, "which", return_value="/bin/lanefather"), \
+                    mock.patch.object(sf_lane_context.subprocess, "run", return_value=reply):
+                self.assertEqual({"error": "lanefather query failed"},
+                                 sf_lane_context.fetch({"lane": "l1"}, "/work/p1"))
+
+        for exc in (OSError("boom"), subprocess.TimeoutExpired(["lanefather"], 1.5)):
+            sf_lane_context._CACHE.clear()  # pyright: ignore[reportPrivateUsage]
+            with mock.patch.object(sf_lane_context.shutil, "which", return_value="/bin/lanefather"), \
+                    mock.patch.object(sf_lane_context.subprocess, "run", side_effect=exc):
+                self.assertEqual({"error": "lanefather unavailable"},
+                                 sf_lane_context.fetch({"lane": "l1"}, "/work/p1"))
+
+        sf_lane_context._CACHE.clear()  # pyright: ignore[reportPrivateUsage]
+        bad_json = subprocess.CompletedProcess(["lanefather"], 0, stdout="{not json", stderr="")
+        with mock.patch.object(sf_lane_context.shutil, "which", return_value="/bin/lanefather"), \
+                mock.patch.object(sf_lane_context.subprocess, "run", return_value=bad_json):
+            self.assertEqual({"error": "lanefather unavailable"},
+                             sf_lane_context.fetch({"lane": "l1"}, "/work/p1"))
+
+    def test_schema_validation_and_caching_with_eviction(self) -> None:
+        valid: dict[str, Any] = {
+            "version": 1, "id": "lane-1", "project": "fathers", "status": "running",
+            "branch": "lane/1", "base": "main", "ticket": {"id": "220"},
+            "checks": {"passed": 3}, "review": {}, "claims": ["a.py"], "after": [],
+        }
+        invalid_cases: tuple[tuple[object, str], ...] = (
+            ({"version": 2, "id": "lane-1"}, "unsupported lane summary"),
+            ({"version": 1, "id": "other"}, "unsupported lane summary"),
+            ([], "unsupported lane summary"),
+            ({**valid, "status": 123}, "invalid lane summary"),
+            ({**valid, "ticket": []}, "invalid lane summary"),
+            ({**valid, "claims": {}}, "invalid lane summary"),
+        )
+        for bad, expected in invalid_cases:
+            sf_lane_context._CACHE.clear()  # pyright: ignore[reportPrivateUsage]
+            reply = subprocess.CompletedProcess(["lanefather"], 0, stdout=json.dumps(bad), stderr="")
+            with mock.patch.object(sf_lane_context.shutil, "which", return_value="/bin/lanefather"), \
+                    mock.patch.object(sf_lane_context.subprocess, "run", return_value=reply):
+                self.assertEqual({"error": expected}, sf_lane_context.fetch({"lane": "lane-1"}, "/work"))
+
+        sf_lane_context._CACHE.clear()  # pyright: ignore[reportPrivateUsage]
+        clock = [100.0]
+        ok_reply = subprocess.CompletedProcess(["lanefather"], 0, stdout=json.dumps(valid), stderr="")
+        with mock.patch.object(sf_lane_context.time, "monotonic", side_effect=lambda: clock[0]), \
+                mock.patch.object(sf_lane_context.shutil, "which", return_value="/bin/lanefather") as which, \
+                mock.patch.object(sf_lane_context.subprocess, "run", return_value=ok_reply) as run:
+            found = sf_lane_context.fetch({"lane": "lane-1", "lanefather.state": "/state/lf"}, "/work")
+            self.assertEqual(valid, found)
+            run.assert_called_once_with(["/bin/lanefather", "show", "lane-1", "--state-dir", "/state/lf", "--json"],
+                                        capture_output=True, text=True, timeout=1.5)
+            # Cached hit survives a transient PATH loss within CACHE_SECONDS.
+            which.return_value = None
+            clock[0] += 1.0
+            self.assertEqual(valid, sf_lane_context.fetch({"lane": "lane-1", "lanefather.state": "/state/lf"}, "/work"))
+            self.assertEqual(1, run.call_count)
+            # After CACHE_SECONDS, cache expires and queries again.
+            clock[0] += sf_lane_context.CACHE_SECONDS + 1.0
+            self.assertEqual({"error": "lanefather not installed"},
+                             sf_lane_context.fetch({"lane": "lane-1", "lanefather.state": "/state/lf"}, "/work"))
+            # Bounded cache evicts the oldest key at CACHE_LIMIT.
+            sf_lane_context._CACHE.clear()  # pyright: ignore[reportPrivateUsage]
+            for i in range(sf_lane_context.CACHE_LIMIT + 2):
+                sf_lane_context.fetch({"lane": f"lane-{i}"}, "/work")
+            self.assertEqual(sf_lane_context.CACHE_LIMIT, len(sf_lane_context._CACHE))  # pyright: ignore[reportPrivateUsage]
+            self.assertNotIn(("/work", "lane-0", "project-v1"), sf_lane_context._CACHE)  # pyright: ignore[reportPrivateUsage]
 
 
 if __name__ == "__main__":

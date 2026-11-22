@@ -8,7 +8,7 @@ from __future__ import annotations
 import sys as _path_sys
 from pathlib import Path as _Path
 _path_sys.path.insert(0, str(_Path(__file__).resolve().parents[1] / "src"))
-from slotfather import client, config, query
+from slotfather import cli, client, config, estimates, leases, query, queue, runtype, state
 from slotfather import platform as sf_platform
 
 
@@ -55,6 +55,9 @@ class SlotCase(unittest.TestCase):
                         RELEASE=str(self.release_dir))
         self.processes: list[subprocess.Popen[Any]] = []
         self.addCleanup(self.stop_all)
+        estimates._estimates.clear()  # pyright: ignore[reportPrivateUsage]
+        queue._skipping.clear()  # pyright: ignore[reportPrivateUsage]
+        runtype._cache.clear()  # pyright: ignore[reportPrivateUsage]
 
     def stop_all(self):
         # Each request runs in its own session: this also stops fake work a killed holder left behind.
@@ -117,7 +120,40 @@ class SlotCase(unittest.TestCase):
         return waiter, proceed.touch
 
     def tool(self, *args: str, **env: str) -> subprocess.CompletedProcess[str]:
-        return subprocess.run([TOOL, *args], env={**self.env, **env}, capture_output=True, text=True, timeout=20)
+        merged = {**self.env, **env}
+        if ((not args or args[0] not in ("run", "lock", "session", "sweep", "dashboard")
+             or args[:2] == ("sweep", "config"))
+                and args[:2] != ("history", "export")):
+            stdout, stderr = io.StringIO(), io.StringIO()
+            with (patch.dict(os.environ, merged, clear=True),
+                  patch("sys.stdin.isatty", return_value=False),
+                  patch("sys.stdout", stdout),
+                  patch("sys.stderr", stderr)):
+                code = cli.main(list(args))
+            return subprocess.CompletedProcess([TOOL, *args], code, stdout.getvalue(), stderr.getvalue())
+        return subprocess.run([TOOL, *args], env=merged, capture_output=True, text=True, timeout=20)
+
+    def backdate_entry(self, label: str, seconds: float = 5.0) -> None:
+        """Move `label`'s queue entry timestamps (`since`, `granted`) back by `seconds` under the queue lock."""
+        with patch.dict(os.environ, self.env, clear=True):
+            for path in (self.state / "queue").glob("*.json"):
+                with state.editing(path) as entry:
+                    if entry is None or entry.get("label") != label:
+                        continue
+                    for key in ("since", "granted"):
+                        stamp = config.seconds(entry.get(key))
+                        if stamp is not None:
+                            entry[key] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(stamp - seconds))
+                    state.write(path, entry)
+                    return
+        self.fail(f"no queue entry for {label}")
+
+    def flush_looks(self, count: int = 3) -> None:
+        """Run `count` queue grant looks in-process under the queue lock."""
+        with patch.dict(os.environ, self.env, clear=True):
+            for _ in range(count):
+                with state.locked(self.state):
+                    leases.grant(self.state, queue.process_table(self.state))
 
     def release(self, label: str) -> None:
         (self.release_dir / label).touch()
@@ -394,7 +430,7 @@ class OvertakeTests(SlotCase):
 
     def test_past_the_window_a_blocked_gate_holds_back_later_requests(self):
         one, gate = self.queue_gate_behind_one("1")
-        time.sleep(2.1)  # queue stamps have whole seconds
+        self.backdate_entry("gate", 5.0)
         self.assertEqual("0", self.tool("available").stdout.strip())
         later = self.request("later", 1)
         self.wait_for(lambda: "waiting: 1 slot(s) later" in self.status(), "the later request to queue")
@@ -578,17 +614,26 @@ class PollingTests(SlotCase):
         self.started("holder")
         count = self.count_ps()
         self.env["SLOTFATHER_POLL_MAX"] = "1"
-        waiter = self.request("waiter", 1)
-        self.wait_for(lambda: count.read_text(), "the waiter's first look")
-        time.sleep(3)
-        looks = len(count.read_text().split())
+        now = 100.0
+        released = False
+
+        def advance(seconds: float) -> None:
+            nonlocal now, released
+            now += max(0.0, seconds)
+            if now >= 103.0 and not released:
+                released = True
+                self.release("holder")
+                self.finish(holder)
+
+        clock = SimpleNamespace(monotonic=lambda: now, time=time.time, strftime=time.strftime, gmtime=time.gmtime,
+                                localtime=time.localtime, sleep=advance)
+        with patch.dict(os.environ, self.env, clear=True), patch.object(client, "time", clock):
+            lease = client.acquire(1, "waiter", out=io.StringIO())
+            looks = len(count.read_text().split())
+            lease.release()
         # Every 0.05 s would be about 60 looks; growing by half each time to 1 s it is about 10.
+        self.assertGreaterEqual(looks, 5)
         self.assertLess(looks, 20, "a waiter whose reason to wait does not change should back off")
-        self.release("holder")
-        self.started("waiter")
-        self.release("waiter")
-        for process in (holder, waiter):
-            self.finish(process)
 
     def test_a_release_hands_its_slots_on_without_waiting_for_the_next_look(self):
         holder = self.request("holder", "all")
@@ -641,7 +686,7 @@ class MemoryGuardTests(SlotCase):
         self.assertTrue(all(e["memory_wait"] is None for e in found["entries"] if e["state"] == "held"))
         self.release("holder")
         self.finish(holder)
-        time.sleep(0.3)
+        self.flush_looks()
         self.assertNotIn("start second", self.events(), "an unpressed lease ending does not free the allowance")
         self.release("first")
         self.finish(first)

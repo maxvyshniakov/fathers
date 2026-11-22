@@ -24,9 +24,14 @@ from test_live_cutover import CutoverCase
 from test_slotfather import TOOL, WORK, SlotCase
 
 from slotfather import client as sf_client
+from slotfather import config as sf_config
 from slotfather import entry as sf_entry
 from slotfather import idle as sf_idle
+from slotfather import leases as sf_leases
+from slotfather import lockwait as sf_lockwait
 from slotfather import process as sf_process
+from slotfather import queue as sf_queue
+from slotfather import runner as sf_runner
 from slotfather import schedule as sf_schedule
 from slotfather import usage as sf_usage
 
@@ -256,6 +261,92 @@ class ContainerIdleTests(unittest.TestCase):
     def test_a_tree_running_a_container_is_never_idle(self) -> None:
         self.assertIsNotNone(self.since("sh"), "the same tree as a plain shell is low")
         self.assertIsNone(self.since("docker"))
+
+
+class LockwaitUnitTests(unittest.TestCase):
+    def test_parse_and_stop(self) -> None:
+        path, cmd = sf_lockwait.parse(["~/cache.lock", "--", "make", "test"])
+        self.assertEqual((Path(os.path.expanduser("~/cache.lock")), ["make", "test"]), (path, cmd))
+        for bad in ([], ["/tmp/x"], ["/tmp/x", "make"], ["/tmp/x", "--"], ["", "--", "true"]):
+            with self.subTest(bad=bad), self.assertRaises(sf_config.SlotError):
+                sf_lockwait.parse(bad)
+        with self.assertRaises(sf_lockwait.Stopped) as ctx:
+            sf_lockwait.stop(signal.SIGTERM, None)
+        self.assertEqual(signal.SIGTERM, ctx.exception.number)
+
+    def test_enclosing_and_resume(self) -> None:
+        state_dir = Path("/tmp/sf-state")
+        lease_path = state_dir / "queue" / "0000000001-50.json"
+        me = os.getpid()
+        start = "Wed Nov 11 00:00:00 2026"
+        table = {me: (50, start), 50: (1, start)}
+        base_entry: dict[str, Any] = {
+            "pid": 50, "start": start, "count": 1, "label": "l", "cmd": "c",
+            "since": "2026-11-11T00:00:00Z",
+        }
+        held_entry: dict[str, Any] = {**base_entry, "state": "held", "granted": "2026-11-11T00:00:00Z"}
+        waiting_entry: dict[str, Any] = {**base_entry, "state": "waiting"}
+        with mock.patch.object(sf_config, "state_dir", return_value=state_dir), \
+                mock.patch.object(sf_process, "processes", return_value=table):
+            with mock.patch.object(sf_queue, "inherited_lease", return_value=None):
+                self.assertIsNone(sf_lockwait.enclosing())
+            # Waiting non-session lease is not enclosing for a new wait.
+            with mock.patch.object(sf_queue, "inherited_lease",
+                                   return_value=(lease_path, dict(waiting_entry), 1)):
+                self.assertIsNone(sf_lockwait.enclosing())
+            # Idle held plain lease -> idle=True.
+            with mock.patch.object(sf_queue, "inherited_lease",
+                                   return_value=(lease_path, dict(held_entry), 1)), \
+                    mock.patch.object(sf_process, "other_work", return_value=False):
+                self.assertEqual((lease_path, (me, start), True), sf_lockwait.enclosing())
+            # Session entry -> idle=False (verified in yield transaction).
+            with mock.patch.object(sf_queue, "inherited_lease",
+                                   return_value=(lease_path, {**waiting_entry, "session": {"name": "s"}}, 1)):
+                self.assertEqual((lease_path, (me, start), False), sf_lockwait.enclosing())
+            # resume() reclaims a lock-yielded lease before running COMMAND.
+            yielded_entry = dict(held_entry)
+            sf_entry.to_lock_waiting(yielded_entry, 1_800_000_000.0, "/tmp/a.lock", (50, start))
+            with mock.patch.object(sf_queue, "inherited_lease", return_value=(lease_path, yielded_entry, 1)), \
+                    mock.patch.object(sf_client, "resume_lock_yield") as resume_yield, \
+                    mock.patch.object(sf_client, "held_again") as held_again:
+                sf_lockwait.resume()
+                resume_yield.assert_called_once_with(lease_path, yielded_entry)
+                held_again.assert_called_once_with(lease_path)
+
+    def test_wait_and_command_handle_open_errors_and_signals(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaisesRegex(sf_config.SlotError, "cannot open lock"):
+                sf_lockwait.command([tmp, "--", "true"])
+            lock_path = Path(tmp) / "unit.lock"
+            # Free lock runs resume() and execute().
+            with mock.patch.object(sf_lockwait, "resume") as resume, \
+                    mock.patch.object(sf_runner, "execute", return_value=(0, None)) as execute:
+                self.assertEqual(0, sf_lockwait.command([str(lock_path), "--", "echo", "ok"]))
+                resume.assert_called_once()
+                execute.assert_called_once_with(["echo", "ok"], {})
+            # Contended lock interrupted by signal exits 128 + signum and marks "stopped".
+            lease_path = Path(tmp) / "queue" / "0000000001-1.json"
+            owner = (os.getpid(), "Wed Nov 11 00:00:00 2026")
+            handle = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o666)
+            self.addCleanup(os.close, handle)
+            with mock.patch.object(sf_lockwait, "enclosing", return_value=(lease_path, owner, False)), \
+                    mock.patch.object(sf_leases, "yield_for_lock", return_value="noted"), \
+                    mock.patch.object(sf_lockwait.fcntl, "flock",
+                                      side_effect=sf_lockwait.Stopped(signal.SIGTERM)), \
+                    mock.patch.object(sf_leases, "lock_taken") as lock_taken, \
+                    mock.patch.object(sf_client, "held_again") as held_again, \
+                    contextlib.redirect_stderr(io.StringIO()) as err:
+                with self.assertRaises(sf_lockwait.Stopped):
+                    sf_lockwait.wait(handle, lock_path)
+            self.assertIn("other work runs under it", err.getvalue())
+            lock_taken.assert_called_once_with(lease_path, "stopped", lock=str(lock_path), owner=owner)
+            held_again.assert_called_once_with(lease_path)
+
+            with mock.patch.object(sf_lockwait.fcntl, "flock", side_effect=BlockingIOError), \
+                    mock.patch.object(sf_lockwait, "wait", side_effect=sf_lockwait.Stopped(signal.SIGINT)):
+                with self.assertRaises(SystemExit) as exit_ctx:
+                    sf_lockwait.command([str(lock_path), "--", "true"])
+                self.assertEqual(128 + signal.SIGINT, exit_ctx.exception.code)
 
 
 if __name__ == "__main__":

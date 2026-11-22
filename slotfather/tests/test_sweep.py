@@ -752,9 +752,12 @@ class SweepCase(SlotCase):
         """A process (its own session, no terminal) whose working directory the test then removes."""
         work = self.tmp / name
         work.mkdir()
-        process = subprocess.Popen(["sh", "-c", script], cwd=work, start_new_session=True)
+        ready = self.tmp / f"{name}.ready"
+        body = (script.replace("while ", f': > "{ready}"; while ', 1)
+                if "while " in script else f': > "{ready}"; {script}')
+        process = subprocess.Popen(["sh", "-c", body], cwd=work, start_new_session=True)
         self.processes.append(process)
-        time.sleep(0.3)
+        self.wait_for(ready.exists, f"{name} to start in {work}")
         work.rmdir()
         return process
 
@@ -877,23 +880,24 @@ class SessionLiveTests(SweepCase):
         for d in (bin_dir, gone, kept, named):
             d.mkdir()
         (bin_dir / "claude").symlink_to(sys.executable)
-        (kept / "verify.py").write_text("import time\ntime.sleep(120)\n")  # a runner: its argv path counts
+        a_ready, b_ready = self.tmp / "gone.ready", self.tmp / "verify.ready"
+        (kept / "verify.py").write_text(
+            f"import pathlib, signal\npathlib.Path({str(b_ready)!r}).touch()\nsignal.pause()\n"
+        )  # a runner: its argv path counts
         pids = self.tmp / "children"
         session = subprocess.Popen([str(bin_dir / "claude"), "-c", textwrap.dedent(f"""
-            import subprocess, sys, time
-            a = subprocess.Popen(["sleep", "120"], cwd={str(gone)!r})
+            import os, signal, subprocess, sys
+            a = subprocess.Popen(["sh", "-c", ': > "{a_ready}"; exec sleep 120'], cwd={str(gone)!r})
             b = subprocess.Popen([{sys.executable!r}, {str(kept / "verify.py")!r}, {str(named / "check.log")!r}],
                                  cwd={str(kept)!r})
             open({str(pids)!r} + ".tmp", "w").write(f"{{a.pid}} {{b.pid}}")
-            import os; os.replace({str(pids)!r} + ".tmp", {str(pids)!r})
-            time.sleep(120)
+            os.replace({str(pids)!r} + ".tmp", {str(pids)!r})
+            signal.pause()
         """)], start_new_session=True)
         self.processes.append(session)
-        deadline = time.monotonic() + 10
-        while not pids.exists() and time.monotonic() < deadline:
-            time.sleep(0.05)
+        self.wait_for(lambda: pids.exists() and a_ready.exists() and b_ready.exists(),
+                      "session children to start in their directories")
         in_gone, naming = map(int, pids.read_text().split())
-        time.sleep(0.3)
         gone.rmdir()
         named.rmdir()
         found = self.report("--live", "--pid", str(in_gone), "--pid", str(naming))
@@ -913,10 +917,17 @@ class SessionLiveTests(SweepCase):
     def test_two_waits_for_one_pattern_never_end_and_get_a_note(self):
         """Linux's pgrep finds each loop itself; macOS's skips its own ancestors but finds the other loop."""
         marker = f"sweep-wait-{os.getpid()}-{time.monotonic_ns()}"
-        waits = [subprocess.Popen(["sh", "-c", f'until ! pgrep -f "{marker}" >/dev/null; do sleep 0.2; done'],
-                                  start_new_session=True) for _ in range(2)]
+        ready_files = [self.tmp / f"wait-{i}.ready" for i in range(2)]
+        waits = [
+            subprocess.Popen(
+                ["sh", "-c", f'until ! pgrep -f "{marker}" >/dev/null; do : > "$READY"; sleep 0.05; done'],
+                env={**self.env, "READY": str(ready)},
+                start_new_session=True,
+            )
+            for ready in ready_files
+        ]
         self.processes.extend(waits)
-        time.sleep(1)
+        self.wait_for(lambda: all(r.exists() for r in ready_files), "both pgrep wait loops to match")
         self.assertEqual([None, None], [w.poll() for w in waits], "neither loop ends")
         pids = [w.pid for w in waits]
         found = self.report(*(a for pid in pids for a in ("--pid", str(pid))))
@@ -940,9 +951,14 @@ class StateTests(SweepCase):
             return {k: v for k, v in data.items() if k.startswith(key_prefix)}
         first = recorded()
         self.assertEqual(1, len(first), first)
-        time.sleep(1.1)
+        state_file = self.state / "sweep-state.json"
+        raw = json.loads(state_file.read_text())
+        for key in first:
+            raw["gone_since"][key] -= 60
+        state_file.write_text(json.dumps(raw))
+        expected = recorded()
         self.sweep("--pid", str(process.pid))
-        self.assertEqual(first, recorded(), "the first sighting is kept")
+        self.assertEqual(expected, recorded(), "the first sighting is kept")
         self.sweep("--pid", str(process.pid), "--no-log")
         process.kill()
         process.wait()
@@ -976,12 +992,7 @@ class CommandTests(SweepCase):
         self.assertIn("orphan_age         1m00s", result.stdout, "the known keys still count")
 
     def test_settings_that_cannot_be_read_stop_nothing_and_fail_the_live_sweep(self):
-        work = self.tmp / "gone"
-        work.mkdir()
-        victim = subprocess.Popen(["sh", "-c", "exec sleep 120"], cwd=work, start_new_session=True)
-        self.processes.append(victim)
-        time.sleep(0.3)
-        work.rmdir()
+        victim = self.in_removed_directory("gone")
         (self.state).mkdir(parents=True, exist_ok=True)
         (self.state / "sweep.json").write_text(json.dumps({"removed_age": "soon", "session_removed_age": 0}))
         result = self.tool("sweep", "--live", "--quiet", "--pid", str(victim.pid))
