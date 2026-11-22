@@ -27,6 +27,26 @@ def example() -> tuple[dict[str, Any], datetime.datetime]:
 
 
 class DetailsTests(unittest.TestCase):
+    def test_a_waiting_request_lists_each_reason_the_machine_holds_it(self) -> None:
+        """fathers#206: memory, the memory budget and CPU load each a `blocked` row beside running leases."""
+        model, now = example()
+        held = model["holders"][0]
+        waiting = dict(held, key=(124, 'now'), label='waiter', kind='waiting', pid=124, granted=None, tree=[])
+        load = "CPU load 25.0: 22.0 unleased is at or above 12 cores"
+        budget = "expected memory 60000 MB exceeds 55706 MB"
+        model.update(waiters=[waiting], free=5, used=1, memory_block=None, load_block=load, memory_budget_block=budget,
+                     admission=0, start=None, limit=600.0, order="window", overtake_window=600)
+        canvas = view.Canvas(100, 30)
+        view.draw_detail(canvas, Rect(0, 0, 30, 100), model, 1, '/project', now)
+        lines = [line for line in canvas.render(False).splitlines() if "blocked" in line]
+        self.assertEqual(2, len(lines), lines)
+        self.assertIn("expected memory 60000 MB", lines[0])
+        self.assertIn("CPU load 25.0", lines[1])
+        del model["load_block"], model["memory_budget_block"]  # an older Slotfather's model
+        canvas = view.Canvas(100, 30)
+        view.draw_detail(canvas, Rect(0, 0, 30, 100), model, 1, '/project', now)
+        self.assertNotIn("blocked", canvas.render(False))
+
     def test_the_title_follows_the_selection_lease_while_it_holds_slots_request_while_it_waits(self) -> None:
         model, now = example()
         held = model["holders"][0]

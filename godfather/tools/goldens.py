@@ -490,6 +490,10 @@ ADMISSION: dict[str, dict[str, Any]] = {
     "draining": {"slots": 4, "used": 6, "free": 0, "draining": 2},
     "memory": {"used": 2, "free": 6, "memory_block": "memory pressure: critical"},
     "memory-full": {"memory_block": "memory pressure: warning"},
+    # fathers#206: CPU load and the expected-peak memory budget, red as memory is
+    "cpu-load": {"used": 2, "free": 6, "load_block": "CPU load 25.0: 22.0 unleased is at or above 12 cores"},
+    "memory-budget": {"used": 2, "free": 6,
+                      "memory_budget_block": "expected memory 60000 MB exceeds 55706 MB (85% of 65536 MB)"},
     "open": {"admission": 2, "used": 6, "free": 2},
 }
 

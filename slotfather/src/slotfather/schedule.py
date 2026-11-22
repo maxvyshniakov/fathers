@@ -617,6 +617,20 @@ def load_wait(averages: tuple[float, float, float] | None, cores: int, slots: in
     return None
 
 
+def budget_wait(held_mb: float, need_mb: float, ram_mb: float | None, share: float) -> str | None:
+    """Why expected peak memory holds a request back beside running leases (fathers#9), or None: when the held
+    leases' expected peak (`held_mb`) and the request's (`need_mb`) exceed `share` of `ram_mb`. Unknown RAM or a share
+    of 0 has no budget. memory_gate() applies it beside running leases only, and the dashboard's admission and
+    `advise` read the same rule (fathers#206)."""
+    if ram_mb is None or not ram_mb > 0 or not share > 0:
+        return None
+    budget_mb = ram_mb * share
+    if held_mb + need_mb > budget_mb:
+        return (f"expected memory {held_mb + need_mb:.0f} MB exceeds "
+                f"{budget_mb:.0f} MB ({share * 100:.0f}% of {ram_mb:.0f} MB)")
+    return None
+
+
 def memory_gate(grants: list[Entry], held: list[Entry], used: int, memory: tuple[str, str | None],
                 settings: dict[str, Any], *, memory_estimate: Estimate | None = None,
                 ram_mb: float | None = None,
@@ -652,11 +666,8 @@ def memory_gate(grants: list[Entry], held: list[Entry], used: int, memory: tuple
                 reason = why
             elif grant_count != 1 or entry.get("all") or pressed:
                 reason = WARNING_WAIT
-        if reason is None and used and budget_mb is not None and ram_mb is not None:
-            need_mb = expected_mb(entry)
-            if held_mb + need_mb > budget_mb:
-                reason = (f"expected memory {held_mb + need_mb:.0f} MB exceeds "
-                          f"{budget_mb:.0f} MB ({share * 100:.0f}% of {ram_mb:.0f} MB)")
+        if reason is None and used and budget_mb is not None:
+            reason = budget_wait(held_mb, expected_mb(entry), ram_mb, share)
         if reason is None and used and load:
             reason = load
         if reason is None:

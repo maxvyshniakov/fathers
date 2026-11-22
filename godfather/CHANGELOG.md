@@ -6,6 +6,11 @@ Versions and release rules: [README.md](README.md#versions).
 
 ### Added
 
+- MACHINE says in red when sustained CPU load or the expected-peak memory budget closes admission (fathers#206):
+  `CPU load high` and `memory budget full` in its border, beside `memory short`, from Slotfather's `load_block` and
+  `memory_budget_block`, and a waiting request's details list the reason under `blocked`. An older Slotfather sends
+  neither and MACHINE reads as before.
+
 - MACHINE names what drives a high load outside leases (fathers#203): while Slotfather's unleased load is at least
   half the cores, the chart's place lists the top unleased processes, `top unleased` with each one's name, pid, cpu
   (yellow over one core) and memory, the busiest first. Running leases' processes and their descendants are left

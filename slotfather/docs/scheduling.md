@@ -86,6 +86,9 @@ stderr (`slot: LABEL waits for 1 slot(s): CPU load 25.0: 22.0 unleased is at or 
 (`load-wait="..."`), `status --json` (`load_wait`, else `null`) and its long-wait line; its expected start is `?`
 (`null`), and no yield is asked. The dashboard's admission is 0 beside running leases while the gate holds, and its
 block says why (`load_block`); `advise` reports `load_block` when other leases hold slots (`null` on an idle machine), without shrinking its job count.
+Likewise for the expected-peak memory budget (`memory_share` of the memory, fathers#9): the dashboard's admission is 0
+beside running leases whose expected peak memory and a new request's exceed it, its block says why
+(`memory_budget_block`), and so does `advise` for the request it is asked about (fathers#206).
 `SLOTFATHER_LOADAVG` replaces the host's load averages for tests. A Slotfather before this rule grants regardless
 of the load, so until every client is updated an older client's look may start a request the newer ones hold back.
 

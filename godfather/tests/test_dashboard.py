@@ -654,6 +654,17 @@ class MachineStatusTests(unittest.TestCase):
                ("memory",dict(memory_block="memory pressure: critical",used=2,free=6),"unleased 0.2 · memory short","bad"),
                ("memory and full",dict(memory_block="memory pressure: warning"),
                 "unleased 0.2 · memory short · full · 8 of 8 held","bad"),
+               ("cpu load",dict(load_block="CPU load 25.0: 22.0 unleased is at or above 12 cores",used=2,free=6),
+                "unleased 0.2 · CPU load high","bad"),
+               ("memory budget",dict(memory_budget_block="expected memory 60000 MB exceeds 55706 MB",used=2,free=6),
+                "unleased 0.2 · memory budget full","bad"),
+               ("cpu load and full",dict(load_block="CPU load 25.0"),"unleased 0.2 · CPU load high · full · 8 of 8 held",
+                "bad"),
+               ("every machine reason",dict(memory_block="memory pressure: critical",load_block="CPU load 25.0",
+                                             memory_budget_block="expected memory",used=2,free=6),
+                "unleased 0.2 · memory short · memory budget full · CPU load high","bad"),
+               ("no reason from an older slotfather",dict(load_block=None,memory_budget_block=None,used=2,free=6),
+                "unleased 0.2 · no admission","status-normal"),
                ("draining",dict(slots=4,used=6,free=0,draining=2),"unleased 0.2 · draining · 6 of 4 held","warn"),
                ("queue ahead",dict(used=6,free=2,waiters=[dict(kind="waiting",count=4)]),
                 "unleased 0.2 · queue ahead · 1 waiting","status-normal"),
@@ -667,6 +678,30 @@ class MachineStatusTests(unittest.TestCase):
                 self.assertTrue(top.endswith(f" {border} ─╮"),top)
                 reason=border.split(" · ",1)[1]
                 self.assertEqual(style,canvas.cells[0][top.index(reason)][1],f"{name}: {style}")
+
+    def test_a_decoded_load_or_memory_budget_block_is_red_in_the_border(self):
+        """fathers#206: from Slotfather's snapshot through the adapter to MACHINE's border, each machine reason red;
+        every reason is its own red part, the separators dim."""
+        from godfather.adapters import slotfather
+
+        tool=load_dashboard()
+        fixture=ROOT/"tests"/"fixtures"/"scene"/"slotfather"/"replies.json"
+        snapshot=json.loads(fixture.read_text())["status --json --full"]["json"]
+        snapshot["dashboard"].update(admission=0,memory_block=None,
+                                     load_block="CPU load 25.0: 22.0 unleased is at or above 12 cores",
+                                     memory_budget_block="expected memory 60000 MB exceeds 55706 MB (85% of 65536 MB)")
+        model=slotfather.decode(snapshot)
+        parts=tool.admission_note(model)
+        self.assertEqual([("memory budget full","bad"),(" · ","dim"),("CPU load high","bad")],parts[:3])
+        canvas=tool.Canvas(140,13)
+        tool.draw_machine(canvas,Rect(0,0,13,140),model)
+        top=canvas.lines(False)[0]
+        for reason in ("memory budget full","CPU load high"):
+            self.assertIn(reason,top)
+            self.assertEqual("bad",canvas.cells[0][top.index(reason)][1],reason)
+        snapshot["dashboard"].update(admission=2)
+        self.assertEqual([("admission: 2 slots","status-normal")],tool.admission_note(slotfather.decode(snapshot)),
+                         "admission open: no reason, whatever the fields say")
 
     def test_a_narrow_border_keeps_the_admission_and_drops_the_unleased_load(self):
         tool=load_dashboard()

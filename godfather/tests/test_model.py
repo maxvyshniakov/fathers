@@ -67,6 +67,26 @@ class SlotfatherTests(unittest.TestCase):
                 with self.assertRaisesRegex(slotfather.Unsupported, "process tree"):
                     slotfather.decode(found)
 
+    def test_the_load_and_memory_budget_blocks_decode_and_an_older_slotfather_sends_none(self) -> None:
+        """fathers#206: Slotfather's `load_block` (fathers#184) and `memory_budget_block`, None when absent (an older
+        Slotfather) or not a non-empty string."""
+        found = copy.deepcopy(scene_status())
+        found["dashboard"].pop("load_block", None)
+        found["dashboard"].pop("memory_budget_block", None)
+        model = slotfather.decode(found)
+        self.assertTrue({"load_block", "memory_budget_block"} <= set(model), "the adapter always sets them")
+        self.assertEqual((None, None), (model.get("load_block"), model.get("memory_budget_block")))
+        load = "CPU load 25.0: 22.0 unleased is at or above 12 cores"
+        budget = "expected memory 60000 MB exceeds 55706 MB (85% of 65536 MB)"
+        found["dashboard"].update(load_block=load, memory_budget_block=budget)
+        model = slotfather.decode(found)
+        self.assertEqual((load, budget), (model.get("load_block"), model.get("memory_budget_block")))
+        for bad in ("", 7, True, ["x"], {"why": "x"}):
+            with self.subTest(bad=bad):
+                found["dashboard"].update(load_block=bad, memory_budget_block=bad)
+                model = slotfather.decode(found)
+                self.assertEqual((None, None), (model.get("load_block"), model.get("memory_budget_block")))
+
     def test_unknown_keys_are_ignored_and_optional_ones_take_their_default(self) -> None:
         found = copy.deepcopy(scene_status())
         holder = found["dashboard"]["holders"][0]
