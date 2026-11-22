@@ -6,8 +6,9 @@ import fcntl
 import json
 import os
 from pathlib import Path
-import secrets
 from typing import Any
+
+from fathers_common.atomic import atomic_write
 
 from . import events
 from .adapters import ProviderAdapter, default_adapters
@@ -20,21 +21,6 @@ def default_state_dir() -> Path:
     if configured:
         return Path(os.path.expanduser(configured))
     return Path.home() / ".local" / "state" / "tokenfather"
-
-
-def _atomic_write(path: Path, text: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(f".{path.name}.{os.getpid()}.{secrets.token_hex(4)}.tmp")
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write(text)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(tmp, path)
-    except BaseException:
-        tmp.unlink(missing_ok=True)
-        raise
 
 
 @dataclass
@@ -76,7 +62,7 @@ class RollupStore:
 
     def save_cursors(self, cursors: dict[str, dict[str, Any]]) -> None:
         payload = {"v": 1, "files": cursors}
-        _atomic_write(self.cursors_path, json.dumps(payload, indent=2, sort_keys=True) + "\n")
+        atomic_write(self.cursors_path, json.dumps(payload, indent=2, sort_keys=True) + "\n", mode=0o600)
 
     def _read_new_lines(self, path: Path, cursor: dict[str, Any]) -> tuple[list[str], int, int, int]:
         st = path.stat()
@@ -150,7 +136,7 @@ class RollupStore:
             if not changed:
                 continue
             payload = "".join(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n" for row in rows)
-            _atomic_write(day_path, payload)
+            atomic_write(day_path, payload, mode=0o600)
             updated_days.append(day)
         return updated_days
 
