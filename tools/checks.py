@@ -325,8 +325,9 @@ def run_unittest_parallel(directory: Path, discover_args: list[str], environment
         completed = subprocess.run(argv, cwd=directory, env=environment, capture_output=True, text=True)
         file_elapsed = time.monotonic() - file_started
         ran, skipped = _parse_unittest_counts(completed.stderr)
+        code = 0 if completed.returncode == 5 and ran == 0 else completed.returncode
         return FileTestResult(index=index, relative=file.relative_to(directory).as_posix(),
-                              returncode=completed.returncode, stdout=completed.stdout, stderr=completed.stderr,
+                              returncode=code, stdout=completed.stdout, stderr=completed.stderr,
                               elapsed=file_elapsed, ran=ran, skipped=skipped)
 
     with ThreadPoolExecutor(max_workers=pool_size) as pool:
@@ -355,7 +356,7 @@ def run_unittest_parallel(directory: Path, discover_args: list[str], environment
     if failed:
         names = ", ".join(item.relative for item in failed)
         print(f"FAILED (files={len(failed)}: {names})", file=sys.stderr)
-        return failed[0].returncode
+        return 1 if failed[0].returncode < 0 else failed[0].returncode
     if total_skipped:
         print(f"OK (skipped={total_skipped})", file=sys.stderr)
     else:
