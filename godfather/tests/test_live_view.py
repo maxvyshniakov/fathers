@@ -1,9 +1,9 @@
 """The live view in a PTY (#15 batch), moved from Slotfather's LiveTests and VersionTests, against the fake
-Slotfather: details load in the background (GODFATHER_DETAILS_DELAY) while the selection moves at once, Tab focuses
-the details and arrows scroll them, EVENTS counts what arrives while scrolled, a resize redraws, and a newer install
-shows ↻ in the footer."""
+Slotfather: details load in the background while the selection moves at once, Tab focuses the details and arrows
+scroll them, EVENTS counts what arrives while scrolled, a resize redraws, and a newer install shows ↻ in the footer."""
 from __future__ import annotations
 
+import contextlib
 import fcntl
 import importlib.util
 import json
@@ -15,7 +15,6 @@ import subprocess
 import sys
 import tempfile
 import termios
-import time
 import unittest
 from pathlib import Path
 from typing import Any
@@ -27,30 +26,82 @@ from terminal import ENTRY, PLAIN, LiveCase, event, item
 
 class LiveTests(LiveCase):
     def test_moving_is_instant_and_ends_on_the_right_row_and_details(self) -> None:
-        self.queue(holders=[item(f"row{n}", 100 + n) for n in range(3)])
-        screen = self.start(rows=40, columns=140, GODFATHER_DETAILS_DELAY="1.5")
+        gates = self.fake.root / "gates"
+        gates.mkdir()
+        show_calls = self.fake.root / "lanefather-show.log"
+        # Lightweight fake lanefather advertising `show` v1; a FIFO under `gates/<lane>` deterministically holds
+        # `load_details` open until the test releases it, with no fixed sleeps or timing assertions.
+        fake_lane = self.fake.bin / "lanefather"
+        fake_lane.write_text(
+            "#!/bin/sh\n"
+            'if [ "$1" = "capabilities" ]; then\n'
+            '  printf \'%s\\n\' \'{"v":1,"tool":"lanefather","version":"0.9.0",'
+            '"dashboard":{"v":1,"tag":"lane","show":{"versions":[1]}}}\'\n'
+            "  exit 0\n"
+            "fi\n"
+            'if [ "$1" != "show" ]; then\n'
+            "  exit 2\n"
+            "fi\n"
+            'lane="$2"\n'
+            f'printf \'%s\\n\' "$lane" >> "{show_calls}"\n'
+            f'if [ -p "{gates}/$lane" ]; then\n'
+            f'  cat "{gates}/$lane" >/dev/null\n'
+            "fi\n"
+            'printf \'{"version":1,"id":"%s","project":"demo","status":"active"}\\n\' "$lane"\n'
+        )
+        fake_lane.chmod(0o755)
+
+        def calls() -> list[str]:
+            return show_calls.read_text().splitlines() if show_calls.exists() else []
+
+        self.queue(holders=[
+            item(f"row{n}", 100 + n, context={"lane": f"lane{n}", "lanefather.state": "/fake/state"})
+            for n in range(4)
+        ])
+        screen = self.start(rows=40, columns=140)
         text = screen.until(lambda text: re.search(r"label\s+row\d", text)
-                            and len(re.findall(r"▶️\s+row\d", text)) >= 3, 10, "the queue and the first row's details")
-        order = re.findall(r"▶️\s+(row\d)", text)[:3]
-        self.assertEqual(["row0", "row1", "row2"], order, "the snapshot's order")
+                            and len(re.findall(r"▶️\s+row\d", text)) >= 4, 10, "the queue and the first row's details")
+        order = re.findall(r"▶️\s+(row\d)", text)[:4]
+        self.assertEqual(["row0", "row1", "row2", "row3"], order, "the snapshot's order")
         self.assertRegex(text, rf"label\s+{order[0]}")
+
+        gate = gates / "lane1"
+        os.mkfifo(gate)
+        gate_fd: int | None = os.open(gate, os.O_RDWR)
+
+        def release_gate() -> None:
+            nonlocal gate_fd
+            with contextlib.suppress(FileNotFoundError):
+                gate.unlink()
+            if gate_fd is not None:
+                fd, gate_fd = gate_fd, None
+                os.close(fd)
+
+        self.addCleanup(release_gate)
         mark = screen.mark()
         screen.write(b"\x1b[B")
-        started = time.monotonic()
-        screen.until(lambda text: "loading" in text, 2, "the spinner", since=mark)
-        self.assertLess(time.monotonic() - started, 1.0, "the selection moves without waiting for the details")
+        screen.until(lambda text: "loading" in text, 8, "the spinner", since=mark)
+        screen.until(lambda _: "lane1" in calls(), 8, "row1 details load started")
+        self.assertNotRegex(screen.plain(mark), rf"label\s+{order[1]}",
+                            "the selection moves and shows the spinner while row1's load is still blocked")
         mark = screen.mark()
-        screen.write(b"\x1b[B\x1b[B\x1b[B")  # rapidly to the end
-        screen.until(lambda text: re.search(rf"label\s+{order[2]}", text), 8, "the last row's details", since=mark)
+        screen.write(b"\x1b[B\x1b[B\x1b[B")  # rapidly through row2 to the end (row3) while row1 is still blocked
+        screen.until(lambda _: any("▌" in line and order[3] in line for line in screen.rows(mark).values()),
+                     8, "the selection moved to the last row while row1 was still blocked")
+        release_gate()
+        screen.until(lambda text: re.search(rf"label\s+{order[3]}", text), 8, "the last row's details", since=mark)
+        self.assertNotIn("lane2", calls(), "row2's load was superseded while row1 was blocked")
         mark = screen.mark()
-        screen.write(b"\x1b[A")  # back to the middle row, whose load was superseded: it loads now
-        screen.until(lambda text: re.search(rf"label\s+{order[1]}", text), 8, "the middle row's details", since=mark)
+        screen.write(b"\x1b[A")  # back to row2, whose load was superseded: it loads now
+        screen.until(lambda text: re.search(rf"label\s+{order[2]}", text), 8, "the middle row's details", since=mark)
+        self.assertIn("lane2", calls())
+        calls_before_cached = calls()
         mark = screen.mark()
-        screen.write(b"\x1b[B")  # the last row again: cached, at once, no spinner
-        before = time.monotonic()
-        screen.until(lambda text: re.search(rf"label\s+{order[2]}", text), 1, "the last row from the cache",
-                     since=mark)
-        self.assertLess(time.monotonic() - before, 1.0)
+        screen.write(b"\x1b[B")  # the last row again: cached, at once, no spinner and no new load
+        cached_text = screen.until(lambda text: re.search(rf"label\s+{order[3]}", text), 8,
+                                   "the last row from the cache", since=mark)
+        self.assertNotIn("loading", cached_text, "cached details paint without a spinner")
+        self.assertEqual(calls_before_cached, calls(), "cached details do not re-fetch")
         self.assertEqual(0, screen.quit())
 
     def test_tab_focuses_the_details_and_arrows_scroll_them(self) -> None:

@@ -7,8 +7,9 @@
 tests/fixtures/scene/ is a GODFATHER_FIXTURES directory: the scene's `status --json --full` reply as the Slotfather
 adapter reads it, capabilities and a `settings --json` reply, with scene.json holding the frozen moment and the lane
 summaries the scene recorded, and CHANGELOG.md the changelog the changelog screen shows, so a new entry in the real
-one changes no golden. tests/goldens/ holds, for each screen, the plain text (`.txt`) and the exact escape
-sequences in the owner's two themes (`.seti.ansi`, Seti dark; `.prolight.ansi`, Pro Light): the overview wide
+one changes no golden. tests/goldens/ holds plain text (`.txt`) for every layout scene and exact escape sequences in
+the owner's two themes (`.seti.ansi`, Seti dark; `.prolight.ansi`, Pro Light) for the curated palette-representative
+subset (`COLOUR_SCENES`): the overview wide
 (156×43), at 100 and at 76 columns (one column), short (156×20 and 100×30), the help and Settings overlays, and what's new
 (fathers#102); and, from tests/fixtures/expected/ (the scene with lease ids, expected runs and an event log of an
 outlier and slower trends, fathers#108), the overview at 100 columns with an overrun lease and with a waiter
@@ -554,20 +555,53 @@ def unleased_screen(name: str, theme: str | None) -> str:
         return canvas.render(theme is not None)
 
 
+# Curated palette-representative subset that keeps .seti.ansi and .prolight.ansi colour goldens alongside every
+# scene's .txt layout golden (fathers#221). Pure-layout size/filter variants stay .txt-only.
+COLOUR_SCENES: frozenset[str] = frozenset({
+    "overview-156x43",
+    "help-156x43",
+    "settings-mixed-156x43",
+    "unread-156x43",
+    "whatsnew-156x43",
+    "expected-100x40",
+    "focus-events-156x43",
+    "mixed-156x43",
+    "mixed-filter-156x43",
+    "lanes-156x43",
+    "procs-156x43",
+    "slot-lock-log-120x7",
+    "admission-memory-72x13",
+    "admission-open-72x13",
+    "unleased-side-72x7",
+})
+
+
 def goldens() -> dict[str, str]:
     found: dict[str, str] = {}
+    scenes: set[str] = set()
     for name in SCREENS:
+        scenes.add(name)
         found[f"{name}.txt"] = render(name, None) + "\n"
-        for theme in THEMES:
-            found[f"{name}.{theme}.ansi"] = render(name, theme) + "\n"
+        if name in COLOUR_SCENES:
+            for theme in THEMES:
+                found[f"{name}.{theme}.ansi"] = render(name, theme) + "\n"
     for name in ADMISSION:
-        found[f"admission-{name}-72x13.txt"] = admission_screen(name, None) + "\n"
-        for theme in THEMES:
-            found[f"admission-{name}-72x13.{theme}.ansi"] = admission_screen(name, theme) + "\n"
+        scene = f"admission-{name}-72x13"
+        scenes.add(scene)
+        found[f"{scene}.txt"] = admission_screen(name, None) + "\n"
+        if scene in COLOUR_SCENES:
+            for theme in THEMES:
+                found[f"{scene}.{theme}.ansi"] = admission_screen(name, theme) + "\n"
     for name, (width, height) in UNLEASED.items():
-        found[f"unleased-{name}-{width}x{height}.txt"] = unleased_screen(name, None) + "\n"
-        for theme in THEMES:
-            found[f"unleased-{name}-{width}x{height}.{theme}.ansi"] = unleased_screen(name, theme) + "\n"
+        scene = f"unleased-{name}-{width}x{height}"
+        scenes.add(scene)
+        found[f"{scene}.txt"] = unleased_screen(name, None) + "\n"
+        if scene in COLOUR_SCENES:
+            for theme in THEMES:
+                found[f"{scene}.{theme}.ansi"] = unleased_screen(name, theme) + "\n"
+    unknown = COLOUR_SCENES - scenes
+    if unknown:
+        raise ValueError(f"COLOUR_SCENES names unknown scenes: {sorted(unknown)}")
     return found
 
 
@@ -588,18 +622,26 @@ def raster_goldens() -> dict[str, Any]:
 
 def main(argv: list[str]) -> int:
     if argv == ["--check"]:
-        bad = [name for name, text in goldens().items()
+        expected = goldens()
+        bad = [name for name, text in expected.items()
                if not (GOLDENS / name).is_file() or (GOLDENS / name).read_text() != text]
+        extra = sorted(path.name for path in GOLDENS.glob("*.*") if path.name not in expected)
         for name in bad:
             print(f"differs: tests/goldens/{name}", file=sys.stderr)
-        return 1 if bad else 0
+        for name in extra:
+            print(f"unexpected: tests/goldens/{name}", file=sys.stderr)
+        return 1 if (bad or extra) else 0
     write_scene()
     write_expected()
     write_mixed()
     write_lanes()
     write_procs()
     GOLDENS.mkdir(parents=True, exist_ok=True)
-    for name, text in goldens().items():
+    written = goldens()
+    for stale in GOLDENS.glob("*.*"):
+        if stale.name not in written:
+            stale.unlink()
+    for name, text in written.items():
         (GOLDENS / name).write_text(text)
     try:
         pictures = raster_goldens()
@@ -609,7 +651,7 @@ def main(argv: list[str]) -> int:
     for name, image in pictures.items():
         (GOLDENS / "raster").mkdir(exist_ok=True)
         image.save(GOLDENS / "raster" / name, format="PNG")
-    print(f"wrote {SCENE.relative_to(ROOT)} and {len(SCREENS) * 3 + len(pictures)} goldens in "
+    print(f"wrote {SCENE.relative_to(ROOT)} and {len(written) + len(pictures)} goldens in "
           f"{GOLDENS.relative_to(ROOT)}")
     return 0
 

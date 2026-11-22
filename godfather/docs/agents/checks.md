@@ -20,11 +20,11 @@ module table and Status.
 
 ## Goldens and pictures
 
-- `tests/goldens/` holds every `--once` screen as text and as colour escapes. After a deliberate visible change,
-  `python3 tools/goldens.py` rewrites them: read every diff it makes before committing it.
-- `python3 tools/raster.py --goldens OUTDIR` draws them as PNGs; `tools/compare_media.py` diffs two pictures.
-- `tests/test_parity.py` compares the overview with Slotfather's frozen dashboard output, except where Godfather
-  changed on purpose (README.md, Develop).
+- `tests/goldens/` holds every `--once` screen as text and a curated palette-representative subset as colour escapes
+  in Seti and Pro Light. After a deliberate visible change, `python3 tools/goldens.py` rewrites them: read every diff
+  it makes before committing it.
+- `python3 tools/raster.py --goldens OUTDIR` draws the colour goldens as PNGs; `tools/compare_media.py` diffs two
+  pictures.
 
 ## Live tests
 

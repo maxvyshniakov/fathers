@@ -45,7 +45,7 @@ def held_history(events: list[dict[str, Any]], held_now: int, now_moment: dateti
 def history_window(model: Model) -> float:
     """The seconds the history chart spans: HISTORY_WINDOW, or the model's `history_window`. That key is no part of
     Slotfather's contract (docs/contracts/slotfather.md) and its adapter never sets it: only tools/dashboard-demo.py
-    (its 60 s zoom) and the goldens and parity test drawing that scene put it into the model they draw."""
+    (its 60 s zoom) and the goldens drawing that scene put it into the model they draw."""
     return float(model.get("history_window") or HISTORY_WINDOW)
 
 

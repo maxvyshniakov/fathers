@@ -21,6 +21,12 @@ import sys
 import time
 from typing import Any, cast
 
+_SRC = str(Path(__file__).resolve().parents[1] / "src")
+if _SRC not in sys.path:
+    sys.path.insert(0, _SRC)
+
+from godfather import eventcheck  # noqa: E402
+
 CORES_PER_SLOT, AUTO_GIB_PER_SLOT, CAPACITY_PER_CORE = 3, 4.0, 4
 # From the default row of the real `slotfather settings --json` in an isolated queue. Per-read fields belong below.
 RESERVATION = cast(dict[str, Any], json.loads(
@@ -306,6 +312,16 @@ def host() -> str:
     return name.strip("-") or "localhost"
 
 
+def append_event(path: Path, event: dict[str, Any]) -> None:
+    """Validate `event` strictly against the shared v1 event schema before appending to `path`."""
+    line = json.dumps(event) + "\n"
+    problems = eventcheck.validate(event, strict=True) or eventcheck.validate_line(line, strict=True)
+    if problems:
+        raise ValueError("fake_slotfather emitted invalid event: " + "; ".join(problems))
+    with open(path, "a", encoding="utf-8") as log:
+        log.write(line)
+
+
 def action(state: dict[str, Any], argv: list[str]) -> int:
     """`reprioritize PID CLASS --start START` and `ask-yield PID --start START` on the snapshot's rows, Slotfather's
     way: the pid and start must name a row, the change is saved in the snapshot, the event goes to the event log
@@ -325,22 +341,35 @@ def action(state: dict[str, Any], argv: list[str]) -> int:
     details: dict[str, Any]
     actor = os.environ.get("GODFATHER_ACTOR", "")
     if argv[0] == "reprioritize":
-        kind, details = "request.reprioritized", {"from": row.get("priority"), "to": argv[2]}
+        kind = "request.reprioritized"
+        details = {"from": row.get("priority"), "to": argv[2],
+                   "state": "held" if row.get("kind") != "waiting" else "waiting"}
         row["priority"] = argv[2]
         print(f"{row.get('label')} (pid {pid}, held): {argv[2]}")
     else:
-        kind, details = "lease.yield_asked", {"for": "the waiter"}
-        row["asked"], row["asked_at"] = "the waiter", row.get("granted")
-        print(f"{row.get('label')} (pid {pid}): asked to yield 1 slot(s) for the waiter")
+        waiters = cast(list[dict[str, Any]], block.get("waiters", []))
+        waiter = waiters[0] if waiters else {}
+        waiter_label = str(waiter.get("label") or "the waiter")
+        peer: dict[str, Any] = {
+            "id": f"r-{waiter['pid']}" if waiter.get("pid") else "r-waiter",
+            "label": waiter_label,
+            "priority": str(waiter.get("priority") or "interactive"),
+        }
+        count = int(row.get("count") or 1)
+        kind, details = "lease.yield_asked", {"count": count, "for": peer, "by_hand": True}
+        row["asked"], row["asked_at"] = waiter_label, row.get("granted")
+        print(f"{row.get('label')} (pid {pid}): asked to yield {count} slot(s) for {waiter_label}")
     save(state)
     now = datetime.datetime.now(datetime.UTC)
+    subject: dict[str, Any] = {"type": "request", "id": f"r-{pid}", "pid": pid}
+    if isinstance(row.get("label"), str):
+        subject["label"] = row["label"]
     event: dict[str, Any] = {"v": 1, "time": now.strftime("%Y-%m-%dT%H:%M:%S.") + f"{now.microsecond // 1000:03d}Z",
              "host": host(), "source": "slotfather", "kind": kind,
-             "subject": {"type": "request", "id": f"r-{pid}", "label": row.get("label"), "pid": pid},
+             "subject": subject,
              "actor": {"type": "process", "pid": os.getpid(), **({"via": actor.split("/")[0]} if actor else {})},
              "details": details}
-    with open(os.path.join(os.path.dirname(os.path.abspath(PATH)), "events.jsonl"), "a", encoding="utf-8") as log:
-        log.write(json.dumps(event) + "\n")
+    append_event(Path(PATH).resolve().parent / "events.jsonl", event)
     with open(PATH + ".env", "a", encoding="utf-8") as handle:
         handle.write(json.dumps({"argv": argv, "GODFATHER_ACTOR": actor}) + "\n")
     return 0

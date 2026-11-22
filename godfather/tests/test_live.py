@@ -11,7 +11,6 @@ import os
 import re
 import select
 import threading
-import time
 import unittest
 from typing import Any, Callable, Protocol, cast
 
@@ -70,31 +69,35 @@ class LoaderTests(unittest.TestCase):
         read, write = os.pipe()
         self.addCleanup(os.close, read)
         self.addCleanup(os.close, write)
-        gate, seen = threading.Event(), cast(list[str], [])
+        started, gate, seen = threading.Event(), threading.Event(), cast(list[str], [])
 
         def work(argument: str) -> str:
             seen.append(argument)
             if argument == "a":
+                started.set()
                 gate.wait(5)
             return argument.upper()
 
         tool_ = tool()
         loader = tool_.Loader(work, write)
         loader.request("a", "a")
-        time.sleep(0.05)
+        self.assertTrue(started.wait(5), "worker picked up a")
         loader.request("b", "b")  # waits behind a
         loader.request("c", "c")  # replaces b: quick moves load only the row they end on
         self.assertTrue(loader.wants("c"))
         self.assertFalse(loader.wants("b"))
         gate.set()
-        deadline = time.monotonic() + 5
         results: list[Any] = []
-        while len(results) < 2 and time.monotonic() < deadline:
+        woke = False
+        while len(results) < 2:
+            ready = select.select([read], [], [], 5)[0]
+            self.assertTrue(ready, "each result wakes the main loop")
+            woke = True
+            os.read(read, 64)
             results += loader.take()
-            time.sleep(0.01)
+        self.assertTrue(woke)
         self.assertEqual(["a", "c"], seen)
         self.assertEqual([("a", "A"), ("c", "C")], [(key, value) for key, value, _ in results])
-        self.assertTrue(select.select([read], [], [], 0)[0], "each result wakes the main loop")
 
     def test_a_result_is_kept_under_its_own_key_never_the_selected_one(self) -> None:
         view = tool()

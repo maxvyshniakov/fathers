@@ -6,8 +6,7 @@ import view as _view
 import itertools
 import os
 import re
-import threading
-import time
+import select
 import unittest
 from typing import Any
 from unittest import mock
@@ -351,18 +350,23 @@ class ReplyTests(unittest.TestCase):
     def test_ask_reads_replies_split_across_reads_until_the_device_attributes(self) -> None:
         reader, writer, query_out, query_in = self.pipes()
         pieces = [b"\x1b]11;rgb:fd", b"fd/fcfc/fafa\x1b", b"\\x\x1b]10;rgb:2a2a/2a2a/2a2a\x07", b"\x1b[?62;", b"22c"]
+        remaining = iter(pieces)
+        real_select = select.select
+        select_calls = 0
 
-        def terminal() -> None:
-            for piece in pieces:
-                time.sleep(0.02)
-                os.write(writer, piece)
+        def feeding_select(rlist: Any, wlist: Any, xlist: Any, timeout: float) -> Any:
+            nonlocal select_calls
+            select_calls += 1
+            piece = next(remaining, None)
+            if piece is None:
+                return ([], [], [])
+            os.write(writer, piece)
+            return real_select(rlist, wlist, xlist, timeout)
 
-        thread = threading.Thread(target=terminal)
-        thread.start()
-        answers, started = theme.Answers(), time.monotonic()
-        typed = theme.ask(reader, query_in, answers, timeout=3)
-        thread.join()
-        self.assertLess(time.monotonic() - started, 2, "the device attributes end the wait, not the timeout")
+        answers = theme.Answers()
+        with mock.patch.object(theme.select, "select", side_effect=feeding_select):
+            typed = theme.ask(reader, query_in, answers, timeout=3, clock=lambda: 0.0)
+        self.assertEqual(len(pieces), select_calls, "the device attributes end the wait, not the timeout")
         self.assertEqual((LIGHT_BG, LIGHT_FG, "x", True), (answers.background, answers.foreground, typed,
                                                             answers.finished))
         asked = os.read(query_out, 4096)
@@ -372,11 +376,21 @@ class ReplyTests(unittest.TestCase):
 
     def test_ask_gives_up_after_the_timeout_without_an_answer(self) -> None:
         reader, _writer, _query_out, query_in = self.pipes()
-        answers, started = theme.Answers(), time.monotonic()
-        self.assertEqual("", theme.ask(reader, query_in, answers))
-        elapsed = time.monotonic() - started
-        self.assertGreaterEqual(elapsed, theme.QUERY_TIMEOUT * 0.9)
-        self.assertLess(elapsed, 1.0, "about 100 ms in all, with room for a loaded machine")
+        now = [10.0]
+        waited: list[float] = []
+
+        def timed_out_select(rlist: Any, _wlist: Any, _xlist: Any, timeout: float) -> Any:
+            self.assertEqual([reader], rlist)
+            waited.append(timeout)
+            now[0] += timeout
+            return ([], [], [])
+
+        answers = theme.Answers()
+        with mock.patch.object(theme.select, "select", side_effect=timed_out_select):
+            self.assertEqual("", theme.ask(reader, query_in, answers, clock=lambda: now[0]))
+        self.assertEqual(1, len(waited))
+        self.assertAlmostEqual(theme.QUERY_TIMEOUT, waited[0])
+        self.assertFalse(answers.finished)
         self.assertEqual((None, None, {}), (answers.background, answers.foreground, answers.palette))
 
     def test_a_stray_osc_start_never_holds_the_keys_after_it(self) -> None:

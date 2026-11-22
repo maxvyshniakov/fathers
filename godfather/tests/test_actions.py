@@ -569,10 +569,16 @@ class StandInTests(unittest.TestCase):
         self.assertEqual(["ask-yield", "300", "--start", START], line["argv"])
         self.assertTrue(line["GODFATHER_ACTOR"].startswith("godfather/"))
         events = [json.loads(text) for text in (case.fake.root / "events.jsonl").read_text().splitlines()]
+        from godfather import eventcheck
+
+        for emitted in events:
+            self.assertEqual([], eventcheck.validate(emitted, strict=True), emitted)
         asked = [event for event in events if event["kind"] == "lease.yield_asked"]
         self.assertEqual("godfather", asked[-1]["actor"]["via"])
+        self.assertEqual({"count": 1, "for": {"id": "r-301", "label": "hurry", "priority": "interactive"},
+                          "by_hand": True}, asked[-1]["details"])
         screen.write("\t")  # EVENTS: the event is there, with the run's rows
-        screen.receive("asked", since=at)
+        screen.receive("asked", "for hurry", since=at)
         at = screen.mark()
         screen.write("\t\t\r")  # back to QUEUE, its menu again: reprioritize to interactive
         screen.receive("ACTIONS", since=at)
@@ -580,7 +586,19 @@ class StandInTests(unittest.TestCase):
         screen.until(lambda _: "reprioritize" in written.read_text(), what="the reprioritize")
         line = json.loads(written.read_text().splitlines()[-1])
         self.assertEqual(["reprioritize", "300", "interactive", "--start", START], line["argv"])
+        reprioritized = [json.loads(text) for text in (case.fake.root / "events.jsonl").read_text().splitlines()][-1]
+        self.assertEqual([], eventcheck.validate(reprioritized, strict=True))
+        self.assertEqual("request.reprioritized", reprioritized["kind"])
         self.assertEqual(0, screen.quit())
+
+    def test_fake_slotfather_rejects_invalid_events_strictly(self) -> None:
+        import fake_slotfather
+
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / "events.jsonl"
+            with self.assertRaisesRegex(ValueError, "invalid event"):
+                fake_slotfather.append_event(log, {"v": 1, "kind": "lease.yield_asked", "extra": True})
+            self.assertFalse(log.exists())
 
 
 class ContractTests(unittest.TestCase):

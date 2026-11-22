@@ -296,7 +296,7 @@ class Screen:
     def load_details(self, item: Request) -> tuple[Any, str | None]:
         """A request's slow facts, off the main thread (#15): its holder's directory (lsof or /proc) and, where
         Lanefather's status snapshot does not join it to a lane, its lane from `lanefather show` when Lanefather
-        advertises it (fathers#85). GODFATHER_DETAILS_DELAY, a test seam, adds seconds first."""
+        advertises it (fathers#85)."""
         return load_details(item, self.clients["lanefather"].discover(), runner=self._runner, cache=self.show_cache)
 
     def load_news(self, _: Any = None) -> _news.News:
@@ -392,12 +392,7 @@ def load_details(
     cache: _lanefather.ShowCache | None = None,
 ) -> tuple[Any, str | None]:
     """A request's slow facts, off the main thread (#15): its holder's directory (lsof or /proc) and its lane from
-    `lanefather show` where Lanefather's status snapshot (`lanes`, its source) does not join it already.
-    GODFATHER_DETAILS_DELAY, a test seam, adds seconds first."""
-    with contextlib.suppress(ValueError):
-        delay = float(os.environ.get("GODFATHER_DETAILS_DELAY") or 0)
-        if delay > 0:
-            time.sleep(delay)
+    `lanefather show` where Lanefather's status snapshot (`lanes`, its source) does not join it already."""
     state = lanes.state() if isinstance(lanes, ToolClient) else lanes
     found = item.copy()
     if item.get("kind") != "waiting":

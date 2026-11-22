@@ -1,6 +1,7 @@
 """Godfather's screens of Slotfather's recorded scene, through fixture mode and the Slotfather adapter, match the
-goldens in tests/goldens/ exactly: text and the escape sequences in Seti and Pro Light (tools/goldens.py writes
-them; run it after a deliberate visible change and review the diff)."""
+goldens in tests/goldens/ exactly: plain text for every layout scene and the escape sequences in Seti and Pro Light
+for the curated palette-representative subset (tools/goldens.py writes them; run it after a deliberate visible change
+and review the diff)."""
 from __future__ import annotations
 
 import importlib.util
@@ -25,10 +26,12 @@ class GoldenTests(unittest.TestCase):
     def test_every_screen_matches_its_golden(self) -> None:
         tool = goldens_tool()
         found = tool.goldens()
-        self.assertEqual(81 + 9 * 3 + 4 * 3 * 3 + 6 + 2 * 3, len(found))  # fathers#152, #85, #86, #169, #162, #203, #206
+        expected_paths = {tool.GOLDENS / name for name in found}
+        self.assertEqual(expected_paths, set(tool.GOLDENS.glob("*.*")),
+                         "tests/goldens/ must match tools/goldens.py exactly")
         for name, text in found.items():
             with self.subTest(name):
-                self.assertEqual((ROOT / "tests" / "goldens" / name).read_text(), text,
+                self.assertEqual((tool.GOLDENS / name).read_text(), text,
                                  f"{name} differs; python3 tools/goldens.py rewrites it")
 
 

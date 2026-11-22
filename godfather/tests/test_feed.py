@@ -149,14 +149,22 @@ class ReplayTests(unittest.TestCase):
 
                 with mock.patch.object(client, "refresh", side_effect=delayed_refresh):
                     live = app.Live(0, 1, screen, 1.0, "auto")
+                    finished = threading.Event()
+                    real_work = live.models.work
+
+                    def tracked_work(argument: Any = None) -> Any:
+                        try:
+                            return real_work(argument)
+                        finally:
+                            finished.set()
+
+                    live.models.work = tracked_work
                     live.load_model()
                     self.assertTrue(entered.wait(5), "model loader entered poll")
                     live.close()
                     self.assertTrue(screen.closed)
                     release.set()
-                    deadline = __import__("time").monotonic() + 5
-                    while live.models.wants("model") and __import__("time").monotonic() < deadline:
-                        __import__("time").sleep(0.01)
+                    self.assertTrue(finished.wait(5), "in-flight model load finished")
                 self.assertTrue(all(tail.handle is None for tail in screen.feed.tails.values()),
                                 "in-flight load must not reopen a tail after close")
                 self.assertEqual((None, None), screen.load(), "a closed screen does not load again")
