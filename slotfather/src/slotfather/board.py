@@ -431,34 +431,44 @@ def dashboard_admission(waiters: list[dict[str, Any]], held: list[dict[str, Any]
     `memory_default_mb` setting) exceed `memory_share` of `ram_mb` (schedule.budget_wait(), fathers#206)."""
     used = sum(_entry.holds(entry, slots) for entry in held) + other
     free = max(0, slots - used)
-    if load_block and used:  # schedule.memory_gate()'s `load`: an idle machine still starts its first request
+    if not free:
         return 0
     share = float(settings.get("memory_share", _config.ORDER_DEFAULTS["memory_share"]))
     need_mb = float(settings.get("memory_default_mb", _config.ORDER_DEFAULTS["memory_default_mb"])) \
         if memory_need_mb is None else memory_need_mb
-    if used and _schedule.budget_wait(memory_expected_mb, need_mb, ram_mb, share):  # memory_gate()'s budget
-        return 0
-    memory_block = memory_block or load_block
-    if free and memory_block and used and memory_kind == "warning" and \
-            float(settings.get("warning_admits", 1)) >= 1:  # schedule.memory_gate()
-        if any(entry.get(_entry.PRESSED) for entry in held):
+    moment = time.time()
+    window = _config.overtake_window()
+    if used:
+        if load_block or _schedule.budget_wait(memory_expected_mb, need_mb, ram_mb, share):
             return 0
-        return min(1, _schedule.room(waiters, free, held, estimate, other, settings=settings, slots=slots,
-                                     moment=time.time(), window=_config.overtake_window())
-                   if waiters else free)
-    if not free or memory_block and used:
-        return 0
+        if memory_block:
+            if memory_kind == "warning" and float(settings.get("warning_admits", 1)) >= 1:
+                if any(entry.get(_entry.PRESSED) for entry in held):
+                    return 0
+                if not waiters:
+                    return 1
+                probe: dict[str, Any] = dict(count=1, label="", cmd="", since=_config.now())
+                found = _schedule.plan(waiters + [probe], held, slots, moment, estimate=estimate,
+                                       other=other, settings=settings, window=window)
+                gated = _schedule.memory_gate(found.grants, held, used, ("warning", memory_block), settings,
+                                              granted_counts=found.granted_counts)
+                return 1 if any(entry is probe and why is None for entry, why in gated) else 0
+            return 0
+        if not waiters:
+            return free
+        return _schedule.room(waiters, free, held, estimate, other, settings=settings, slots=slots, moment=moment,
+                              window=window)
     if not waiters:
         return free
-    if memory_block:
-        # On an idle host only the first planned grant bypasses the memory gate.
+    if memory_block or load_block:
+        # On an idle host only the first planned grant bypasses the memory or CPU load gate.
         # A new generic request may rank ahead of a lower-priority existing waiter.
-        probe: dict[str, Any] = dict(count=free, label="", cmd="", since=_config.now())
-        found = _schedule.plan(waiters + [probe], held, slots, time.time(), estimate=estimate,
-                               other=other, settings=settings, window=_config.overtake_window())
+        probe = dict(count=free, label="", cmd="", since=_config.now())
+        found = _schedule.plan(waiters + [probe], held, slots, moment, estimate=estimate,
+                               other=other, settings=settings, window=window)
         return free if found.grants and found.grants[0] is probe else 0
-    return _schedule.room(waiters, free, held, estimate, other, settings=settings, slots=slots, moment=time.time(),
-                          window=_config.overtake_window())
+    return _schedule.room(waiters, free, held, estimate, other, settings=settings, slots=slots, moment=moment,
+                          window=window)
 
 
 def dashboard_model(look: _query.Look | None = None) -> dict[str, Any]:

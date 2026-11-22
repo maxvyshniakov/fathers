@@ -290,6 +290,45 @@ class SessionTests(unittest.TestCase):
         self.assertEqual({100: "spared", 101: "spared"}, {pid: i["action"] for pid, i in found.items()})
         self.assertIn("the session works in the same removed directory", found[100]["reason"])
 
+    def test_a_spared_child_spares_its_stopping_ancestor(self):
+        """fathers#211: stopping an ancestor kills its whole tree, so a spared descendant spares its stopping
+        ancestors too and is never left inside a stop or would-stop tree."""
+        gone, wt = f"{HOME}/sweep-fixture-gone", f"{HOME}/sweep-fixture-wt"
+        procs = [proc(40, 1, self.CLAUDE),
+                 proc(100, 40, "/bin/zsh -c parent-shell", age=30 * 3600),
+                 proc(101, 100, "/bin/zsh -c recent-child", age=30 * 3600),
+                 proc(102, 100, "/bin/zsh -c old-sibling", age=30 * 3600),
+                 proc(103, 40, "/bin/zsh -c parent-argv-child", age=30 * 3600),
+                 proc(104, 103, f"node /w/node_modules/vitest/vitest.mjs --root {wt}/scratch/x", age=7 * 3600),
+                 proc(105, 40, "/bin/zsh -c grandparent", age=30 * 3600),
+                 proc(106, 105, "/bin/zsh -c middle", age=30 * 3600),
+                 proc(107, 106, "/bin/zsh -c spared-grandchild", age=30 * 3600)]
+        cwds = {100: sweep_plan.Cwd(gone, True), 101: sweep_plan.Cwd(gone, True), 102: sweep_plan.Cwd(gone, True),
+                103: sweep_plan.Cwd(gone, True), 104: sweep_plan.Cwd("/w", False),
+                105: sweep_plan.Cwd(gone, True), 106: sweep_plan.Cwd(gone, True), 107: sweep_plan.Cwd(gone, True)}
+        seen = {sweep_plan.gone_key(procs[1]): NOW - 7 * 3600,
+                sweep_plan.gone_key(procs[2]): NOW - 1 * 3600,
+                sweep_plan.gone_key(procs[3]): NOW - 7 * 3600,
+                sweep_plan.gone_key(procs[4]): NOW - 7 * 3600,
+                sweep_plan.gone_key(procs[6]): NOW - 7 * 3600,
+                sweep_plan.gone_key(procs[7]): NOW - 7 * 3600,
+                sweep_plan.gone_key(procs[8]): NOW - 1 * 3600}
+        for live, stop_action in ((True, "stop"), (False, "would-stop")):
+            with self.subTest(live=live):
+                found = plan(snap(procs, cwds, gone=(gone, f"{wt}/scratch")), live=live, gone_since=seen)
+                self.assertEqual({100: "spared", 101: "spared", 102: stop_action, 103: "spared", 104: "spared",
+                                  105: "spared", 106: "spared", 107: "spared"},
+                                 {pid: i["action"] for pid, i in found.items()})
+                self.assertIn("a spared process (pid 101) in its tree", found[100]["reason"])
+                self.assertIn("a spared process (pid 104) in its tree", found[103]["reason"])
+                self.assertIn("a spared process (pid 107) in its tree", found[105]["reason"])
+                self.assertIn("a spared process (pid 107) in its tree", found[106]["reason"])
+                self.assertEqual([102], found[102]["tree"], "sibling without spared children still stops on its own")
+                spared_pids = {pid for pid, i in found.items() if i["action"] == "spared"}
+                for item in found.values():
+                    if item["action"] in ("stop", "would-stop"):
+                        self.assertEqual(set(), spared_pids & set(item["tree"]))
+
     def test_the_state_keeps_when_a_cwd_was_first_seen_gone(self):
         gone = f"{HOME}/sweep-fixture-gone"
         procs = [proc(100, 1, "sleep 1"), proc(101, 1, "sleep 2"), proc(102, 1, "sleep 3", uid=0)]

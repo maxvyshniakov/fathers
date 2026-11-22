@@ -131,6 +131,15 @@ class DashboardAdmissionTests(unittest.TestCase):
         self.assertEqual(0, sf_board.dashboard_admission([], held, 4, 0, "level 2", None,
                                                          {**settings, "warning_admits": 0.0}, "warning"))
         self.assertEqual(3, sf_board.dashboard_admission([], held, 4, 0, None, None, settings, "normal"))
+        # fathers#211: under warning, an earlier 1-slot waiter consumes the warning allowance; a refused 2-slot one
+        # or lower-priority batch waiter does not.
+        one = {"count": 1, "label": "one", "cmd": "work", "since": sf_config.now(), "state": "waiting"}
+        two = {"count": 2, "label": "two", "cmd": "work", "since": sf_config.now(), "state": "waiting"}
+        batch = {"count": 1, "label": "low", "cmd": "work", "since": sf_config.now(), "state": "waiting",
+                 "priority": "batch"}
+        self.assertEqual(0, sf_board.dashboard_admission([one], held, 4, 0, WARNING, None, settings, "warning"))
+        self.assertEqual(1, sf_board.dashboard_admission([two], held, 4, 0, WARNING, None, settings, "warning"))
+        self.assertEqual(1, sf_board.dashboard_admission([batch], held, 4, 0, WARNING, None, settings, "warning"))
 
 
 class GrantTests(SlotCase):
@@ -204,6 +213,21 @@ class GrantTests(SlotCase):
         self.grant("8000 2")
         self.assertEqual(("waiting", "held"), (self.state_of(pair), self.state_of(lone)),
                          "a 1-slot request behind a refused larger one starts under warning")
+
+    def test_expected_matches_grant_for_range_requests_under_warning(self) -> None:
+        """fathers#211: query.expected() passes found.granted_counts to memory_gate(), so a -n 1-2 request planned
+        for 2 free slots under warning reports memory_wait and does not falsely consume the allowance."""
+        self.entry("running", 1, "held")
+        ranged = self.entry("ranged", 1, min_count=1, max_count=2)
+        lone = self.entry("lone", 1)
+        self.memory.write_text("8000 2\n")
+        with mock.patch.dict(os.environ, self.env, clear=True):
+            snap: dict[str, Any] = cast(Any, sf_query).status_json(self.state)
+        by_label = {e["label"]: e for e in snap["entries"]}
+        self.assertEqual((WARNING, None), (by_label["ranged"]["memory_wait"], by_label["ranged"]["est_start"]))
+        self.assertIsNone(by_label["lone"]["memory_wait"])
+        self.assertEqual(WARNING, self.grant("8000 2"))
+        self.assertEqual(("waiting", "held"), (self.state_of(ranged), self.state_of(lone)))
 
     def test_critical_and_low_swap_stop_every_request(self):
         for memory in ("8000 4", "100 1", "100 2"):

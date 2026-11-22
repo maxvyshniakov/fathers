@@ -190,7 +190,7 @@ def expected(directory: Path, entries: list[dict[str, Any]], slots: int, other: 
     held_back = {id(e): why for e, why in _schedule.memory_gate(
         found.grants, held, used, memory, shared,
         memory_estimate=_queue.memory_estimator(directory) if ram_mb is not None else None,
-        ram_mb=ram_mb, load=load) if why}
+        ram_mb=ram_mb, granted_counts=found.granted_counts, load=load) if why}
     warn = float(settings.get("warn_wait") or 0)
     # fathers#160: the slots no request takes now, and the leases with no end estimate a head waits on
     idle = max(0, slots - used - sum(_entry.holds(e, slots) for e in found.grants))

@@ -133,10 +133,12 @@ def ask_yield(pid: int, start: str, directory: Path | None = None) -> tuple[dict
             raise _config.SlotError(f"{entry.get('label')} (pid {pid}) did not take --yieldable: it cannot yield")
         if int(entry.get("yields") or 0) >= _config.YIELDS_MAX:
             raise _config.SlotError(f"{entry.get('label')} (pid {pid}) has yielded {_config.YIELDS_MAX} times, the most")
+        settings = _settings.order_settings(directory, environment=False)
+        if settings["order"] != "backfill":
+            raise _config.SlotError("window order does not support yield requests: nothing was asked")
         before = _state.asked(path)
         if before is not None and any(p.stem == before.get("by") and _entry.is_waiting(e) for p, e in live):
             return entry, before, True  # a request that stands; one naming a waiter gone is replaced below
-        settings = _settings.order_settings(directory, environment=False)
         moment = time.time()
         own = CLASS_RANK[_entry.priority_of(entry)]  # its own class, as schedule.yield_asks() compares it
         waiters = [(p, e) for p, e in live if _entry.is_waiting(e)]
@@ -187,6 +189,8 @@ def yield_lease(path: Path) -> tuple[dict[str, Any], dict[str, Any]] | None:
         live = _queue.reap(directory, _queue.process_table(directory))
         asker = next((e for p, e in live if p.stem == request.get("by") and _entry.is_waiting(e)), None)
         settings = _settings.order_settings(directory, environment=False)
+        if settings["order"] != "backfill":
+            asker = None
         behind = _schedule.rank_time(asker, settings, time.time()) + _config.YIELD_BEHIND if asker is not None else None
         if asker is not None:  # would the asker start? Things may have changed since it asked.
             table = _queue.process_table(directory)

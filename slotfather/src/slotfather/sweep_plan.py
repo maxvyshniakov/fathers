@@ -402,6 +402,15 @@ def plan(snap: Snapshot, settings: Mapping[str, Any], protected: Mapping[int, st
                 item["action"] = "stop" if live else "would-stop"
         else:
             item["action"] = "report"
+    # A spared descendant in a stopping candidate's tree spares the ancestor too so stopping the tree never kills it.
+    spared = {item["pid"] for item in found if item["action"] == "spared"}
+    for item in found:
+        if item["action"] not in ("stop", "would-stop"):
+            continue
+        child = next((p for p in item["tree"] if p != item["pid"] and p in spared), None)
+        if child is not None:
+            item.update(action="spared",
+                        reason=f"{item['reason']}; a spared process (pid {child}) in its tree")
     # A candidate inside another that will be stopped goes with it; one inside another reported under a session is
     # in that one's tree.
     stopping = {item["pid"] for item in found if item["action"] in ("stop", "would-stop")}

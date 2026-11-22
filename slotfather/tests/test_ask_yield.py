@@ -11,7 +11,7 @@ import time
 from typing import Any
 
 from test_classes import YIELDER
-from test_slotfather import TOOL, SlotCase
+from test_slotfather import TOOL, WORK, SlotCase
 
 
 class AskYieldTests(SlotCase):
@@ -109,6 +109,35 @@ class AskYieldTests(SlotCase):
         self.started("slow")
         self.release("slow")
         for process in (gate, slow):
+            self.finish(process)
+
+    def test_window_order_refuses_ask_yield_and_does_not_self_regrant(self) -> None:
+        """fathers#211: window order does not support yielding, so ask-yield refuses and a stale marker withdraws."""
+        from slotfather import leases as sf_leases
+        from slotfather import state as sf_state
+        self.assertEqual(0, self.tool("order", "window").returncode)
+        gate = self.gate("--yieldable", script=WORK)
+        self.started("gate")
+        quick = self.request("quick", 1, options=("--priority", "interactive"))
+        self.wait_for(lambda: "waiting: 1 slot(s) quick" in self.status(), "quick to queue")
+        held = self.entries()["gate"]
+        waiter = self.entries()["quick"]
+        result = self.tool("ask-yield", str(held["pid"]), "--start", held["start"])
+        self.assertEqual(2, result.returncode)
+        self.assertIn("window order does not support yield requests", result.stderr)
+        self.assertEqual([], list((self.state / "queue").glob("*.yield")))
+        # Even if a stale .yield marker existed before switching to window order, yield_lease() withdraws it instead
+        # of writing the entry back to its lower sequence and immediately re-granting itself.
+        gate_path = _Path(held["lease"])
+        sf_state.write(sf_state.marker(gate_path), {"by": waiter["id"], "label": "quick", "priority": "interactive",
+                                                    "count": 1, "at": "2026-11-12T00:00:00Z"})
+        self.assertIsNone(sf_leases.yield_lease(gate_path))
+        self.assertFalse(sf_state.marker(gate_path).exists())
+        self.assertEqual(("held", 0), (self.entries()["gate"]["state"], self.entries()["gate"]["yields"]))
+        self.release("gate")
+        self.started("quick")
+        self.release("quick")
+        for process in (gate, quick):
             self.finish(process)
 
     def test_reprioritize_checks_the_start_it_is_given(self) -> None:

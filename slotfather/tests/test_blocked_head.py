@@ -119,6 +119,34 @@ class PlanTests(unittest.TestCase):
                                                [e["label"] for e in back.grants]),
                          "only leases granted after it gave way: it is the head again and holds the slots back")
 
+    def test_head_drop_trial_counts_earlier_grants_in_the_same_plan(self) -> None:
+        """fathers#211: earlier grants in the same plan() look are already in `used`, so the head-drop trial must
+        include them when calling reserve() instead of misreading them as unknown/earlier-queue slots."""
+        late = waiter("measure", 8, -9000, reserved=M - 1900)
+        prior = waiter("prior", 1, -9500)  # ranks ahead of late and is granted before late is checked
+        install = waiter("install", 1, -30)
+        found = self.plan([prior, late, install], {"prior": 60, "install": 60})
+        self.assertIsNone(found.head)
+        self.assertEqual(["prior", "install"], [e["label"] for e in found.grants])
+        self.assertEqual([("measure", ["lane-a", "lane-b", "lane-c"])],
+                         [(e["label"], sorted(b["label"] for b in blockers)) for e, blockers in found.dropped])
+
+        # Same with a -n MIN-MAX range waiter granted 2 slots ahead of late.
+        ranged = waiter("ranged", 1, -9500, min_count=1, max_count=2)
+        found_range = self.plan([ranged, late, install], {"ranged": 60, "install": 60})
+        self.assertIsNone(found_range.head)
+        self.assertEqual(2, found_range.granted_count(ranged))
+        self.assertEqual(["measure"], [e["label"] for e, _ in found_range.dropped])
+
+        # Earlier fast grant frees its slots quickly, so reserve() does not falsely walk into a slower unknown lease.
+        self.held = [holder("known-fast", 2, -50), holder("unknown-slow", 3, -7200)]
+        fast_prior = waiter("fast-prior", 2, -9500)  # 3 free -> granted 2, leaving 1 free; ends in 10 s
+        head4 = waiter("head4", 4, -9000, reserved=M - 1900)
+        kept = self.plan([fast_prior, head4], {"known-fast": 110, "fast-prior": 10})
+        self.assertEqual("head4", kept.head and kept.head["label"],
+                         "fast-prior (M+10) and known-fast (M+60) free 4 slots before unknown-slow is needed")
+        self.assertEqual([], kept.dropped)
+
 
 class GrantTests(unittest.TestCase):
     """grant() on a queue of 4 slots (the entry pins' harness: fixed clock, fake holders)."""
