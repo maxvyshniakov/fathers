@@ -109,7 +109,10 @@ class BackgroundTests(Case):
             supervisor = entry.get("supervisor") or {}
             if supervisor.get("pid") and procs.identities([supervisor["pid"]]).get(supervisor["pid"]) == \
                     procs.norm(supervisor.get("start") or ""):
-                os.kill(supervisor["pid"], signal.SIGKILL)
+                try:
+                    os.kill(supervisor["pid"], signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
 
     def rewritten(self, data: Dict[str, Any]) -> str:
         result = self.hook("PreToolUse", data.pop("session_id"), env=self.session_env, **data)
