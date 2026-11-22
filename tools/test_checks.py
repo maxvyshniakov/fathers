@@ -3,6 +3,7 @@ hold the four packages to one lint gate (fathers#116). Run: python3 -m unittest 
 from __future__ import annotations
 
 import ast
+from collections import Counter
 import difflib
 import io
 import json
@@ -64,11 +65,20 @@ class SelectionTests(unittest.TestCase):
                               "lanefather/docs/adr/0001-real-adapters-before-general-ports.md"])
         self.assertFalse(plan.full)
         self.assertEqual(ALWAYS, set(plan.checks))
-        for path in ("lanefather/CHANGELOG.md", "lanefather/install.py", "lanefather/hooks/pre-commit",
+        for path in ("lanefather/install.py", "lanefather/hooks/pre-commit",
                      "lanefather/lanefather/cli.py", "lanefather/lanefather/README.md",
                      "lanefather/tests/fixtures/notes.md"):
             with self.subTest(path=path):
                 self.assertEqual(package("lanefather") | ALWAYS, self.selected(path))
+        for path, extra in (
+            ("lanefather/CHANGELOG.md", package("lanefather")),
+            ("slotfather/CHANGELOG.md", package("slotfather")),
+            ("slotfather/pyproject.toml", package("slotfather")),
+            ("slotfather/src/slotfather/version.py", package("slotfather") | {"godfather tests"}),
+            ("junkfather/junkfather/__init__.py", package("junkfather")),
+        ):
+            with self.subTest(changelog_path=path):
+                self.assertEqual(extra | {"common tests"} | ALWAYS, self.selected(path))
 
     def test_a_path_no_rule_knows_selects_everything(self) -> None:
         plan = checks.select(["slotfather/x.py", "Makefile"])
@@ -210,7 +220,7 @@ class WorkflowTests(unittest.TestCase):
                                      (ROOT / name / "pyproject.toml").read_text(), re.M)
                 if declared:
                     self.assertEqual(wanted, declared[1])
-        self.assertEqual("3.9", floor((WORKFLOWS / "common.yml").read_text()))  # common/ and install.py: 3.9
+        self.assertEqual("3.11", floor((WORKFLOWS / "common.yml").read_text()))  # common/ and install.py: 3.11
 
     # One case per package, so a regression in one is not hidden behind another's expected failure.
     def declares_requires_python(self, name: str) -> None:
@@ -248,8 +258,24 @@ class WorkflowTests(unittest.TestCase):
 
 RECURSIVE_CHECK_OK_RE = re.compile(r"#[ \t]*recursive-check-ok:[ \t]*\S+")
 COPY_OK_RE = re.compile(r"#[ \t]*copy-ok:[ \t]*\S+")
+SLEEP_OK_RE = re.compile(r"#[ \t]*sleep-ok:[ \t]*\S+")
+SHELL_SLEEP_RE = re.compile(r"\bsleep\s+(\d+(?:\.\d+)?|\.\d+)\b")
+TOKEN_RE = re.compile(r"\w+|\S")
 NEAR_COPY_THRESHOLD = 0.85
 PACKAGE_NAME_RE = re.compile(r"(?i)\b(?:" + "|".join(checks.PACKAGES) + r")\b")
+# Shrink-only ratchet for embedded shell sleeps (0.2s <= s < 30s) in test string literals (fathers#219).
+EMBEDDED_SHELL_SLEEP_BASELINE: dict[str, int] = {
+    "junkfather/tests/test_background.py": 6,
+    "junkfather/tests/test_browser.py": 1,
+    "lanefather/tests/test_checks.py": 1,
+    "slotfather/tests/test_contract.py": 1,
+    "slotfather/tests/test_membership.py": 1,
+    "slotfather/tests/test_process_table.py": 1,
+    "slotfather/tests/test_session.py": 1,
+    "slotfather/tests/test_sweep.py": 15,
+    "slotfather/tests/test_usage.py": 1,
+    "tokenfather/tests/test_adapters.py": 1,
+}
 
 
 def find_recursive_checks_run_violations(source: str) -> list[str]:
@@ -264,19 +290,39 @@ def find_recursive_checks_run_violations(source: str) -> list[str]:
         subprocess_calls = ("run", "Popen", "call", "check_output", "check_call")
         if not (func_text.startswith("subprocess.") or func_text in subprocess_calls):
             continue
-        if not node.args:
+        arg_node = node.args[0] if node.args else next((kw.value for kw in node.keywords if kw.arg == "args"), None)
+        if arg_node is None:
             continue
-        first_arg = ast.unparse(node.args[0])
+        first_arg = ast.unparse(arg_node)
         if "checks.py" not in first_arg:
             continue
-        if not re.search(r"""['"]run['"]""", first_arg):
+        if not re.search(r"""['"]run['"]|\brun\b""", first_arg):
             continue
         start = node.lineno
         end = getattr(node, "end_lineno", start) or start
-        snippet = "\n".join(lines[start - 1 : end])
+        snippet = "\n".join(lines[max(0, start - 2) : end])
         if not RECURSIVE_CHECK_OK_RE.search(snippet):
             violations.append(f"line {start}: {lines[start - 1].strip()}")
     return violations
+
+
+def find_embedded_shell_sleeps(source: str) -> list[tuple[int, str]]:
+    """String literals in `source` with embedded shell `sleep <0.2..29.9>` without `# sleep-ok: <reason>`."""
+    lines = source.splitlines()
+    tree = ast.parse(source)
+    found: list[tuple[int, str]] = []
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Constant) and isinstance(node.value, str)):
+            continue
+        secs = [float(match.group(1)) for match in SHELL_SLEEP_RE.finditer(node.value)]
+        if not any(0.2 <= value < 30.0 for value in secs):
+            continue
+        start = node.lineno
+        end = getattr(node, "end_lineno", start) or start
+        snippet = "\n".join(lines[max(0, start - 2) : end])
+        if not SLEEP_OK_RE.search(snippet):
+            found.append((start, node.value))
+    return found
 
 
 def normalize_test_source(text: str) -> str:
@@ -294,27 +340,27 @@ def find_near_copy_test_files(
     files_by_package: dict[str, dict[str, str]],
     threshold: float = NEAR_COPY_THRESHOLD,
 ) -> list[tuple[str, str, float]]:
-    """Cross-package test file pairs whose normalized similarity exceeds `threshold` without `# copy-ok: <reason>`."""
-    entries: list[tuple[str, str, str, list[str]]] = []
+    """Cross-package test file pairs whose normalized token similarity exceeds `threshold` without `# copy-ok:`."""
+    entries: list[tuple[str, str, list[str], int, Counter[str]]] = []
     for pkg, pkg_files in sorted(files_by_package.items()):
         for rel_path, raw_text in sorted(pkg_files.items()):
             if COPY_OK_RE.search(raw_text):
                 continue
-            norm = normalize_test_source(raw_text)
-            entries.append((pkg, rel_path, norm, norm.splitlines()))
+            tokens = TOKEN_RE.findall(normalize_test_source(raw_text))
+            entries.append((pkg, rel_path, tokens, len(tokens), Counter(tokens)))
 
     violations: list[tuple[str, str, float]] = []
-    for index, (pkg_a, path_a, norm_a, lines_a) in enumerate(entries):
-        for pkg_b, path_b, norm_b, lines_b in entries[index + 1 :]:
+    for index, (pkg_a, path_a, tok_a, len_a, cnt_a) in enumerate(entries):
+        for pkg_b, path_b, tok_b, len_b, cnt_b in entries[index + 1 :]:
             if pkg_a == pkg_b:
                 continue
-            line_matcher = difflib.SequenceMatcher(None, lines_a, lines_b)
-            if line_matcher.real_quick_ratio() <= 0.5 or line_matcher.quick_ratio() <= 0.5:
+            total = len_a + len_b
+            if total == 0 or 2 * min(len_a, len_b) <= threshold * total:
                 continue
-            matcher = difflib.SequenceMatcher(None, norm_a, norm_b)
-            if matcher.real_quick_ratio() <= threshold or matcher.quick_ratio() <= threshold:
+            common = sum(count if count < cnt_b[tok] else cnt_b[tok] for tok, count in cnt_a.items() if tok in cnt_b)
+            if 2 * common <= threshold * total:
                 continue
-            ratio = matcher.ratio()
+            ratio = difflib.SequenceMatcher(None, tok_a, tok_b).ratio()
             if ratio > threshold:
                 violations.append((path_a, path_b, ratio))
     return violations
@@ -355,6 +401,7 @@ class CommandTests(unittest.TestCase):
         self.assertEqual("1", env.get("PYRIGHT_PYTHON_IGNORE_WARNINGS"))
 
         with mock.patch.object(checks, "run_unittest_parallel", return_value=0) as parallel_mock, \
+                mock.patch.object(checks.subprocess, "run", side_effect=AssertionError("unexpected subprocess")), \
                 mock.patch.dict(os.environ, {"FATHERS_TEST_WORKERS": "3"}):
             for pkg in ("slotfather", "lanefather", "junkfather", "godfather"):
                 self.assertIn(pkg, checks.PARALLEL_TEST_PACKAGES)
@@ -500,10 +547,15 @@ class RepositoryRuleTests(unittest.TestCase):
     def test_no_cross_package_near_copy_test_files(self) -> None:
         files_by_package: dict[str, dict[str, str]] = {}
         for pkg in checks.PACKAGES:
-            pkg_files: dict[str, str] = {}
-            for path in sorted((ROOT / pkg / "tests").rglob("test_*.py")):
-                pkg_files[path.relative_to(ROOT).as_posix()] = path.read_text(encoding="utf-8")
-            files_by_package[pkg] = pkg_files
+            pkg_root = ROOT / pkg
+            files_by_package[pkg] = {
+                path.relative_to(ROOT).as_posix(): path.read_text(encoding="utf-8")
+                for path in checks.discover_test_files(pkg_root, checks.TESTS[pkg])[0]
+            }
+        files_by_package["common"] = {
+            path.relative_to(ROOT).as_posix(): path.read_text(encoding="utf-8")
+            for path in checks.discover_test_files(ROOT, ["-s", "common/tests"])[0]
+        }
 
         violations = find_near_copy_test_files(files_by_package)
         self.assertEqual(
@@ -511,16 +563,11 @@ class RepositoryRuleTests(unittest.TestCase):
             [f"{a} <-> {b} ({ratio:.3f} > {NEAR_COPY_THRESHOLD})" for a, b, ratio in violations],
         )
 
-        sample_a = (
-            "import unittest\n"
-            "class ChangelogLayoutTests(unittest.TestCase):\n"
-            "    def test_title(self) -> None:\n"
-            "        self.assertEqual('# Slotfather Changelog', 'x')\n"
-        )
-        sample_b = sample_a.replace("Slotfather", "Godfather")
+        sample_a = "\n".join(f"    assert slot_helper({i}) == expected({i})" for i in range(10))
+        sample_b = "\n".join(f"    assert junk_helper({i}) == expected({i})" for i in range(10))
         synthetic = {
             "slotfather": {"slotfather/tests/test_dup.py": sample_a},
-            "godfather": {"godfather/tests/test_dup.py": sample_b},
+            "junkfather": {"junkfather/tests/test_dup.py": sample_b},
         }
         self.assertEqual(1, len(find_near_copy_test_files(synthetic)))
         self.assertEqual(
@@ -529,7 +576,7 @@ class RepositoryRuleTests(unittest.TestCase):
                 find_near_copy_test_files(
                     {
                         "slotfather": {"slotfather/tests/test_dup.py": "# copy-ok:   \n" + sample_a},
-                        "godfather": {"godfather/tests/test_dup.py": sample_b},
+                        "junkfather": {"junkfather/tests/test_dup.py": sample_b},
                     }
                 )
             ),
@@ -539,10 +586,30 @@ class RepositoryRuleTests(unittest.TestCase):
             find_near_copy_test_files(
                 {
                     "slotfather": {"slotfather/tests/test_dup.py": "# copy-ok: shared contract wrapper\n" + sample_a},
-                    "godfather": {"godfather/tests/test_dup.py": sample_b},
+                    "junkfather": {"junkfather/tests/test_dup.py": sample_b},
                 }
             ),
         )
+
+    def test_embedded_shell_sleep_ratchet(self) -> None:
+        counts: dict[str, int] = {}
+        for path in sorted(ROOT.glob("*/tests/**/test*.py")):
+            hits = find_embedded_shell_sleeps(path.read_text(encoding="utf-8"))
+            if hits:
+                counts[path.relative_to(ROOT).as_posix()] = len(hits)
+        over_budget = [
+            f"{rel}: {count} > baseline {EMBEDDED_SHELL_SLEEP_BASELINE.get(rel, 0)}"
+            for rel, count in sorted(counts.items())
+            if count > EMBEDDED_SHELL_SLEEP_BASELINE.get(rel, 0)
+        ]
+        self.assertEqual(
+            [],
+            over_budget,
+            "new embedded shell sleep in test string; use `# sleep-ok: <reason>` if needed",
+        )
+        self.assertEqual(1, len(find_embedded_shell_sleeps('cmd = "sleep 1.5"\n')))
+        self.assertEqual([], find_embedded_shell_sleeps('cmd = "sleep 1.5"  # sleep-ok: intentional\n'))
+        self.assertEqual([], find_embedded_shell_sleeps('cmd = "sleep 600"\n'))
 
 
 if __name__ == "__main__":

@@ -99,9 +99,13 @@ def protection(parents: dict[int, int], found: Labelled,
     labels = [label for _, label in found]
     trees = _process.lease_membership(parents, held, parents, markers=None)
     protected = {pid: labels[member[-1][0]] for pid, member in trees.leases.items() if member}
-    helper_commands = {pid: proc.cmd for pid, proc in procs.items()} if procs is not None and sys.platform == "darwin" else None
-    helper_uids = {pid: proc.uid for pid, proc in procs.items()} if helper_commands is not None and procs is not None else None
-    helper_starts = {pid: proc.started for pid, proc in procs.items()} if helper_commands is not None and procs is not None else None
+    helper_commands: dict[int, str] | None = None
+    helper_uids: dict[int, int] | None = None
+    helper_starts: dict[int, float | None] | None = None
+    if procs is not None and sys.platform == "darwin":
+        helper_commands = {pid: proc.cmd for pid, proc in procs.items()}
+        helper_uids = {pid: proc.uid for pid, proc in procs.items()}
+        helper_starts = {pid: proc.started for pid, proc in procs.items()}
 
     def carriers(pids: list[int]) -> dict[int, str | None]:
         membership = _process.lease_membership(

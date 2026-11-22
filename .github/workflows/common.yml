@@ -8,6 +8,10 @@ on:
       - 'common/**'
       - 'install.py'
       - 'tools/checks.py'
+      - '*/CHANGELOG.md'
+      - '*/pyproject.toml'
+      - '*/src/*/version.py'
+      - '*/*/__init__.py'
       - '.github/workflows/common.yml'
       - '.github/workflows/package.yml'
   pull_request:
@@ -15,6 +19,10 @@ on:
       - 'common/**'
       - 'install.py'
       - 'tools/checks.py'
+      - '*/CHANGELOG.md'
+      - '*/pyproject.toml'
+      - '*/src/*/version.py'
+      - '*/*/__init__.py'
       - '.github/workflows/common.yml'
       - '.github/workflows/package.yml'
   workflow_dispatch:

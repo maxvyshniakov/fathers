@@ -645,6 +645,8 @@ def template_repository() -> pathlib.Path:
     git("init", "-q", "-b", "main")
     git("config", "user.name", "Lane Test")
     git("config", "user.email", "lane@example.com")
+    git("config", "maintenance.auto", "false")
+    git("config", "gc.auto", "0")
     for name, text in FILES.items():
         path = repo / name
         path.parent.mkdir(parents=True, exist_ok=True)

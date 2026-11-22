@@ -90,6 +90,8 @@ def owners(path: str) -> set[str] | None:
         chosen = {f"{first} lint", f"{first} tests"}
         if first == "slotfather" and (rest == "slotfather" or rest.startswith("src/")):
             chosen.add("godfather tests")  # its contract tests run ../slotfather
+        if rest in ("CHANGELOG.md", "pyproject.toml", f"src/{first}/version.py", f"{first}/__init__.py"):
+            chosen.add("common tests")  # common/tests/test_changelog.py checks layout & version lockstep
         return chosen
     if first == "common":
         return {name for name in NAMES if name.split()[0] in PACKAGES} | {"common lint", "common tests"}
