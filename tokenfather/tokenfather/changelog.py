@@ -27,7 +27,7 @@ def installed_commit() -> str | None:
     """The installed release's commit (12 characters, from install.py's COMMIT file), None from a checkout."""
     try:
         built = (PACKAGE / "COMMIT").read_text(encoding="utf-8").strip()
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         return None
     return built[:12] or None
 

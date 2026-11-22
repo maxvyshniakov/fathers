@@ -71,4 +71,4 @@ def encode(found: Mapping[str, Any]) -> bytes:
 
 def append(found: Mapping[str, Any], log: Path | None = None) -> bool:
     """Append `found` to `log` (default `path()`); never raises, False when the event was dropped."""
-    return _common.append_event(log or path(), found)
+    return _common.append_event(log or path(), found, rotate_at=ROTATE_AT, lock_wait=LOCK_WAIT)

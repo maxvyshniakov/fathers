@@ -50,7 +50,7 @@ class EventTests(Case):
         self.assertEqual(common_events.encode_event(found), line)
         with mock.patch.object(common_events, "append_event", wraps=common_events.append_event) as shared:
             self.assertTrue(events.append(found, self.log))
-        shared.assert_called_once_with(self.log, found)
+        shared.assert_called_once_with(self.log, found, rotate_at=events.ROTATE_AT, lock_wait=events.LOCK_WAIT)
         self.log.write_bytes(b"x" * (common_events.ROTATE_AT - 10) + b"\n")
         self.assertTrue(events.append(found, self.log))
         self.assertTrue(self.log.with_name("events.jsonl.1").is_file())

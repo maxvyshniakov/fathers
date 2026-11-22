@@ -12,12 +12,15 @@ share/.install.lock. Built on `fathers_common.installer` (fathers#117, fathers#2
 from __future__ import annotations
 
 import argparse
+import contextlib
+import json
 import os
 from pathlib import Path
 import shutil
 import subprocess
 import sys
 import tempfile
+from typing import Any, cast
 
 sys.dont_write_bytecode = True
 SOURCE = Path(__file__).resolve().parent
@@ -90,6 +93,13 @@ def smoke_check(release: Path, python: str) -> None:
                 detail = (result.stderr or result.stdout).strip().splitlines()
                 reason = detail[-1] if detail else f"exit {result.returncode}"
                 raise InstallError(f"smoke check failed for {release.name} ({' '.join(args)}): {reason}")
+            if args == ["changelog", "--json"]:
+                try:
+                    payload: Any = json.loads(result.stdout)
+                except ValueError as error:
+                    raise InstallError(f"smoke check failed for {release.name} (changelog --json): {error}") from None
+                if not isinstance(payload, dict) or cast(dict[str, Any], payload).get("tool") != "tokenfather":
+                    raise InstallError(f"smoke check failed for {release.name} (changelog --json): unexpected payload")
 
 
 def install(share: Path, bin_dir: Path, python: str) -> Path:
@@ -103,20 +113,27 @@ def install(share: Path, bin_dir: Path, python: str) -> Path:
         (pending / "tokenfather" / "COMMIT").write_text(built + "\n", encoding="utf-8")
 
     with install_lock(share / ".install.lock", label="tokenfather install"):
+        existed = (share / "releases" / release_name).exists()
         release = stage_release(share / "releases", release_name, populate)
-        smoke_check(release, python)
+        try:
+            smoke_check(release, python)
+        except BaseException:
+            if not existed:
+                shutil.rmtree(release, ignore_errors=True)
+            raise
         current = share / "current"
         previous = os.readlink(current) if current.is_symlink() else None
         switch_symlink(current, release, relative_to=share)
         try:
             write_launcher(bin_dir / "tokenfather", LAUNCHER.format(python=python, current=str(current)), 0o755)
         except BaseException:
-            if previous is not None:
-                switch_symlink(current, Path(previous))
-            else:
-                current.unlink(missing_ok=True)
+            with contextlib.suppress(OSError):
+                if previous is not None:
+                    switch_symlink(current, Path(previous))
+                else:
+                    current.unlink(missing_ok=True)
             raise
-        releases = sorted((p for p in (share / "releases").iterdir() if not p.name.startswith(".")),
+        releases = sorted((p for p in (share / "releases").iterdir() if p.is_dir() and not p.name.startswith(".")),
                           key=lambda p: p.stat().st_mtime, reverse=True)
         for old in releases[KEEP_RELEASES:]:
             if old.resolve() != release.resolve():
