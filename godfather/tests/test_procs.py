@@ -39,8 +39,38 @@ class DecodeTests(unittest.TestCase):
         rows = junkfather.page_rows(decoded())
         self.assertEqual(["running", "running", "running", "orphan", "expired"],
                          [row["state"] for row in rows if row["kind"] == "entry"])
-        self.assertEqual(["entry"] * 5 + ["separator", "unowned", "resource", "resource"], [row["kind"] for row in rows])
-        self.assertEqual({"count": 5, "orphan": 1, "expired": 1, "unowned": 3}, junkfather.summary(decoded()))
+        self.assertEqual(["entry"] * 5 + ["separator", "unowned", "separator", "resource", "resource"],
+                         [row["kind"] for row in rows])
+        self.assertEqual(["unowned processes · 1 · last sweep", "unowned resources · 2 · last sweep"],
+                         [row["label"] for row in rows if row["kind"] == "separator"])
+        self.assertEqual({"count": 5, "orphan": 1, "expired": 1, "unowned": 1, "resources": 2},
+                         junkfather.summary(decoded()))
+
+    def test_dead_sweep_entries_and_resources_are_separated_from_live_unowned(self) -> None:
+        raw: dict[str, Any] = {
+            "v": 2, "host": "mbp", "time": "2026-11-04T09:59:39Z", "entries": [],
+            "unowned": [
+                {"pid": 101, "start": "t1", "cmd": "node live", "why": "orphan", "age": 120, "alive": True},
+                {"pid": 102, "start": "t2", "cmd": "node gone", "why": "orphan", "age": 600, "alive": False},
+                {"pid": 103, "start": "t3", "cmd": "node unknown", "why": "orphan", "age": 300, "alive": None},
+            ],
+            "unowned_resources": [
+                {"kind": "worktree", "id": "/repo/wt1", "name": "wt1", "why": "merged, idle 4d"},
+                {"kind": "tailscale", "id": "https://box/app", "name": "app", "why": "no owner"},
+            ],
+            "sweep": {"time": "2026-11-04T09:30:00Z", "result": {"reaped": [], "failed": []}},
+            "errors": [],
+        }
+        found = junkfather.decode(raw)
+        self.assertEqual({"count": 0, "orphan": 0, "expired": 0, "unowned": 2, "resources": 2},
+                         junkfather.summary(found))
+        rows = junkfather.page_rows(found)
+        self.assertEqual(["separator", "unowned", "unowned", "separator", "unowned", "separator", "resource",
+                          "resource"], [row["kind"] for row in rows])
+        self.assertEqual(["unowned processes · 2 · last sweep", "gone since the sweep · 1",
+                          "unowned resources · 2 · last sweep"],
+                         [row["label"] for row in rows if row["kind"] == "separator"])
+        self.assertEqual([101, 103, 102], [row["pid"] for row in rows if row["kind"] == "unowned"])
 
     def test_version_1_reads_too_and_another_is_an_error(self) -> None:
         older = dict(snapshot(), v=1)
@@ -131,7 +161,8 @@ class PageTests(Case):
 
     def test_3_opens_on_the_linked_entry_and_the_summary(self) -> None:
         state = self.screen([self.lease()])
-        self.assertIn("3 procs 5 · 1 orphan · 1 expired · 3 unowned", self.text())
+        self.assertIn("3 procs 5 · 1 orphan · 1 expired · 1 unowned", self.text())
+        self.assertNotIn("3 unowned", self.text())
         state = self.keys(state, "3")
         self.assertEqual(("entry", "j5e6f7a"), self.picked_proc(state))
         self.assertIn("PROCESS DETAILS", self.text())
@@ -142,6 +173,101 @@ class PageTests(Case):
         self.assertEqual("overview", state.page)
         state = self.click(state, *self.at("3 procs"))
         self.assertEqual("processes", state.page)
+
+    def test_summary_separates_resources_excludes_dead_and_drops_resources_first(self) -> None:
+        raw = snapshot()
+        raw["entries"] = []
+        raw["unowned"] = [
+            {"pid": 77001, "start": "t1", "cmd": "node dead", "why": "orphan", "age": 3600, "alive": False},
+        ]
+        raw["unowned_resources"] = [
+            {"kind": "worktree", "id": f"/wt/{n}", "name": f"wt-{n}", "why": "idle"} for n in range(75)
+        ]
+        self.tools["junkfather"] = state_module.Tool("junkfather", "ok", None, junkfather.decode(raw),
+                                                     actions=("reap", "extend"))
+        self.screen([self.lease()])
+        self.assertIn("3 procs 0 · 75 resources", self.text())
+        self.assertNotIn("unowned", self.text().splitlines()[4])
+        raw["unowned_resources"] = raw["unowned_resources"][:1]
+        self.tools["junkfather"] = state_module.Tool("junkfather", "ok", None, junkfather.decode(raw),
+                                                     actions=("reap", "extend"))
+        self.screen([self.lease()])
+        self.assertIn("3 procs 0 · 1 resource", self.text())
+        self.assertNotIn("1 resources", self.text())
+        # With lanefather absent, all procs parts including resources fit on a wide border
+        self.tools = {"junkfather": state_module.Tool("junkfather", "ok", None, decoded(), actions=("reap", "extend"))}
+        self.screen([self.lease()])
+        self.assertIn("3 procs 5 · 1 orphan · 1 expired · 1 unowned · 2 resources", self.text())
+        # Without lanes everything fits at 76; with lanes, resources drops first
+        self.screen([self.lease()], width=76, height=40)
+        border = self.text().splitlines()[4]
+        self.assertIn("3 procs 5 · 1 orphan · 1 expired · 1 unowned · 2 resources", border)
+        self.tools["lanefather"] = state_module.Tool("lanefather", "ok", None, lanes_decoded())
+        self.screen([self.lease()], width=76, height=40)
+        narrow = self.text().splitlines()[4]
+        self.assertIn("3 procs 5", narrow)
+        self.assertNotIn("resources", narrow)
+
+    def test_dead_entries_are_dimmed_and_actions_availability_is_clear(self) -> None:
+        raw = snapshot()
+        raw["unowned"].append({"pid": 77001, "start": "Tue Nov  4 07:00:00 2026", "cmd": "node dead-worker",
+                               "cwd": "/fixture/straylight", "root": "/fixture/straylight", "why": "orphan",
+                               "age": 7200, "alive": False})
+        self.tools["junkfather"] = state_module.Tool("junkfather", "ok", None, junkfather.decode(raw),
+                                                     actions=("reap", "extend"))
+        state = self.keys(self.screen([entry(1)]), "3")
+        screen = self.text()
+        self.assertIn("unowned processes · 1 · last sweep", screen)
+        self.assertIn("gone since the sweep · 1", screen)
+        self.assertIn("unowned resources · 2 · last sweep", screen)
+        # Every non-space cell of the dead process row inside the table is dimmed, with ◌ and `gone`
+        _, dead_y = self.at("node dead-w")
+        table = self.canvas.tables["procs"]
+        dead_cells = self.canvas.cells[dead_y][table["x"] + 1:table["x"] + table["width"] - 1]
+        dead_line = "".join(str(cell[0]) for cell in dead_cells)
+        self.assertIn("◌", dead_line)
+        self.assertIn("gone", dead_line)
+        self.assertEqual({"dim"}, {cell[1] for cell in dead_cells if str(cell[0]).strip()})
+        # Owned running entry: shows extend ttl and clickable `a actions` in footer
+        self.assertIn("extend ttl · a / enter", screen)
+        self.assertIn("a actions", screen.splitlines()[-1])
+        opened = self.click(state, *self.at("a actions"))
+        self.assertEqual("actions", getattr(opened.overlay, "kind", None))
+        self.assertIn("ACTIONS", self.text())
+        # Live unowned process: shows reap and `a actions`
+        state = self.draw(dataclasses.replace(state, picked={"processes": ("pid", 88123, "Tue Nov  4 08:29:00 2026")}))
+        self.assertIn("reap · a / enter", self.text())
+        self.assertIn("a actions", self.text().splitlines()[-1])
+        # Dead unowned process: shows `none · process gone` and footer says `no actions` without `a actions`
+        state = self.draw(dataclasses.replace(state, picked={"processes": ("pid", 77001, "Tue Nov  4 07:00:00 2026")}))
+        self.assertIn("none · process gone", self.text())
+        self.assertNotIn("a actions", self.text().splitlines()[-1])
+        self.assertIn("no actions", self.text().splitlines()[-1])
+        # Unowned resource: shows `none · read-only resource` and footer says `no actions`
+        state = self.draw(dataclasses.replace(state, picked={"processes": ("resource", "worktree",
+                                                                           "/fixture/straylight/worktrees/old-spike")}))
+        self.assertIn("none · read-only resource", self.text())
+        self.assertNotIn("a actions", self.text().splitlines()[-1])
+        self.assertIn("no actions", self.text().splitlines()[-1])
+        # Entry when tool advertises no actions: shows `none` and `no actions`
+        self.tools["junkfather"] = state_module.Tool("junkfather", "ok", None, junkfather.decode(raw), actions=())
+        state = self.keys(self.screen([entry(1)]), "3")
+        self.assertRegex(self.text(), r"actions\s+none\s")
+        self.assertNotIn("a actions", self.text().splitlines()[-1])
+        self.assertIn("no actions", self.text().splitlines()[-1])
+
+    def test_empty_owned_entries_shows_sweep_headings_and_selects_first_selectable(self) -> None:
+        raw = snapshot()
+        raw["entries"] = []
+        raw["unowned"] = [{"pid": 77001, "start": "t1", "cmd": "node dead", "why": "orphan", "age": 60, "alive": False}]
+        self.tools["junkfather"] = state_module.Tool("junkfather", "ok", None, junkfather.decode(raw),
+                                                     actions=("reap", "extend"))
+        state = self.keys(self.screen([entry(1)]), "3")
+        self.assertEqual(("pid", 77001, "t1"), self.picked_proc(state))
+        self.assertIn("gone since the sweep · 1", self.text())
+        self.assertIn("unowned resources · 2 · last sweep", self.text())
+        state = self.keys(state, "j")
+        self.assertEqual(("resource", "worktree", "/fixture/straylight/worktrees/old-spike"), self.picked_proc(state))
 
     def test_the_separator_is_skipped_and_unowned_rows_show_why(self) -> None:
         state = self.keys(self.screen([entry(1)]), "3")

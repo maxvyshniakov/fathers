@@ -2,7 +2,7 @@
 │                                                                                           │ │                                                            │
 │  🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅  🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅  🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅  🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅  ╭───────────╮  ╭──────────╮  │ │  label      lane-644-build-once                            │
 │  lane-644-bui…  lane-465-sta…  desktop                                              free  │ │  status     running · 1 slot                               │
-╰─ 2 lanes 4 active · 🔥 gate red ─────────── 3 procs 5 · 1 orphan · 1 expired · 3 unowned ─╯ │  priority   normal                                         │
+╰─ 2 lanes 4 active · 🔥 gate red ─────────── 3 procs 5 · 1 orphan · 1 expired · 1 unowned ─╯ │  priority   normal                                         │
 ┏━ QUEUE ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ slots ━ cpu use/share ━━━━ time ━━━ pid ━┓ │  ticket     #644                                           │
 ┃                                                                                           ┃ │  phase      check                                          │
 ▌  ▶️    lane-644-build-once                       ▪       ■■░░░ 0.9/2      35m10s   10000  ▐ │  cpu        ■■■■░░░░░░ 0.9 of 2 cores                      │

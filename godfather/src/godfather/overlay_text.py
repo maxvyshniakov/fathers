@@ -102,7 +102,7 @@ HELP: list[tuple[str, list[tuple[str, ...]]]] = [
         ("2 · 3", "lanes · processes (SLOTS' border)"),
         ("▶️ 🗓️ ✅ 💤", "active planned landed parked"),
         ("👻 ⌛", "owner gone · past its TTL"),
-        ("❔ 📦", "unowned process · resource"),
+        ("❔ ◌ 📦", "unowned · gone · resource"),
         ("", "Links in DETAILS open a page."),
     ]),
     ("MACHINE", [

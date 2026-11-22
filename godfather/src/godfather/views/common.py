@@ -31,7 +31,7 @@ RUN_MARKS = {"outlier": ("▲", "^"), "slower": ("↗", "/"), "faster": ("↘", 
 # A lane's status on the Lanes page (fathers#85) and an owned entry's state on the Processes page (fathers#86)
 ROW_MARKS = {"active": ("▶️", ">"), "planned": ("🗓️", "."), "landed": ("✅", "+"), "parked": ("💤", "z"),
              "conflict": ("💥", "x"), "running": ("▶️", ">"), "orphan": ("👻", "o"), "expired": ("⌛", "x"),
-             "unowned": ("❔", "?"), "resource": ("📦", "#")}
+             "unowned": ("❔", "?"), "gone": ("◌", "."), "resource": ("📦", "#")}
 
 
 class Marks(NamedTuple):

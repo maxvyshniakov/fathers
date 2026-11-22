@@ -13,6 +13,7 @@ import datetime
 from pathlib import Path
 from typing import Any, Callable, Optional, Sequence, TypeVar, cast
 
+from .. import actions as _actions
 from .. import entries as _entries
 from .. import layout as _layout
 from ..adapters import junkfather as _junkfather
@@ -56,7 +57,7 @@ def lanes_summary(tool: Any, marks: _common.Marks) -> list[tuple[str, list[Part]
     return parts
 
 
-DROPS = ("planned", "reviews", "unowned", "expired")  # what a narrow border gives way, in order (SPEC 13)
+DROPS = ("planned", "reviews", "resources", "unowned", "expired")  # what a narrow border gives way, in order (SPEC 13)
 
 
 def draw_summaries(canvas: Canvas, rect: Rect, tools: dict[str, Any],
@@ -305,12 +306,16 @@ def lane_event_of(row: dict[str, Any], lane: Lane) -> bool:
 # The Processes page (fathers#86)
 
 def procs_summary(tool: Any, marks: _common.Marks) -> list[tuple[str, list[Part]]]:
-    """The procs summary: owned entries running, then orphan, expired and unowned, each only when not zero."""
+    """The procs summary: owned entries running, then orphan, expired, live unowned processes and unowned resources,
+    each only when not zero (dead sweep leftovers excluded)."""
     found = _junkfather.summary(tool.snapshot)
     parts: list[tuple[str, list[Part]]] = [("count", [("3", "key"), (" procs ", "dim"), (str(found["count"]), "text")])]
     for name, style in (("orphan", "warn"), ("expired", "warn"), ("unowned", "text")):
         if found[name]:
             parts.append((name, [(" · ", "dim"), (f"{found[name]} {name}", style)]))
+    if found["resources"]:
+        label = f"{found['resources']} resource{'s' if found['resources'] != 1 else ''}"
+        parts.append(("resources", [(" · ", "dim"), (label, "dim")]))
     return parts
 
 
@@ -321,11 +326,17 @@ PROCESS_COLUMNS: list[Spec] = [("state", "", 2, False, 0), ("label", "label", 0,
 
 
 def process_values(row: ProcessRow, marks: _common.Marks, elapsed: float) -> dict[str, Any]:
-    """A PROCESSES row: an owned entry, an unowned process or an unowned resource."""
+    """A PROCESSES row: an owned entry, a live or dead unowned process, or an unowned resource."""
     label = (dashboard_text(_junkfather.label_of(row)), "text")
     if row["kind"] == "unowned":
+        gone = row.get("alive") is False
         seen = row["age"]
-        shown_age = minutes(seen + elapsed) if seen is not None else "—"
+        shown_age = minutes(seen if gone else seen + elapsed) if seen is not None else "—"
+        if gone:
+            return {"state": (marks.rows["gone"], "dim"), "id": ("", "dim"),
+                    "label": (label[0], "dim"), "owner": (dashboard_text(row["why"]), "dim"), "lane": ("", "dim"),
+                    "age": (shown_age, "dim"), "ttl": ("gone", "dim"), "pid": (str(row["pid"]), "dim"),
+                    "processes": ("", "dim")}
         return {"state": (marks.rows["unowned"], "text"), "id": ("", "dim"), "label": label,
                 "owner": (dashboard_text(row["why"]), "warn"), "lane": ("", "dim"),
                 "age": (shown_age, "dim"), "ttl": ("", "dim"), "pid": (str(row["pid"]), "dim"),
@@ -334,7 +345,7 @@ def process_values(row: ProcessRow, marks: _common.Marks, elapsed: float) -> dic
         idle = row["age"]
         shown_age = long(idle) if idle is not None else "—"
         return {"state": (marks.rows["resource"], "text"), "id": ("", "dim"), "label": label,
-                "owner": (dashboard_text(row["why"]), "warn"), "lane": ("", "dim"),
+                "owner": (dashboard_text(row["why"]), "dim"), "lane": ("", "dim"),
                 "age": (shown_age, "dim"), "ttl": ("", "dim"),
                 "pid": ("", "dim"), "processes": (resource_text(row["resource_kind"], row["id"]), "dim")}
     resource = row.get("resource")
@@ -354,21 +365,40 @@ def resource_text(kind: str, ident: str) -> str:
 
 
 def separator(row: ProcessTableRow) -> Part:
-    return ("unowned · the last sweep's", "dim") if row["kind"] == "separator" else ("", "dim")
+    return (row["label"], "dim") if row["kind"] == "separator" else ("", "dim")
+
+
+def action_summary(row: ProcessRow, available: Sequence[_actions.Action]) -> list[Part]:
+    """What `actions` in PROCESS DETAILS says: the available action(s) and their key, or why none apply."""
+    if available:
+        by_cmd = {"extend": "extend ttl", "reap": "reap"}
+        names: list[str] = []
+        for action in available:
+            cmd = action.argv[0] if action.argv else ""
+            name = by_cmd.get(cmd, action.name.lower())
+            if name not in names:
+                names.append(name)
+        return [(", ".join(names), "text"), (" · a / enter", "dim")]
+    if row["kind"] == "resource":
+        return [("none · read-only resource", "dim")]
+    if row["kind"] == "unowned" and row.get("alive") is False:
+        return [("none · process gone", "dim")]
+    return [("none", "dim")]
 
 
 def process_facts(row: ProcessRow, model: Optional[Model], lanes: Optional[dict[str, Any]],
-                  elapsed: float) -> list[tuple[str, list[Part], Link]]:
+                  elapsed: float, advertised: Any = ()) -> list[tuple[str, list[Part], Link]]:
     """PROCESS DETAILS: an owned entry's command, directory, log, owner and whether it lives, keep, mode, its
     resource, its TTL, and its lease and lane as links; an unowned process's command and why; an unowned resource's
-    kind, id, name and why (a worktree's branch, repository, age and size)."""
+    kind, id, name and why (a worktree's branch, repository, age and size); and the row's available actions."""
+    available = _actions.for_process(row, advertised)
     facts: list[tuple[str, list[Part], Link]] = [("label", [(dashboard_text(_junkfather.label_of(row)), "bold")],
                                                   None)]
     if row["kind"] == "resource":
         facts += [("kind", [(row["resource_kind"], "text")], None), ("id", [(dashboard_text(row["id"]), "text")], None)]
         if row.get("name"):
             facts.append(("name", [(dashboard_text(row["name"]), "text")], None))
-        facts.append(("why", [(dashboard_text(row["why"]), "warn")], None))
+        facts.append(("why", [(dashboard_text(row["why"]), "dim")], None))
         for name in ("branch", "repo"):
             if row.get(name):
                 facts.append((name, [(dashboard_text(row[name]), "text")], None))
@@ -377,18 +407,21 @@ def process_facts(row: ProcessRow, model: Optional[Model], lanes: Optional[dict[
             facts.append(("idle", [(long(idle), "text")], None))
         if size is not None:
             facts.append(("size", [(f"{size / 1e9:.1f} GB", "text")], None))
+        facts += [("", [], None), ("actions", action_summary(row, available), None)]
         return facts
     if row["kind"] == "unowned":
+        gone = row.get("alive") is False
         facts += [("command", [(dashboard_text(row["cmd"]), "dim")], None), ("pid", [(str(row["pid"]), "text")], None),
-                  ("why", [(dashboard_text(row["why"]), "warn")], None)]
+                  ("why", [(dashboard_text(row["why"]), "dim" if gone else "warn")], None)]
         running = row["age"]
         if running is not None:
-            facts.append(("age", [(minutes(running + elapsed), "text")], None))
+            facts.append(("age", [(minutes(running if gone else running + elapsed), "text")], None))
         for name in ("cwd", "root"):
             if row.get(name):
                 facts.append(("directory" if name == "cwd" else "root", [path_part(row[name])], None))
-        if row.get("alive") is False:
+        if gone:
             facts.append(("alive", [("gone since the sweep", "dim")], None))
+        facts += [("", [], None), ("actions", action_summary(row, available), None)]
         return facts
     facts.append(("id", [(dashboard_text(row["id"]), "text")], None))
     facts.append(("state", [(row["state"] + (f" · {row['phase']}" if row["phase"] != "running" else ""),
@@ -427,6 +460,7 @@ def process_facts(row: ProcessRow, model: Optional[Model], lanes: Optional[dict[
                       ("lanes", lane["key"])))
     elif row.get("lane"):
         facts.append(("lane", [(dashboard_text(row["lane"]), "dim")], None))
+    facts.append(("actions", action_summary(row, available), None))
     return facts
 
 
@@ -466,7 +500,7 @@ def draw_processes(canvas: Canvas, tool: Any, selected: Optional[int], model: Op
                        separator, stale_note(tool))
         elif name == "details":
             nothing: list[tuple[str, list[Part], Link]] = [("", [("Nothing owned or reported", "dim")], None)]
-            facts = process_facts(row, model, lanes, elapsed) if row else nothing
+            facts = process_facts(row, model, lanes, elapsed, tool.actions) if row else nothing
             _details.draw_facts(canvas, rect, "PROCESS DETAILS", facts)
         elif name == "events":
             draw_strip(canvas, rect, model, "junkfather", "junk", lambda event: row is not None and
