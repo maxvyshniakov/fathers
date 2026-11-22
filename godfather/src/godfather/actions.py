@@ -29,6 +29,7 @@ from .model import ProcessTableRow
 NEVER = frozenset({"land", "promote", "done", "sync", "review", "sweep"})
 PRIORITIES = ("interactive", "normal", "batch")
 RANK = {"interactive": 0, "normal": 1, "batch": 2}
+YIELDS_MAX = 2  # Slotfather's config.YIELDS_MAX: ask-yield refuses once a lease has yielded this many times
 EXTEND = (("1 h", "1h"), ("4 h", "4h"), ("1 d", "1d"))
 PAGER = "less -R +G"
 
@@ -89,9 +90,9 @@ def class_of(item: dict[str, Any], served: bool = False) -> str:
 def for_request(item: dict[str, Any], waiters: list[dict[str, Any]], advertised: Any,
                 uid: Optional[int] = None) -> list[Action]:
     """QUEUE: reprioritize one of your requests to another class; ask a running yieldable lease of a lower class than
-    a waiter to yield. Both need the holder's process start (status --json `start`), which the tool checks again. A
-    request whose holder runs as another user (its `uid`, where Slotfather gives one, against `uid`) offers none:
-    Slotfather refuses those."""
+    a waiter (that has yielded fewer than YIELDS_MAX times) to yield. Both need the holder's process start (status
+    --json `start`), which the tool checks again. A request whose holder runs as another user (its `uid`, where
+    Slotfather gives one, against `uid`) offers none: Slotfather refuses those."""
     start = item.get("start")
     pid = item.get("pid")
     if not isinstance(start, str) or not start or not isinstance(pid, int):
@@ -107,7 +108,13 @@ def for_request(item: dict[str, Any], waiters: list[dict[str, Any]], advertised:
         current = str(item.get("priority") or "normal")
         found += [Action("slotfather", f"Reprioritize to {name}", ("reprioritize", str(pid), name, "--start", start),
                          target=target, identity=identity) for name in PRIORITIES if name != current]
-    if "ask-yield" in tools and item.get("kind") == "held" and item.get("yieldable") and not item.get("asked"):
+    if (
+        "ask-yield" in tools
+        and item.get("kind") == "held"
+        and item.get("yieldable")
+        and not item.get("asked")
+        and int(item.get("yields") or 0) < YIELDS_MAX
+    ):
         mine = RANK[class_of(item)]
         if any(RANK[class_of(waiter, served=True)] < mine for waiter in waiters):
             found.append(Action("slotfather", "Ask to yield", ("ask-yield", str(pid), "--start", start),

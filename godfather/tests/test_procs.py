@@ -165,6 +165,41 @@ class FormatterTests(unittest.TestCase):
         assert swept is not None
         self.assertEqual("2 reaped", swept.detail[0][0])
 
+    def test_sweep_finished_counts_integers_and_lists_while_excluding_notes_and_errors(self) -> None:
+        cases: list[tuple[dict[str, Any], str]] = [
+            (
+                {
+                    "reaped": [], "failed": [], "gone": [], "running": 0,
+                    "unowned": 3, "unowned_resources": 0, "pruned": 0,
+                    "errors": ["lsof listed no working directory"], "notes": ["registry unreadable"],
+                },
+                "3 unowned",
+            ),
+            (
+                {
+                    "reaped": ["j1", "j2"], "failed": ["j3"], "gone": ["j4"], "running": 4,
+                    "unowned": 3, "unowned_resources": 2, "pruned": 1,
+                    "errors": ["e1"], "notes": ["n1", "n2"],
+                },
+                "2 reaped · 1 failed · 1 gone · 4 running · 3 unowned · 2 resources · 1 pruned",
+            ),
+            ({"unowned_resources": 1}, "1 resource"),
+            ({"reaped": 2, "resources": 3, "result": "clean"}, "2 reaped · 3 resources · clean"),
+            (
+                {
+                    "reaped": [], "failed": [], "gone": [], "running": 0,
+                    "unowned": 0, "unowned_resources": 0, "pruned": 0,
+                    "errors": ["ps failed"], "notes": ["cannot list"], "flag": True,
+                },
+                "nothing to do",
+            ),
+        ]
+        for details, expected in cases:
+            with self.subTest(details=details):
+                shown = events.junkfather_shown("sweep.finished", details)
+                assert shown is not None
+                self.assertEqual(("swept", expected), (shown.event, shown.detail[0][0]))
+
 
 class PageTests(Case):
     def setUp(self) -> None:

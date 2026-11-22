@@ -248,7 +248,9 @@ class FormatterTests(unittest.TestCase):
                  ("entry.reap_failed", {"reason": "orphan"}, "reap fail", ("orphan", "bad")),
                  ("entry.handed", {"to": {"lane": "710"}}, "handed", ("to 710", "dim")),
                  ("unowned.reported", {"cmd": "node dev", "why": "orphan"}, "unowned", ("orphan", "warn")),
-                 ("hook.failed", {"error": "boom"}, "hook fail", ("boom", "bad"))]
+                 ("hook.failed", {"error": "boom"}, "hook fail", ("boom", "bad")),
+                 ("sweep.finished", {"reaped": [], "unowned": 3, "notes": ["n1"], "errors": ["e1"]},
+                  "swept", ("3 unowned", "dim"))]
         for kind, details, event, detail in cases:
             with self.subTest(kind=kind):
                 found = events.junkfather_shown(kind, details)

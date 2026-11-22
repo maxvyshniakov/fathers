@@ -199,6 +199,10 @@ Versions and release rules: [README.md](README.md#versions).
 
 ### Fixed
 
+- Junkfather sweep events in `EVENTS` now report unowned process and resource counts, running entries and pruned
+  records instead of counting diagnostic notes or errors (for example, `3 unowned` instead of `1 notes`), and `QUEUE`
+  no longer offers `Ask to yield` on a lease that has already yielded twice, matching Slotfather's limit
+  (fathers#229).
 - Shrinking the terminal under 83 columns while typing an `EVENTS` `/` filter now closes the filter box so `q` and
   other hotkeys work instead of typing into the hidden field; pressing `/` and then Esc on an empty filter keeps
   `EVENTS`' scroll offset, row selection and new-event count; clicking `q` in the main footer while typing a park

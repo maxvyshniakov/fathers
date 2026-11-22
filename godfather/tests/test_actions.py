@@ -54,6 +54,20 @@ class RequestTests(unittest.TestCase):
                 self.assertNotIn("Ask to yield", names(actions.for_request(dict(lease, **changed), [waiter],
                                                                            self.advertised)))
 
+    def test_ask_to_yield_hidden_once_yields_reaches_yields_max(self) -> None:
+        """fathers#229: Slotfather refuses ask-yield once a lease has yielded YIELDS_MAX (2) times."""
+        waiter = entry(1, "waiting", priority="interactive")
+        for count in (0, 1):
+            with self.subTest(yields=count):
+                lease = entry(0, pid=42, start=START, priority="batch", yieldable=True, yields=count)
+                self.assertIn("Ask to yield", names(actions.for_request(lease, [waiter], self.advertised)))
+        for count in (actions.YIELDS_MAX, actions.YIELDS_MAX + 1):
+            with self.subTest(yields=count):
+                lease = entry(0, pid=42, start=START, priority="batch", yieldable=True, yields=count)
+                found = names(actions.for_request(lease, [waiter], self.advertised))
+                self.assertNotIn("Ask to yield", found)
+                self.assertEqual(["Reprioritize to interactive", "Reprioritize to normal"], found)
+
     def test_ask_to_yield_compares_a_held_leases_own_class_against_a_waiters_served_class(self) -> None:
         """fathers#212: Slotfather's ask_yield() and yield_asks() compare a held lease by its own `priority` (even if
         it aged before grant into `served`) against each waiter's effective `served` class."""
@@ -312,6 +326,8 @@ class RecheckTests(unittest.TestCase):
         ask = next(action for action in actions.for_request(lease, [waiter], ["ask-yield"]))
         self.assertEqual(ask, actions.revalidate(ask, {"holders": [lease], "waiters": [waiter]}))
         self.assertIsNone(actions.revalidate(ask, {"holders": [dict(lease, yieldable=False)], "waiters": [waiter]}))
+        self.assertIsNone(actions.revalidate(ask, {"holders": [dict(lease, yields=actions.YIELDS_MAX)],
+                                                   "waiters": [waiter]}), "yielded YIELDS_MAX times meanwhile")
         self.assertIsNone(actions.revalidate(ask, {"holders": [lease], "waiters": []}), "no waiter above it now")
         lane = lanefather.find(lanes_decoded(), (STRAYLIGHT, "710-speech-paste-phase"))
         assert lane is not None

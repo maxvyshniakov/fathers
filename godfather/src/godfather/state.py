@@ -786,14 +786,6 @@ def event_index(state: AppState, rows: Optional[list[dict[str, Any]]] = None) ->
     return 0
 
 
-def selected_event(state: AppState) -> Optional[dict[str, Any]]:
-    """The event or run DETAILS shows while EVENTS was focused last, None while it shows QUEUE's entry."""
-    if state.ui.shows != "events" or state.model is None:
-        return None
-    rows = event_rows(state)
-    return rows[event_index(state, rows)] if rows else None
-
-
 def event_move(state: AppState, target: int) -> AppState:
     """EVENTS' cursor to the row at `target` (newest first), kept in range and in view: the scroll follows it, so a
     scrolled list keeps counting what arrives above (`↑ N new`); the newest row picks nothing, so the cursor stays on
