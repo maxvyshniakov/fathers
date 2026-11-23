@@ -957,6 +957,41 @@ def report_row(report: dict[str, Any] | None, check_id: str) -> dict[str, Any]:
     return next((r for r in (report or {}).get("checks", []) if r.get("id") == check_id), {"status": "not_run"})
 
 
+def failed_prerequisites(check_id: str, blocked: dict[str, list[str]]) -> list[str]:
+    """The checks behind a dependency-blocked check that did not themselves wait on another (fathers#195): its
+    `blocked_by`, followed through the checks that were blocked too, in order, once each."""
+    found: list[str] = []
+    seen = {check_id}
+    pending = list(reversed(blocked.get(check_id, [])))
+    while pending:
+        current = pending.pop()
+        if current in seen:
+            continue
+        seen.add(current)
+        if current in blocked:
+            pending.extend(reversed(blocked[current]))
+        else:
+            found.append(current)
+    return found
+
+
+def dependency_blocked_entry(check_id: str, blockers: list[str], prerequisites: list[str] | None = None,
+                             classes: dict[str, str] | None = None, **evidence: Any) -> dict[str, Any]:
+    """The classification of a check that did not run because a check it depends on failed (fathers#195): never a
+    regression, never landable, and unresolved until it runs. It names its `blocked_by` and, once known, the
+    `prerequisites` that actually ran and failed with their class."""
+    reason = (f"skipped because dependency failed ({', '.join(blockers)})" if blockers
+              else "skipped because dependency failed (the report names none)")
+    if prerequisites:
+        named = ", ".join(f"{p} ({classes[p]})" if classes and p in classes else p for p in prerequisites)
+        reason += f"; failed prerequisite{'s' if len(prerequisites) > 1 else ''}: {named}"
+    if prerequisites is not None:
+        reason += "; not run, so unresolved"
+    return {"check": check_id, "class": str(CheckClass.DEPENDENCY_BLOCKED), "blocked_by": list(blockers),
+            **({"prerequisites": list(prerequisites)} if prerequisites is not None else {}),
+            "reason": reason, **evidence}
+
+
 def _dedup_strings(value: Any) -> list[str]:
     if type(value) not in (list, tuple, set):
         return []
@@ -1168,15 +1203,8 @@ def evaluate_alone_row(
     if is_dependency_blocked(row):
         blockers = list(row.get("blocked_by") or [])
         return (
-            {
-                "check": check_id,
-                "class": str(CheckClass.DEPENDENCY_BLOCKED),
-                "blocked_by": blockers,
-                "reason": (f"skipped because dependency failed ({', '.join(blockers)})"
-                           if blockers else "skipped because dependency failed"),
-                "alone": {"status": row["status"], "log": str(log),
-                          **({"blocked_by": blockers} if blockers else {})},
-            },
+            dependency_blocked_entry(check_id, blockers, alone={
+                "status": row["status"], "log": str(log), **({"blocked_by": blockers} if blockers else {})}),
             False,
         )
     if row["status"] == "failed":
@@ -1260,17 +1288,22 @@ def finalize_classification(
     load: dict[str, Any],
     runs: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """Pure finalizer assembling the classification dict and `green` verdict."""
+    """Pure finalizer assembling the classification dict and `green` verdict. Each dependency-blocked check names
+    the checks that actually ran and failed behind it (`prerequisites`) and how they were classified (fathers#195)."""
     final_entries = dict(entries)
     for check_id, blockers in cplan.blocked_rows.items():
         if check_id not in final_entries:
-            final_entries[check_id] = {
-                "check": check_id,
-                "class": str(CheckClass.DEPENDENCY_BLOCKED),
-                "blocked_by": blockers,
-                "reason": (f"skipped because dependency failed ({', '.join(blockers)})"
-                           if blockers else "skipped because dependency failed"),
-            }
+            final_entries[check_id] = dependency_blocked_entry(check_id, blockers)
+    blocked = {c: list(e.get("blocked_by") or []) for c, e in final_entries.items()
+               if e.get("class") == CheckClass.DEPENDENCY_BLOCKED}
+    graph = {**cplan.blocked_rows, **blocked}
+    for check_id, blockers in blocked.items():
+        roots = failed_prerequisites(check_id, graph)
+        final_entries[check_id] = dependency_blocked_entry(
+            check_id, blockers, roots, {r: str(final_entries[r]["class"]) for r in roots
+                                                 if r in final_entries and final_entries[r].get("class")},
+            **{k: v for k, v in final_entries[check_id].items()
+               if k not in ("check", "class", "blocked_by", "reason", "prerequisites")})
     ordered = [*cplan.candidates, *[c for c in cplan.blocked_rows if c not in cplan.candidates]]
     checks = [final_entries[c] for c in ordered]
     green = bool(checks) and not cplan.unaccounted and all(e["class"] in LANDABLE for e in checks)
@@ -1384,6 +1417,17 @@ def classification_lines(classification: dict[str, Any]) -> list[str]:
         lines.append(f"  {entry['check']}: {kind}: {detail}")
     if classification["unaccounted"]:
         lines.append(f"  not rerun (no check of a suite): {', '.join(classification['unaccounted'])}")
+    waiting = [e for e in classification["checks"] if e["class"] == CheckClass.DEPENDENCY_BLOCKED]
+    if waiting:
+        behind: list[str] = []
+        for entry in waiting:
+            named: list[str] = entry.get("prerequisites") or entry.get("blocked_by") or []
+            for name in named:
+                if name not in behind:
+                    behind.append(name)
+        lines.append(f"lane: {len(waiting)} dependency-blocked check(s) did not run and stay unresolved"
+                     f"{' behind ' + ', '.join(behind) if behind else ''}; they used no rerun and count as "
+                     "neither passed nor regressed")
     if classification["green"]:
         lines.append("lane: every red check is flaky-under-load or pre-existing: the receipt is green; a flake "
                      "ticket cites these lines")

@@ -108,6 +108,9 @@ def merge_problem(lane_id: str, tip: str, tree: str, receipt: dict[str, Any] | N
         problem += (f"; regression: {', '.join(verdict.regressions)} fails on the lane"
                     f"{' again when rerun by itself' if verdict.rerun_alone else ''} and passes on its base "
                     f"{base}")
+    if verdict.blocked:
+        behind = f" behind {', '.join(verdict.prerequisites)}" if verdict.prerequisites else ""
+        problem += f"; dependency-blocked, not run: {', '.join(verdict.blocked)}{behind}"
     return problem
 
 

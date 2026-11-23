@@ -661,5 +661,90 @@ class PureClassificationTableTests(unittest.TestCase):
             self.assertFalse(unaccounted_out["green"])
 
 
+class DependencyBlockedClassificationTests(unittest.TestCase):
+    """fathers#195 regression fixture, pure: one failed prerequisite, three dependency-skipped children (one waits on
+    another child) listed before two unrelated executed failures in the same suite, as Sid-Kit's report did."""
+
+    BASE = "abcdef0123456789" * 2 + "abcdef01"
+    LOAD: dict[str, Any] = {"first_run": [0.1, 0.2, 0.3], "alone": [0.2, 0.3, 0.4]}
+    REPORT: dict[str, Any] = {"checks": [
+        {"id": "unit", "status": "failed", "blocked_by": []},
+        {"id": "build", "status": "blocked", "blocked_by": ["unit"]},
+        {"id": "storybook", "status": "blocked", "blocked_by": ["build"]},
+        {"id": "baseline", "status": "skipped", "blocked_by": ["build"]},
+        {"id": "control", "status": "failed", "blocked_by": []},
+        {"id": "story", "status": "failed", "blocked_by": []},
+    ]}
+    CHILDREN = ("build", "storybook", "baseline")
+
+    def fresh(self) -> list[dict[str, Any]]:
+        from lanefather import verify
+        executed = [r["id"] for r in self.REPORT["checks"] if verify.is_executed_failure(r)]
+        blocked = [r["id"] for r in self.REPORT["checks"] if verify.is_dependency_blocked(r)]
+        return [{"suite": "browser", "status": "failed", "failed_checks": executed, "blocked_checks": blocked}]
+
+    def classify(self, cap: int, base_status: dict[str, str]) -> tuple[Any, dict[str, Any]]:
+        from lanefather import verify
+        cplan = verify.plan_classification(self.fresh(), self.REPORT, cap=cap, only_supported=False)
+        assert isinstance(cplan, verify.ClassificationPlan)
+        entries = dict(cplan.entries)
+        for check_id in cplan.active_rerun:
+            alone, needs_base = verify.evaluate_alone_row(
+                check_id, {"status": "failed"}, first_row=verify.report_row(self.REPORT, check_id),
+                log="/nonexistent/alone.log", problem=None, load=self.LOAD)
+            self.assertTrue(needs_base)
+            entries[check_id] = verify.evaluate_base_row(
+                check_id, alone, base=self.BASE, present=True, row={"status": base_status[check_id]},
+                base_log="/nonexistent/base.log")
+        return cplan, verify.finalize_classification(self.BASE, cplan, entries, load=self.LOAD, runs=[])
+
+    def test_only_executed_failures_take_the_rerun_slots(self) -> None:
+        cplan, _ = self.classify(2, {"unit": "passed", "control": "failed"})
+        self.assertEqual(cplan.candidates, ["unit", "control", "story"])
+        self.assertEqual(cplan.active_rerun, ["unit", "control"])
+        self.assertEqual(cplan.blocked_rows, {"build": ["unit"], "storybook": ["build"], "baseline": ["build"]})
+        self.assertEqual(cplan.entries["story"]["reason"], "only the first 2 red checks rerun")
+        self.assertFalse(set(self.CHILDREN) & set(cplan.entries))
+
+    def test_children_stay_dependency_blocked_behind_the_executed_prerequisite(self) -> None:
+        from lanefather import verify
+        _, out = self.classify(3, {"unit": "passed", "control": "failed", "story": "passed"})
+        entries = {e["check"]: e for e in out["checks"]}
+        self.assertEqual([e["check"] for e in out["checks"]],
+                         ["unit", "control", "story", "build", "storybook", "baseline"])
+        self.assertEqual({c: entries[c]["class"] for c in ("unit", "control", "story")},
+                         {"unit": "regression", "control": "pre-existing", "story": "regression"})
+        for child in self.CHILDREN:
+            self.assertEqual(entries[child]["class"], "dependency-blocked")
+            self.assertEqual(entries[child]["prerequisites"], ["unit"])
+            self.assertNotIn("alone", entries[child])
+            self.assertNotIn("base", entries[child])
+        self.assertEqual(entries["storybook"]["blocked_by"], ["build"])
+        self.assertEqual(entries["storybook"]["reason"], "skipped because dependency failed (build); failed "
+                         "prerequisite: unit (regression); not run, so unresolved")
+        self.assertFalse(out["green"])
+        lines = verify.classification_lines(out)
+        self.assertIn("  baseline: dependency-blocked: skipped because dependency failed (build); failed "
+                      "prerequisite: unit (regression); not run, so unresolved", lines)
+        self.assertIn("lane: 3 dependency-blocked check(s) did not run and stay unresolved behind unit; they used "
+                      "no rerun and count as neither passed nor regressed", lines)
+
+    def test_children_keep_the_receipt_red_when_every_executed_failure_is_landable(self) -> None:
+        _, out = self.classify(3, {"unit": "failed", "control": "failed", "story": "failed"})
+        entries = {e["check"]: e for e in out["checks"]}
+        self.assertEqual({entries[c]["class"] for c in ("unit", "control", "story")}, {"pre-existing"})
+        self.assertIn("unit (pre-existing)", entries["build"]["reason"])
+        self.assertFalse(out["green"])
+
+    def test_prerequisites_follow_blocked_chains_without_looping(self) -> None:
+        from lanefather import verify
+        graph = {"a": ["b", "x"], "b": ["c", "a"], "c": ["y", "x"]}
+        self.assertEqual(verify.failed_prerequisites("a", graph), ["y", "x"])
+        self.assertEqual(verify.failed_prerequisites("z", graph), [])
+        entry = verify.dependency_blocked_entry("a", [], [])
+        self.assertEqual(entry["reason"], "skipped because dependency failed (the report names none); not run, so "
+                                          "unresolved")
+
+
 if __name__ == "__main__":
     unittest.main()

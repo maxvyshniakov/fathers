@@ -1035,6 +1035,98 @@ class DependencyBlockedTests(LaneCase):
         logged = runs_log.read_text().splitlines()
         self.assertEqual(logged[2], "lane-a-base verify:unit,verify:lint")
 
+    def install_interleaved_verify(self) -> pathlib.Path:
+        """Sid-Kit's report order in one suite: the failed prerequisite, three children it blocks (one waits on
+        another child, one is `skipped` with `blocked_by`), then two unrelated executed failures. On the base the
+        prerequisite and browser:story pass and browser:control fails."""
+        runs_log = self.tmp / "interleaved-verify-runs.log"
+        config = (self.integration / ".lanefather.toml").read_text().replace(
+            'plan_module = "tools/verification_plan.py"\n', "")
+        script = textwrap.dedent(f"""\
+            #!/usr/bin/env python3
+            import json, os, pathlib, sys, uuid
+            args = sys.argv[1:]
+            root = pathlib.Path(__file__).resolve().parent
+            lane = {{"browser:unit": ("failed", []), "browser:build": ("blocked", ["browser:unit"]),
+                     "browser:storybook": ("blocked", ["browser:build"]),
+                     "browser:baseline": ("skipped", ["browser:build"]),
+                     "browser:control": ("failed", []), "browser:story": ("failed", [])}}
+            if args[:1] == ["--changed"]:
+                paths = ["src/unit.test.ts"]
+                rows = [{{"id": cid, "suite": "browser", "paths": paths, "producer": False}} for cid in lane]
+                print(json.dumps({{"full": True, "paths": paths, "unowned": [], "suites": ["browser"],
+                                   "reasons": {{"browser": paths}}, "checks": rows}}))
+                sys.exit(0)
+            ids = args[args.index("--checks") + 1].split(",") if "--checks" in args else list(lane)
+            label = os.environ.get("LANEFATHER_SLOT_LABEL", "")
+            with open({str(runs_log)!r}, "a") as handle:
+                handle.write(label + " " + ",".join(ids) + "\\n")
+            run = root / ".build" / "verification-runs" / ("dep-" + uuid.uuid4().hex[:8])
+            run.mkdir(parents=True)
+            rows = []
+            for cid in ids:
+                if label.endswith("-base"):
+                    st, bb = ("failed" if cid == "browser:control" else "passed"), []
+                elif label.endswith("-alone"):
+                    st, bb = "failed", []
+                else:
+                    st, bb = lane[cid]
+                rows.append({{"id": cid, "suite": "browser", "status": st, "blocked_by": bb,
+                             "log": str(run / (cid.replace(":", "_") + ".log")), "seconds": 0.01}})
+            exit_code = int(any(r["status"] != "passed" for r in rows))
+            (run / "report.json").write_text(json.dumps({{"exit": exit_code, "checks": rows, "stopped": None}}))
+            print("Verification report: " + str(run / "report.json"))
+            sys.exit(exit_code)
+            """)
+        self.commit(self.integration, {".lanefather.toml": config, "verify.sh": script},
+                    "install interleaved dependency-blocked verify fixture")
+        return runs_log
+
+    def test_children_listed_before_unrelated_failures_take_no_rerun_slot(self):
+        runs_log = self.install_interleaved_verify()
+        self.env["LANEFATHER_RERUNS"] = "2"
+        worktree = self.created("a", "src/**")
+        self.commit(worktree, {"src/unit.test.ts": "expect(1).toBe(2)\n"})
+        output = self.lane("check", "a", ok=False)
+        receipt = self.receipt("a")
+        self.assertEqual(receipt["status"], "red")
+        children = ["browser:build", "browser:storybook", "browser:baseline"]
+
+        # The two rerun slots go to the first two checks that ran and failed, never to a child listed before them.
+        logged = runs_log.read_text().splitlines()
+        self.assertEqual(logged[1:], ["lane-a-alone browser:unit,browser:control",
+                                      "lane-a-base browser:unit,browser:control"])
+        result = receipt["results"][0]
+        self.assertEqual(result["failed_checks"], ["browser:unit", "browser:control", "browser:story"])
+        self.assertEqual(result["blocked_checks"], children)
+
+        entries = {e["check"]: e for e in receipt["classification"]["checks"]}
+        self.assertEqual(entries["browser:unit"]["class"], "regression")
+        self.assertEqual(entries["browser:control"]["class"], "pre-existing")
+        self.assertEqual(entries["browser:story"]["class"], "unclassified")
+        self.assertEqual(entries["browser:story"]["reason"], "only the first 2 red checks rerun")
+        for child in children:
+            self.assertEqual(receipt["check_results"][child]["status"], "blocked")
+            self.assertEqual(entries[child]["class"], "dependency-blocked")
+            self.assertEqual(entries[child]["prerequisites"], ["browser:unit"])
+            self.assertIn("failed prerequisite: browser:unit (regression); not run, so unresolved",
+                          entries[child]["reason"])
+        self.assertEqual(entries["browser:storybook"]["blocked_by"], ["browser:build"])
+        self.assertIn("lane: 3 dependency-blocked check(s) did not run and stay unresolved behind browser:unit",
+                      output)
+        self.assertEqual(receipt["first"]["failed_checks"], ["browser:unit", "browser:control", "browser:story"])
+
+        # The land refusal names the regression and the children that never ran, behind their prerequisite.
+        from lanefather import land, receipts
+        verdict = receipts.check_verdict(None, receipt, receipt["tree"])
+        assert isinstance(verdict, receipts.Red)
+        self.assertEqual(verdict.regressions, ("browser:unit",))
+        self.assertEqual(verdict.blocked, tuple(children))
+        self.assertEqual(verdict.prerequisites, ("browser:unit",))
+        problem = land.merge_problem("a", receipt["head"], receipt["tree"], receipt)
+        self.assertIn("; dependency-blocked, not run: browser:build, browser:storybook, browser:baseline behind "
+                      "browser:unit", str(problem))
+
 
 class MinSlotsTests(LaneCase):
     """fathers#173: a lane check honours a step's declared minimum slots (from --plan --json or [checks.min_slots])

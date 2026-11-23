@@ -59,6 +59,13 @@ copies of a check with a fixed port or path collide), each under a lease of the 
 slots) at the rerun's [slot priority](#slot-priorities) (interactive by default) that waits at most
 `LANEFATHER_RERUN_WAIT` seconds; only the perf suite asks for the whole machine.
 
+Only checks that ran and failed rerun: the first `LANEFATHER_RERUNS` (default 5) of them, in report order, and the
+rest stay `unclassified`. A check the report marks `blocked`, or `skipped` with a non-empty `blocked_by`, did not run
+because a check it depends on failed (fathers#195). It takes no rerun, is classified `dependency-blocked` (never a
+regression), names its `blocked_by` and the `prerequisites` that actually ran and failed behind it (followed through
+other blocked checks) with their class, and keeps the receipt red until it runs and passes; `land` names it in its
+refusal.
+
 `review <id> --fix-lane` starts the fix lane from the branch the lane landed on, which holds its merge, and refuses
 when no branch does; the landed lane keeps its own registration.
 

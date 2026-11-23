@@ -252,6 +252,12 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
 
 ### Fixed
 
+- A check that did not run because a check it depends on failed now names the check that actually failed behind it
+  (fathers#195): when the report says it waits on another skipped check, Lanefather follows the chain to the failed
+  prerequisite and says whether that one is a regression, pre-existing or flaky under load. The check output adds a
+  line counting these checks, which take no rerun and count as neither passed nor regressed, and `land`'s refusal of
+  a red receipt lists them with their prerequisite.
+
 - Antigravity reviews run (fathers#201): Lanefather now finds `agy` where its installer puts it
   (`~/.gemini/bin/agy`) or the copy T3 Code bundles, and calls it the way the real CLI works: read-only plan mode in
   its sandbox, the prompt as a stream-json message on stdin, so a large diff no longer overflows the command line,

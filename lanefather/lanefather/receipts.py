@@ -347,6 +347,8 @@ class Red:
     tree: str | None = None
     tree_match: bool | None = True
     status: str | None = "red"
+    blocked: tuple[str, ...] = ()  # dependency-blocked checks: they did not run (fathers#195)
+    prerequisites: tuple[str, ...] = ()  # the checks that ran and failed behind them
 
 
 @dataclass(frozen=True)
@@ -414,6 +416,21 @@ def check_verdict(
             else []
         )
         regressions = tuple(str(e["check"]) for e in reg_entries if "check" in e)
+        blocked_entries = (
+            [
+                cast(dict[str, Any], e)
+                for e in cast(list[Any], raw_cls_checks)
+                if isinstance(e, dict) and cast(dict[str, Any], e).get("class") == "dependency-blocked"
+            ]
+            if isinstance(raw_cls_checks, list)
+            else []
+        )
+        behind: list[str] = []
+        for e in blocked_entries:
+            raw_behind: Any = e.get("prerequisites") or e.get("blocked_by") or []
+            for name in cast(list[Any], raw_behind) if isinstance(raw_behind, list) else []:
+                if str(name) not in behind:
+                    behind.append(str(name))
         rerun_alone = bool(reg_entries) and all(
             (cast(dict[str, Any], alone) if isinstance(alone := e.get("alone"), dict) else {}).get("status")
             != "not rerun"
@@ -424,6 +441,8 @@ def check_verdict(
             failed=failed,
             unstarted=unstarted,
             regressions=regressions,
+            blocked=tuple(str(e["check"]) for e in blocked_entries if "check" in e),
+            prerequisites=tuple(behind),
             rerun_alone=rerun_alone,
             classification_base=cls_base,
             tree=tree_str,
