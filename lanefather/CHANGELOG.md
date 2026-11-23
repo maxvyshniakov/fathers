@@ -8,6 +8,17 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
 
 ### Added
 
+- A lane can name all of its accepted scope (fathers#192, fathers#64): `start` takes `--ticket N` more than once for
+  the tickets it completes and `--partial N` for those it does only part of, kept in the order given, and
+  `--decision URL` and `--spec PATH` for the owner decisions and specs it answers to. On land the merge says
+  `Fixes #N` for each ticket it completes and `Refs #N` for each partial one, every completed ticket is labelled
+  `integrated`, and every ticket gets the land comment, a partial one with a note that it stays open. GitHub closes
+  every completed ticket when the merge reaches the default branch, and `promote --ship` and `shipped` comment on
+  each of them. `lanefather scope <id>` prints a lane's scope or adds to it while the lane is planned or active. A
+  fix lane from `review --fix-lane` refers to its parent's tickets with `Refs` instead of closing them again. Land
+  warns when a lane commit says `Fixes` for a partial ticket. A lane with one ticket keeps today's record, merge
+  message and comments, and older Lanefather versions read every lane by its first completed ticket.
+
 - `lanefather status --json` names each project's main checkout (`checkout`, its real path): the project its
   lanes own their worktrees and folders under in Spawnfather, so Godfather shows a lane's spawns (fathers#171).
 

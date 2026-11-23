@@ -505,7 +505,7 @@ class SettleLaneRaceTests(LaneCase):
         return state.Store(cfg, directory=self.state)
 
     def _ready_landed_lane(self, lane_id: str) -> pathlib.Path:
-        self.start(lane_id, "lib/a.txt", "--create", "--ticket", "none")
+        self.lane("start", lane_id, "--ticket", "none", "--base", "integrate/q", "--claims", "lib/a.txt", "--create")
         wt = pathlib.Path(self.record(lane_id)["worktree"])
         self.commit(wt, {"lib/a.txt": f"{lane_id}\n"})
         self.lane("check", lane_id, cwd=wt)

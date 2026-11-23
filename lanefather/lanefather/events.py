@@ -53,6 +53,7 @@ KINDS: dict[str, str] = {
     "lane.unregistered": "start, adopt or a fix lane's hand-over could not register the lane's paths with Spawnfather "
                          "(warn)",
     "lane.kept": "keep, or keep --off, changed whether auto-done leaves the lane",
+    "lane.scope_changed": "scope changed a lane's tickets, decisions or specs",
     "lane.done": "done removed the lane's worktree, branches and scratch",
     "lane.dropped": "drop removed a lane that added nothing to its base",
     "lane.rechecked": "recheck reran a red post-merge smoke on the integration tip (error when red)",
@@ -77,6 +78,7 @@ KINDS: dict[str, str] = {
     "ticket.skipped": "the lane's issue was not marked: its smoke is not green",
     "ticket.release_commented": "a release commented on the issues it fixes",
     "ticket.failed": "a ticket rule failed; the action went on (warn)",
+    "ticket.trailer_conflict": "a lane commit or the merge says Fixes for a ticket the lane does only part of (warn)",
     "queue.updated": "a project policy rewrote the queue",
     "override": "a --force-reason overrode a refusal (warn)",
 }

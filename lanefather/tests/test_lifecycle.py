@@ -259,7 +259,8 @@ class LifecycleRaceTests(LaneCase):
     """Concurrent races guarded by `Store.update` and `lifecycle.transition` (fathers#69)."""
 
     def _prepare_active_lane(self, lane_id: str, claim: str = "lib/a.txt", file_path: str = "lib/a.txt") -> pathlib.Path:
-        self.start(lane_id, claim, "--create", "--ticket", "none")
+        # A lane without a ticket: start refuses `none` beside another ticket, so it is named alone.
+        self.lane("start", lane_id, "--ticket", "none", "--base", "integrate/q", "--claims", claim, "--create")
         wt = pathlib.Path(self.record(lane_id)["worktree"])
         self.commit(wt, {file_path: f"change for {lane_id}\n"})
         self.lane("check", lane_id, cwd=wt)

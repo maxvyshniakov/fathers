@@ -25,6 +25,7 @@ admission, slot, lease) are in the [fathers glossary](../GLOSSARY.md).
 | Ready entry | An unregistered queue entry (say queue entry, not entry, in shared docs) with no declared block, unmet dependency or conflicting claim. |
 | Brief | The instructions and context supplied to the agent implementing a lane. |
 | Ticket | The issue associated with a lane, when one is supplied. |
+| Accepted scope | What a lane answers to, in order: the tickets it completes (its merge says `Fixes`), the partial tickets it does only part of (`Refs`), and the owner decisions and specs it was given. Its primary ticket is the first one it completes. |
 | Base | The branch or commit from which a lane starts. |
 | Integration branch | The branch into which a lane lands. |
 | Worktree | A Git checkout with its own working directory and index, sharing repository history. |

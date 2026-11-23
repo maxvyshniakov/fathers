@@ -485,5 +485,157 @@ class QueueTests(LaneCase):
         self.assertIn("claims", self.lane("next", ok=False))
 
 
+DECISION = "https://github.com/fixture/straylight/issues/404#issuecomment-2541"
+
+
+class ScopeRecordTests(unittest.TestCase):
+    """The scope record (lanefather.scope, fathers#192): the primary ticket, the legacy reading and its fallback."""
+
+    def test_a_legacy_record_reads_as_its_one_ticket_and_writes_no_scope_key(self):
+        from lanefather import scope
+        record = {"id": "a", "ticket": "404"}
+        self.assertEqual(scope.of(record), (scope.Issue("404"),))
+        self.assertEqual(scope.of({"id": "b", "ticket": "none"}), ())
+        scope.write(record, scope.of(record))
+        self.assertEqual(record, {"id": "a", "ticket": "404"})
+        scope.write(record, (scope.Issue("404"), scope.Issue("9", partial=True)))
+        self.assertEqual(record["scope"], [{"issue": "404"}, {"issue": "9", "partial": True}])
+        # Back to one completed ticket: the key goes, so the record is today's again.
+        scope.write(record, (scope.Issue("404"),))
+        self.assertEqual(record, {"id": "a", "ticket": "404"})
+
+    def test_the_primary_is_the_first_completed_ticket_else_the_first_ticket_else_none(self):
+        from lanefather import scope
+        partial, done, other = scope.Issue("9", True), scope.Issue("404"), scope.Issue("12")
+        spec = scope.parse_spec("./docs/spec.md")
+        self.assertEqual(spec, scope.Spec("docs/spec.md"))
+        self.assertEqual(scope.primary((partial, done, other)), "404")
+        self.assertEqual(scope.primary((partial, scope.Issue("8", True))), "9")
+        self.assertEqual(scope.primary((spec,)), "none")
+        self.assertEqual(scope.primary(()), "none")
+
+    def test_a_malformed_scope_warns_and_reads_the_ticket_alone(self):
+        import contextlib
+        import io
+
+        from lanefather import scope
+        for raw in ("garbage", [{"issue": "404"}, {"issue": "404"}], [{"decision": "https://example.com/x"}],
+                    [{"spec": "../outside.md"}], [{"issue": "9", "partial": "yes"}], [{"unknown": 1}]):
+            with self.subTest(raw=raw):
+                stderr = io.StringIO()
+                with contextlib.redirect_stderr(stderr):
+                    items = scope.of({"id": f"m{len(repr(raw))}", "ticket": "404", "scope": raw})
+                self.assertEqual(items, (scope.Issue("404"),))
+                self.assertIn("has a malformed scope", stderr.getvalue())
+                self.assertIn("reading its ticket #404 alone", stderr.getvalue())
+
+    def test_a_decision_is_one_issue_comment_url(self):
+        from lanefather import scope
+        from lanefather.errors import LaneError
+        self.assertEqual(scope.parse_decision(DECISION),
+                         scope.Decision(DECISION, "fixture/straylight", "404", "2541"))
+        for bad in ("https://github.com/fixture/straylight/issues/404", "http://github.com/o/r/issues/1#issuecomment-2",
+                    "https://example.com/o/r/issues/1#issuecomment-2"):
+            with self.subTest(url=bad), self.assertRaises(LaneError):
+                scope.parse_decision(bad)
+
+
+class ScopeTests(LaneCase):
+    """start's --ticket, --partial, --decision and --spec, and the scope command (fathers#192)."""
+
+    def test_interleaved_tickets_and_partials_keep_their_order(self):
+        output = self.scoped("m", "--partial", "9", "--ticket", "404", "--ticket", "#12", "--partial", "7",
+                             "--decision", DECISION, "--spec", "docs/lanes.md", create=False)
+        record = self.record("m")
+        self.assertEqual(record["ticket"], "404", "the first ticket the lane completes is the primary one")
+        self.assertEqual(record["scope"], [{"issue": "9", "partial": True}, {"issue": "404"}, {"issue": "12"},
+                                           {"issue": "7", "partial": True}, {"decision": DECISION},
+                                           {"spec": "docs/lanes.md"}])
+        self.assertIn("Lane m: ticket #404\nScope: #9 (partial), #404, #12, #7 (partial), 1 decision, 1 spec\n",
+                      output)
+        [started] = self.events_of("lane.started")
+        self.assertEqual(started["details"]["scope"], record["scope"])
+
+    def test_a_lane_of_partial_tickets_takes_the_first_as_primary(self):
+        self.scoped("p", "--partial", "9", "--partial", "8", create=False)
+        record = self.record("p")
+        self.assertEqual((record["ticket"], record["scope"]),
+                         ("9", [{"issue": "9", "partial": True}, {"issue": "8", "partial": True}]))
+
+    def test_one_completed_ticket_or_none_writes_no_scope_key(self):
+        header = self.scoped("one", "--ticket", "404", create=False)
+        self.scoped("zero", "--ticket", "none", claims=("calls/**",), create=False)
+        self.assertNotIn("Scope:", header, "a one-ticket lane's brief header is today's")
+        self.assertNotIn("scope", self.record("one"))
+        self.assertNotIn("scope", self.record("zero"))
+        self.assertEqual((self.record("one")["ticket"], self.record("zero")["ticket"]), ("404", "none"))
+        self.assertEqual(self.lane("scope", "one").splitlines(),
+                         ["Lane one: scope #404 (primary ticket #404)", "  1. ticket #404 (completes: Fixes)"])
+
+    def test_start_refuses_a_scope_that_contradicts_itself(self):
+        for options, words in (
+                (("--ticket", "none", "--partial", "9"), "--ticket none names no ticket"),
+                (("--ticket", "404", "--partial", "404"), "scope names issue #404 twice"),
+                (("--ticket", "404", "--decision", "https://github.com/o/r/issues/1"),
+                 "give the URL of one issue comment"),
+                (("--ticket", "404", "--spec", "../secrets.md"), "without '..'"),
+                (("--ticket", "404", "--spec", "/etc/passwd"), "relative to the repository"),
+                (("--ticket", "404", "--spec", "docs/a.md", "--spec", "docs/a.md"), "scope names spec docs/a.md twice"),
+                (("--ticket", "four oh four",), "give an issue number")):
+            with self.subTest(options=options):
+                output = self.scoped("bad", *options, create=False, ok=False)
+                self.assertIn(words, output)
+                self.assertFalse((self.state / "bad.json").exists(), "a refused start writes nothing")
+
+    def test_a_partial_alone_names_the_scope_but_nothing_at_all_is_a_usage_error(self):
+        self.scoped("p", "--partial", "9", create=False)
+        output = self.lane("start", "q", "--base", "integrate/q", "--claims", "lib/**", ok=False)
+        self.assertIn("the following arguments are required: --ticket", output)
+
+    def test_the_scope_command_adds_and_marks_and_logs_the_change(self):
+        self.scoped("a", "--ticket", "404", create=False)
+        output = self.lane("scope", "a", "--add-partial", "9", "--add-ticket", "12", "--add-decision", DECISION,
+                           "--add-spec", "docs/lanes.md")
+        self.assertIn("Lane a: scope #404, #9 (partial), #12, 1 decision, 1 spec (primary ticket #404)", output)
+        self.assertIn("  2. ticket #9 (partial: its merge says Refs)", output)
+        self.assertIn(f"  4. decision {DECISION}", output)
+        self.assertEqual(self.record("a")["scope"], [{"issue": "404"}, {"issue": "9", "partial": True},
+                                                     {"issue": "12"}, {"decision": DECISION},
+                                                     {"spec": "docs/lanes.md"}])
+        [changed] = self.events_of("lane.scope_changed")
+        self.assertEqual(changed["details"]["before"], [{"issue": "404"}])
+        self.assertEqual(changed["details"]["after"], self.record("a")["scope"])
+        self.assertIn("scope a: #404 -> #404, #9 (partial), #12, 1 decision, 1 spec ticket=404",
+                      (self.state / "ledger.log").read_text())
+        # The primary follows the first completed ticket.
+        self.lane("scope", "a", "--mark-partial", "404")
+        self.assertEqual(self.record("a")["ticket"], "12")
+        reply = json.loads(self.lane("scope", "a", "--mark-complete", "9", "--json"))
+        self.assertEqual((reply["v"], reply["lane"], reply["ticket"]), (1, "a", "9"))
+        self.assertEqual(reply["scope"][:3], [{"issue": "404", "partial": True}, {"issue": "9"}, {"issue": "12"}])
+        self.assertEqual(len(self.events_of("lane.scope_changed")), 3)
+        # Printing changes nothing and logs nothing.
+        self.lane("scope", "a")
+        self.assertEqual(len(self.events_of("lane.scope_changed")), 3)
+
+    def test_the_scope_command_refuses_what_the_lane_cannot_take(self):
+        self.scoped("a", "--ticket", "404", create=False)
+        for options, words in ((("--add-ticket", "404"), "scope names issue #404 twice"),
+                               (("--mark-partial", "77"), "lane a has no ticket #77"),
+                               (("--add-ticket", "none"), "give an issue number"),
+                               (("--add-spec", "a/../../b"), "without '..'")):
+            with self.subTest(options=options):
+                self.assertIn(words, self.lane("scope", "a", *options, ok=False))
+        self.assertNotIn("scope", self.record("a"))
+        self.assertEqual(self.events_of("lane.scope_changed"), [])
+
+    def test_a_legacy_none_lane_gains_its_first_ticket_without_a_scope_key(self):
+        self.scoped("z", "--ticket", "none", create=False)
+        self.lane("scope", "z", "--add-ticket", "404")
+        record = self.record("z")
+        self.assertEqual(record["ticket"], "404")
+        self.assertNotIn("scope", record)
+
+
 if __name__ == "__main__":
     unittest.main()

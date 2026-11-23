@@ -5,7 +5,10 @@
 ## Commands
 
 ```
-lanefather start <id> --ticket N --claims GLOB... [--base REF] [--after ID...] [--fix-of ID,ID] [--create]
+lanefather start <id> --ticket N --claims GLOB... [--ticket N|--partial N...] [--decision URL...] [--spec PATH...]
+                 [--base REF] [--after ID...] [--fix-of ID,ID] [--create]
+lanefather scope <id> [--add-ticket N] [--add-partial N] [--add-decision URL] [--add-spec PATH]
+                 [--mark-partial N] [--mark-complete N] [--json]   a lane's accepted scope
 lanefather next [--start]                 the first ready entry of the ranked queue
 lanefather adopt <id> <worktree> <branch> register the worktree an agent created
 lanefather check <id>                     the checks the plan selects for the lane's diff -> receipt
@@ -67,7 +70,8 @@ other blocked checks) with their class, and keeps the receipt red until it runs 
 refusal.
 
 `review <id> --fix-lane` starts the fix lane from the branch the lane landed on, which holds its merge, and refuses
-when no branch does; the landed lane keeps its own registration.
+when no branch does; the landed lane keeps its own registration. The fix lane takes over the landed lane's scope
+with every ticket partial, so its merge says `Refs #N` and closes none of them a second time (fathers#64).
 
 A fix lane is exempt from review at land (`review.exempted`): the one `review <id> --fix-lane` registers for one
 lane, and a batch fix lane started with `start <id> --fix-of A,B,C` for the findings of one or more landed lanes
@@ -75,7 +79,27 @@ lane, and a batch fix lane started with `start <id> --fix-of A,B,C` for the find
 parent's ID in the string `review_fix_of` for older Lanefather versions. The complete batch is in
 `review_fix_of_all`. Mark each parent's findings with the fix lane's merge (`review A --mark N fixed:<fix lane id>`).
 A lane started with `--fix-of` has its own worktree, counts toward the cap like any lane, and runs its own check
-plan even with one parent. `start` warns when an id that reads `review-fixes` names no parent.
+plan even with one parent. `start` warns when an id that reads `review-fixes` names no parent. A batch fix lane's
+scope is what its own `--ticket` and `--partial` name: `--partial N` keeps its merge from closing N a second time.
+
+### Accepted scope
+
+A lane names everything it answers to at `start`, in order (fathers#192): `--ticket N` for each ticket it completes,
+`--partial N` for each it does only part of (the two keep the order they are given in), `--decision URL` for an owner
+or coordinator decision, the URL of one issue comment (`https://github.com/<owner>/<repo>/issues/<n>#issuecomment-<id>`),
+and `--spec PATH` for a spec file relative to the repository. A decision names the owner's or coordinator's answer,
+never an implementer's report. `start` refuses `--ticket none` beside another ticket, a ticket, decision or spec
+named twice, a decision that is not one issue comment's URL, and a spec path that is absolute or has `..`. A lane
+needs `--ticket` (`none` for no ticket) or `--partial`.
+
+The lane's primary ticket is the first ticket it completes, else its first partial ticket, else `none`; the record's
+`ticket`, the brief header's first line, `list`, `show`, `status` and the ticket-comment check of `done` name it. The
+brief header adds a `Scope:` line for a lane with more than that one ticket.
+
+`lanefather scope <id>` prints the scope; its options change a planned or active lane's under the record's lock and
+log `lane.scope_changed`: `--add-ticket`, `--add-partial`, `--add-decision` and `--add-spec` append, and
+`--mark-partial N` and `--mark-complete N` change a ticket it already names. A landed lane's merge has already named
+its tickets, so its scope does not change. `--json` prints `{"v": 1, "lane", "ticket", "scope"}`.
 
 ### Review findings before landing
 
@@ -274,12 +298,23 @@ Opt-in rules for a lane registered with `--ticket N`, so the issue shows its lan
 [tickets]
 integrated_label = true   # after a green post-merge smoke: label the issue `integrated`, created when missing
 land_comment = true       # ...and comment the merge, its branch, whether origin has it, the checks and the preview
-fixes_trailer = true      # the landing merge's message ends with `Fixes #N`: GitHub closes N when it reaches main
+fixes_trailer = true      # the landing merge's message ends with `Fixes #N` per completed ticket, `Refs #N` per
+                          # partial one: GitHub closes each completed ticket when it reaches main
 release_comment = true    # promote --ship and `shipped`: comment main's SHA or the version on each fixed issue
                           # and remove its `integrated` label
-preview = "https://preview.example.com/{short}"   # optional; {sha} {short} {branch} {ticket} {lane}
+preview = "https://preview.example.com/{short}"   # optional; {sha} {short} {branch} {ticket} {lane}; {ticket}
+                                                  # is the primary ticket
 repo = "owner/name"       # optional; default: origin's GitHub repository
 ```
+
+The rules cover every ticket of the lane's [accepted scope](#accepted-scope). The merge ends with one line per
+ticket, in scope order: `Fixes #N` for a ticket it completes, `Refs #N` for a partial one; a ticket that a given
+`land -m` message already names on a `Fixes` or `Refs` line of its own keeps that line. The default title names
+every ticket: `Merge lane/<id> (#A, #B)`. After a green smoke, land labels each completed ticket `integrated` and
+comments on every ticket (`ticket.marked`, one event per ticket); a partial ticket's comment says the merge does part
+of it and the issue stays open, unlabelled. Before the merge, land warns about a lane commit, or a given message,
+that says `Fixes #N` for a partial ticket, since GitHub closes the ticket anyway when that commit reaches `main`
+(`ticket.trailer_conflict`); the land goes on.
 
 `integrated` means done and landed in the integration branch, not yet on `main` or released. A merge origin does not
 have yet (a remote-tracking branch, as last fetched, that contains it) is said to be local only and is not linked. A
@@ -478,7 +513,15 @@ project sharing the directory shows it). Restore the record or remove the file. 
 reason but an unsupported one (EINVAL, ENOTSUP) fails the write.
 
 Safe to change: messages, the modules' insides. Not without a schema bump and a migration: record and receipt keys,
-the landing lock's file format (a project's reference-transaction hook reads it), the queue file.
+the landing lock's file format (a project's reference-transaction hook reads it), the queue file. An optional key
+that older versions may ignore is added within schema 1, as `review_fix_of_all` and `agents` were.
+
+`scope` is such a key (fathers#192): the [accepted scope](#accepted-scope) as an ordered list of `{"issue": "N"}`,
+`{"issue": "N", "partial": true}`, `{"decision": "<url>"}` and `{"spec": "<path>"}`. `ticket` always holds the
+primary ticket. A record without `scope` reads as its one ticket, or as no scope for `none`, and a lane that
+completes one ticket and names nothing else writes no `scope`, so its record is the same as before. A malformed
+`scope` warns and reads as `ticket` alone. An older Lanefather reads only `ticket`: a multi-ticket lane it lands
+says `Fixes` for the primary ticket only, which is why the primary is a ticket the lane completes.
 
 ## Checks
 
@@ -542,11 +585,11 @@ absolute path as `dashboard.events.path`. One `journal.ledger` call writes both,
 
 Kinds: `lane.started`, `lane.adopted`, `claims.added`, `lane.checked`, `landing.reviewed`, `lane.conflict`,
 `lane.landed`, `lane.post_merge`, `lane.released`, `lane.done_refused`, `lane.unregistered`, `lane.done`, `lane.dropped`,
-`lane.rechecked`, `lane.kept`, `process.stopped`,
+`lane.rechecked`, `lane.kept`, `lane.scope_changed`, `process.stopped`,
 `review.started`, `review.kept`, `review.exempted`, `review.finished`, `finding.marked`, `review.marked`,
 `review.handed_over`, `review.ticket_filed`, `gate.finished`, `perf.finished`, `promote.step`, `promote.finished`,
 `sync.finished`, `load.waited`, `landing.lock_taken`, `ticket.marked`, `ticket.skipped`,
-`ticket.release_commented`, `ticket.failed`, `queue.updated` and `override`; `lanefather/events.py` describes each.
+`ticket.release_commented`, `ticket.failed`, `ticket.trailer_conflict`, `queue.updated` and `override`; `lanefather/events.py` describes each.
 
 The writer appends each line with one `write` on the file opened with `O_APPEND`, mode 0600, under an `flock` on
 `events.lock`; past 4 MiB the log becomes `events.jsonl.1`, replacing the previous one. A line over 16 KiB keeps

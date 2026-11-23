@@ -9,6 +9,7 @@ replaces it), receipts beside it, and every action and override in ledger.log. R
 from __future__ import annotations
 
 import argparse
+from collections.abc import Sequence
 import os
 from pathlib import Path
 import re
@@ -65,13 +66,18 @@ class Command:
 
 
 COMMANDS: dict[str, Command] = {
-    "start": Command("register a lane: claims, ticket and agent brief",
-                     "<id> --ticket N --claims GLOB... [--base REF] [--after ID...] [--fix-of ID,ID] [--create]",
+    "start": Command("register a lane: claims, tickets and agent brief",
+                     "<id> --ticket N --claims GLOB... [--ticket N|--partial N...] [--decision URL...] "
+                     "[--spec PATH...] [--base REF] [--after ID...] [--fix-of ID,ID] [--create]",
                      "fix-login --ticket 12 --claims 'app/**' --create"),
     "next": Command("the first ready queue entry; --start registers it", "[--start] [--base REF] [--create]",
                     "--start --create"),
     "adopt": Command("register the worktree an agent created", "<id> <worktree> <branch>",
                      'fix-login "$PWD" lane/fix-login'),
+    "scope": Command("a lane's accepted scope: tickets, decisions, specs",
+                     "<id> [--add-ticket N] [--add-partial N] [--add-decision URL] [--add-spec PATH] "
+                     "[--mark-partial N] [--mark-complete N] [--json]",
+                     "fix-login --add-partial 64"),
     "check": Command("run the lane's checks; the receipt is the evidence", "<id> [--rerun] [--slots N]",
                      "fix-login"),
     "wait": Command("block until a lane is registered, landed or done",
@@ -128,6 +134,8 @@ class Parser(UsageParser):
         super().__init__(*args, **kwargs)
         self.row, self.tool = row, tool
         self.children: dict[str, Parser] = {}
+        # An option that is required unless one of these options is given (start's --ticket, or --partial).
+        self.required_unless: list[tuple[argparse.Action, tuple[str, ...]]] = []
 
     def usage_error(self, message: str) -> NoReturn:
         unknown = re.match(r"argument <command>: invalid choice: '?([^' ]+)'?", message)
@@ -157,6 +165,21 @@ def add(root: Parser, commands: Any, name: str, details: str = "", *, prog: str 
     return child
 
 
+class ScopeIssue(argparse.Action):
+    """--ticket and --partial (and scope's --add-ticket and --add-partial) append (number, partial) to one list, so
+    the lane's scope keeps the order they were given in."""
+
+    def __init__(self, option_strings: Sequence[str], dest: str, *, partial: bool = False, **kwargs: Any):
+        super().__init__(option_strings, dest, **kwargs)
+        self.partial = partial
+
+    def __call__(self, parser: argparse.ArgumentParser, namespace: argparse.Namespace, values: Any,
+                 option_string: str | None = None) -> None:
+        given: list[tuple[str, bool]] = list(getattr(namespace, self.dest, None) or [])
+        given.append((str(values), self.partial))
+        setattr(namespace, self.dest, given)
+
+
 def agent_kind(value: str) -> str:
     cleaned = value.strip().lower()
     if not events.AGENT_KIND_RE.fullmatch(cleaned):
@@ -180,7 +203,18 @@ def parser(project: config.Config = config.DEFAULT) -> Parser:
     p = add(root, commands, "start", "Prints the brief header for the lane's prompt and the lane's next commands. "
             "A fix lane named with --fix-of lands without a review of its own (fathers#174).", prog=prog)
     p.add_argument("id")
-    p.add_argument("--ticket", required=True, help="issue number, or none")
+    ticket = p.add_argument("--ticket", dest="issues", action=ScopeIssue, required=True, metavar="N",
+                            help="an issue the lane completes, its merge saying Fixes #N (repeatable; the first is "
+                                 "the primary ticket), or none")
+    p.required_unless.append((ticket, ("--partial",)))
+    p.add_argument("--partial", dest="issues", action=ScopeIssue, partial=True, metavar="N",
+                   help="an issue the lane does only part of, its merge saying Refs #N (repeatable, in order with "
+                        "--ticket)")
+    p.add_argument("--decision", action="append", metavar="URL",
+                   help="an owner or coordinator decision the lane answers to: the URL of one issue comment "
+                        "(repeatable)")
+    p.add_argument("--spec", action="append", metavar="PATH",
+                   help="a spec file the lane answers to, relative to the repository (repeatable)")
     p.add_argument("--claims", nargs="+", required=True, metavar="GLOB")
     p.add_argument("--base", help="integration branch or commit (default: this worktree's branch)")
     p.add_argument("--branch", help="lane branch (default: lane/<id>)")
@@ -207,6 +241,22 @@ def parser(project: config.Config = config.DEFAULT) -> Parser:
     p.add_argument("--agent", type=agent_kind,
                    help="the agent adopting the worktree (e.g. claude-code, codex, antigravity, t3-code)")
     p.set_defaults(run=lanes.adopt)
+    p = add(root, commands, "scope", "Prints the lane's tickets, decisions and specs in order, or changes a planned "
+            "or active lane's: a ticket it completes lands as Fixes #N, a partial one as Refs #N; the first "
+            "ticket it completes is the primary one (lanefather.scope).", prog=prog)
+    p.add_argument("id")
+    p.add_argument("--add-ticket", dest="add_issues", action=ScopeIssue, metavar="N",
+                   help="add an issue the lane completes (repeatable)")
+    p.add_argument("--add-partial", dest="add_issues", action=ScopeIssue, partial=True, metavar="N",
+                   help="add an issue the lane does only part of (repeatable)")
+    p.add_argument("--add-decision", action="append", metavar="URL",
+                   help="add an owner or coordinator decision: the URL of one issue comment (repeatable)")
+    p.add_argument("--add-spec", action="append", metavar="PATH",
+                   help="add a spec file, relative to the repository (repeatable)")
+    p.add_argument("--mark-partial", action="append", metavar="N", help="mark one of its tickets partial")
+    p.add_argument("--mark-complete", action="append", metavar="N", help="mark one of its tickets complete")
+    p.add_argument("--json", action="store_true", help="the version-1 scope: lane, ticket and scope")
+    p.set_defaults(run=lanes.scope_command)
     p = add(root, commands, "check", "In the lane's worktree, on a clean committed tree: the checks the tree's plan "
             "selects for the lane's diff, and the receipt for the tree (lanefather.checks).", prog=prog)
     p.add_argument("id")
@@ -435,6 +485,10 @@ def resolve_cli_config(argv: list[str], cwd: str) -> tuple[config.Config | None,
 def parse(argv: list[str], project: config.Config = config.DEFAULT) -> argparse.Namespace:
     """The arguments, or a usage error (exit 2) that names the word it refuses, before any missing argument."""
     root = parser(project)
+    for child in root.children.values():
+        for action, alternatives in child.required_unless:
+            if any(arg == option or arg.startswith(option + "=") for arg in argv for option in alternatives):
+                action.required = False
     args, extra = root.parse_known_args(argv)
     if extra:
         chosen = command_parser(root, args.command)

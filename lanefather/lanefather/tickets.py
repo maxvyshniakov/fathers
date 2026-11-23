@@ -1,10 +1,12 @@
 """The ticket lifecycle (#25): what a lane's issue shows from its land to a release, for a project whose
 `[tickets]` in .lanefather.toml turns the rules on. Without that table nothing here runs.
 
-- `fixes_trailer`: the landing merge's message ends with `Fixes #N`, so GitHub closes the issue only when the merge
-  reaches the default branch.
+- `fixes_trailer`: the landing merge's message ends with `Fixes #N` for each ticket of the lane's scope it completes
+  (lanefather.scope), so GitHub closes each only when the merge reaches the default branch, and `Refs #N` for each
+  it does only part of, which stays open.
 - `integrated_label`, `land_comment`: after a green post-merge smoke, land labels the issue `integrated` (done and in
-  the integration branch, not yet on main or released) and comments the merge, its branch, whether origin has it (a
+  the integration branch, not yet on main or released) each ticket the lane completes, and comments on every ticket
+  of its scope the merge, its branch, whether origin has it (a
   local-only SHA does not resolve on GitHub, so it is not linked), the checks it passed and the preview.
 - `release_comment`: promote --ship, and `shipped` after a project's release publish, comment the main SHA or the
   version on each issue a `Fixes #N` line in the shipped range names, and take its `integrated` label off.
@@ -14,12 +16,13 @@ the land or the promote, which have already happened.
 """
 from __future__ import annotations
 
+from collections.abc import Sequence
 import os
 import re
 import sys
 from typing import Any
 
-from . import config, github, journal, receipts, state
+from . import config, github, journal, receipts, scope, state
 from .gitops import common_dir, git, git_ok
 from .state import Record
 
@@ -29,6 +32,7 @@ LABEL_DESCRIPTION = "Done and landed in the integration/dev branch; not yet on m
 # done's ticket-comment check counts the implementer's evidence, not the comment land posts (lanefather.done).
 LAND_MARKER = "<!-- lanefather:land -->"
 FIXES = re.compile(r"^[ \t]*fixes[ \t]+#(\d+)[ \t]*$", re.IGNORECASE | re.MULTILINE)
+REFS = re.compile(r"^[ \t]*refs[ \t]+#(\d+)[ \t]*$", re.IGNORECASE | re.MULTILINE)
 GH_TIMEOUT = 60
 
 
@@ -44,11 +48,51 @@ def no_ticket_warning(record: Record, project: config.Config = config.DEFAULT) -
             "land labels, comments on and closes no issue. Register every lane with --ticket N")
 
 
-def merge_message(message: str, ticket: str, rule: config.Tickets = config.DEFAULT.tickets) -> str:
-    """The landing merge's message, ending with `Fixes #N` when the project asks for it and it has none."""
-    if not rule.fixes_trailer or ticket == "none" or ticket in FIXES.findall(message):
+def merge_message(message: str, issues: Sequence[scope.Issue] | str,
+                  rule: config.Tickets = config.DEFAULT.tickets) -> str:
+    """The landing merge's message, ending, when the project asks for it, with one line per ticket of the lane's
+    scope in order: `Fixes #N` for a ticket it completes, `Refs #N` for a partial one. A ticket the message already
+    names on a `Fixes` or `Refs` line of its own keeps that line (an explicit `land -m` wins)."""
+    if isinstance(issues, str):
+        issues = [item for item in scope.from_ticket(issues) if isinstance(item, scope.Issue)]
+    if not rule.fixes_trailer:
         return message
-    return message.rstrip("\n") + f"\n\nFixes #{ticket}"
+    named = {*FIXES.findall(message), *REFS.findall(message)}
+    lines = [f"{'Refs' if issue.partial else 'Fixes'} #{issue.number}" for issue in issues if issue.number not in named]
+    if not lines:
+        return message
+    return message.rstrip("\n") + "\n\n" + "\n".join(lines)
+
+
+def trailer_conflicts(cwd: str, base: str, head: str, issues: Sequence[scope.Issue],
+                      message: str = "") -> list[str]:
+    """Each `Fixes #N` line in base..head, or in the merge message, for a ticket the lane does only part of: GitHub
+    closes the ticket anyway when that commit reaches the default branch."""
+    partial = {issue.number for issue in issues if issue.partial}
+    if not partial:
+        return []
+    found: list[str] = []
+    log = git(cwd, "log", "--format=%H%x01%B%x00", f"{base}..{head}", check=False)
+    for entry in log.split("\0"):
+        sha, _, body = entry.strip("\n").partition("\x01")
+        found += [f"lane commit {sha[:10]} says Fixes #{n}, which is partial: GitHub closes #{n} when it reaches "
+                  "the default branch" for n in dict.fromkeys(FIXES.findall(body)) if n in partial]
+    found += [f"the merge message says Fixes #{n}, which is partial: GitHub closes #{n} when it reaches the "
+              "default branch" for n in dict.fromkeys(FIXES.findall(message)) if n in partial]
+    return found
+
+
+def warn_trailer_conflicts(store: state.Store, record: Record, cwd: str, base: str, head: str,
+                           message: str = "") -> list[str]:
+    """Warn, before land merges, about a `Fixes` line that would close a ticket the lane does only part of; the land
+    goes on."""
+    conflicts = trailer_conflicts(cwd, base, head, scope.issues(record), message)
+    for conflict in conflicts:
+        print(f"lane: warning: {conflict}", file=sys.stderr)
+    if conflicts:
+        journal.ledger(f"tickets land {record['id']}: {'; '.join(conflicts)}", kind="ticket.trailer_conflict",
+                       level="warn", lane=record, details={"conflicts": conflicts}, store=store)
+    return conflicts
 
 
 def fixed_issues(cwd: str, base: str, head: str) -> list[str]:
@@ -119,7 +163,10 @@ def receipt_line(receipt: dict[str, Any] | None, record: Record) -> str:
 
 def land_comment(record: Record, merge: str, branch: str, repo: str, pushed: list[str],
                  receipt: dict[str, Any] | None, smoke: str, *,
-                 rule: config.Tickets = config.DEFAULT.tickets) -> str:
+                 rule: config.Tickets = config.DEFAULT.tickets, issue: scope.Issue | None = None) -> str:
+    """The comment land posts on one ticket of the lane's scope (the primary ticket when `issue` is None)."""
+    issue = issue or scope.Issue(record["ticket"])
+    items = scope.of(record)
     short = merge[:10]
     where = (f"[`{short}`](https://github.com/{repo}/commit/{merge}) (pushed: origin/{', origin/'.join(pushed)})"
              if pushed else f"`{short}` (local only: origin does not have this merge yet)")
@@ -127,55 +174,83 @@ def land_comment(record: Record, merge: str, branch: str, repo: str, pushed: lis
              f"- Lane: `{record['id']}`, branch `{record['branch']}`",
              f"- Integration branch: `{branch}`" + (", on origin" if branch in pushed else ", local only"),
              f"- Checks passed: {receipt_line(receipt, record)}; post-merge smoke green ({smoke})"]
+    if scope.explicit(items):
+        lines.append(f"- Lane scope: {scope.describe(items)}")
     if rule.preview:
         lines.append("- Try it: " + substitute(rule.preview, {"sha": merge, "short": short, "branch": branch,
                                                               "ticket": record["ticket"], "lane": record["id"]}))
     notes: list[str] = []
-    if rule.integrated_label:
-        notes.append(f"Labelled `{LABEL}`: done and landed in `{branch}`, not yet on the default branch or released.")
-    if rule.fixes_trailer:
-        notes.append(f"The merge says `Fixes #{record['ticket']}`, so GitHub closes this issue when it reaches the "
-                     "default branch.")
+    if issue.partial:
+        refs = f" (`Refs #{issue.number}`)" if rule.fixes_trailer else ""
+        notes.append(f"Partial: this merge does part of #{issue.number}{refs}; the issue stays open and is not "
+                     f"labelled `{LABEL}`.")
+    else:
+        if rule.integrated_label:
+            notes.append(f"Labelled `{LABEL}`: done and landed in `{branch}`, not yet on the default branch or "
+                         "released.")
+        if rule.fixes_trailer:
+            notes.append(f"The merge says `Fixes #{issue.number}`, so GitHub closes this issue when it reaches the "
+                         "default branch.")
     return "\n".join(lines + ([""] + notes if notes else []))
 
 
 def after_land(store: state.Store, record: Record, merge: str, integration: str, branch: str,
                receipt: dict[str, Any] | None, smoke_status: str, smoke: str) -> None:
-    """Label and comment the lane's issue after its land; a red smoke leaves it for the fix's land."""
+    """Label each ticket the lane completes and comment on every ticket of its scope after its land; a partial
+    ticket gets the comment and no label. A red smoke leaves them all for the fix's land."""
     rule = store.project.tickets
-    if not has_ticket(record) or not (rule.integrated_label or rule.land_comment):
+    issues = scope.issues(record)
+    if not issues or not (rule.integrated_label or rule.land_comment):
         return
-    number, what = record["ticket"], f"land {record['id']} #{record['ticket']}"
+    numbers = ", ".join(f"#{issue.number}" for issue in issues)
     if smoke_status != "green":
-        journal.ledger(f"tickets {what}: not marked, the post-merge smoke is {smoke_status}",
-                       kind="ticket.skipped", lane=record, details={"issue": number, "smoke": smoke_status},
-                       directory=store.directory, project=store.project)
-        print(f"lane: #{number} is not marked integrated: the post-merge smoke is {smoke_status}")
+        for issue in issues:
+            journal.ledger(f"tickets land {record['id']} #{issue.number}: not marked, the post-merge smoke is "
+                           f"{smoke_status}", kind="ticket.skipped", lane=record,
+                           details={"issue": issue.number, "smoke": smoke_status},
+                           directory=store.directory, project=store.project)
+        print(f"lane: {numbers} {'is' if len(issues) == 1 else 'are'} not marked integrated: the post-merge smoke "
+              f"is {smoke_status}")
         return
     repo = repository(record["common_dir"], rule)
     if not repo:
-        warn(what, ["no GitHub repository: origin is not on GitHub and [tickets] names no repo"], store=store)
+        warn(f"land {record['id']} {numbers}",
+             ["no GitHub repository: origin is not on GitHub and [tickets] names no repo"], store=store)
         return
+    pushed = on_origin(integration, merge) if rule.land_comment else []
+    for issue in issues:
+        mark_issue(store, record, issue, repo, merge, branch, pushed, receipt, smoke)
+
+
+def mark_issue(store: state.Store, record: Record, issue: scope.Issue, repo: str, merge: str, branch: str,
+               pushed: list[str], receipt: dict[str, Any] | None, smoke: str) -> None:
+    """after_land for one ticket: the label when the lane completes it, the land comment, and one ledger event."""
+    rule = store.project.tickets
+    number, what = issue.number, f"land {record['id']} #{issue.number}"
     problems: list[str] = []
     done: list[str] = []
-    if rule.integrated_label:
+    if rule.integrated_label and not issue.partial:
         problem = add_label(repo, number, project=store.project)
         if problem:
             problems.append(f"label {LABEL}: {problem}")
         else:
             done.append(f"labelled {LABEL}")
     if rule.land_comment:
-        body = land_comment(record, merge, branch, repo, on_origin(integration, merge), receipt, smoke, rule=rule)
+        body = land_comment(record, merge, branch, repo, pushed, receipt, smoke, rule=rule, issue=issue)
         problem = gh(repo, "issue", "comment", number, "--body", body, project=store.project)
         if problem:
             problems.append(f"comment: {problem}")
         else:
             done.append("commented")
     if done:
+        details: dict[str, Any] = {"issue": number, "done": done, "repository": repo}
+        if issue.partial:
+            details["partial"] = True
         journal.ledger(f"tickets {what}: {', '.join(done)} ({repo})", kind="ticket.marked", lane=record,
-                       details={"issue": number, "done": done, "repository": repo},
-                       directory=store.directory, project=store.project)
-        print(f"lane: #{number} {' and '.join(done)} in {repo}")
+                       details=details, directory=store.directory, project=store.project)
+        print(f"lane: #{number} {' and '.join(done)} in {repo}" + (" (partial: not labelled)"
+                                                                     if issue.partial and rule.integrated_label
+                                                                     else ""))
     if problems:
         warn(what, problems, store=store)
 

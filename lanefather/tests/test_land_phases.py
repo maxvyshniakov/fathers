@@ -99,7 +99,7 @@ class LandPhasesTests(LaneCase):
     def test_done_releases_state_lock_across_gh_du_and_the_removal(self) -> None:
         from lanefather import config, done, lifetimes, state, worktrees
 
-        self.start("d", "lib/**", "--ticket", "404")
+        self.start("d", "lib/**")
         worktree = self.repo / ".claude" / "worktrees" / "agent-d1"
         self.git(self.repo, "worktree", "add", "-q", "-b", "worktree-agent-d1", str(worktree), "integrate/q")
         self.git(worktree, "checkout", "-q", "-B", "lane/d", "integrate/q")

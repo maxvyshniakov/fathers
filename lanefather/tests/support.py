@@ -946,6 +946,19 @@ class LaneCase(unittest.TestCase):
     def record(self, lane_id: str) -> dict[str, Any]:
         return json.loads((self.state / f"{lane_id}.json").read_text())
 
+    def scoped(self, lane_id: str, *scope: str, claims: tuple[str, ...] = ("lib/**",), create: bool = True,
+               ok: bool = True) -> str:
+        """start with the scope options as given (--ticket, --partial, --decision, --spec), in that order."""
+        return self.lane("start", lane_id, *scope, "--base", "integrate/q", "--claims", *claims,
+                         *(("--create",) if create else ()), ok=ok)
+
+    def events_of(self, kind: str) -> list[dict[str, Any]]:
+        """The machine-wide events of one kind, oldest first."""
+        if not self.events.exists():
+            return []
+        found = [json.loads(line) for line in self.events.read_text().splitlines() if line.strip()]
+        return [event for event in found if event.get("kind") == kind]
+
     def tip(self) -> str:
         return self.git(self.integration, "rev-parse", "HEAD")
 

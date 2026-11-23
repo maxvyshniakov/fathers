@@ -7,7 +7,7 @@ lane's prompt, ending with the rule snippets whose path globs overlap the lane's
 """
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 import json
 import os
 from pathlib import Path
@@ -26,6 +26,7 @@ from . import (
     queue,
     receipts,
     review_record,
+    scope,
     slots,
     state,
     tickets,
@@ -42,8 +43,10 @@ def header(store: state.Store, record: Record, rules: list[dict[str, Any]] | tup
     raw_targets: Any = record.get("cargo_targets") or []
     targets = [str(t) for t in cast(list[Any], raw_targets)] if isinstance(raw_targets, list) else []
     target_label = store.project.target_label or "Build target"
+    items = scope.of(record)
     return "\n".join([
         f"Lane {record['id']}: ticket {ticket}",
+        *([f"Scope: {scope.describe(items)}"] if scope.explicit(items) else []),
         f"Branch: {record['branch']} from {record['base']} ({record['base_sha'][:10]})",
         f"Claims: {' '.join(record['claims']) or f'none yet; {prog} check adds the paths the lane changes'}"
         + (f" (lands after {', '.join(record['after'])})" if record["after"] else ""),
@@ -73,8 +76,11 @@ def next_lines(store: state.Store, record: Record) -> list[str]:
 
 def prepare(store: state.Store, cwd: Any, lane_id: str, ticket: str, lane_claims: list[str], base: str | None,
             after: list[str], branch: str | None = None, scratch: Iterable[str] = (), *,
-            parents: list[str] | None = None, batch_fix: bool = False) -> tuple[Record, list[dict[str, Any]]]:
-    """The record start registers, and the rules its claims touch; nothing is written."""
+            parents: list[str] | None = None, batch_fix: bool = False,
+            items: Sequence[scope.Item] | None = None) -> tuple[Record, list[dict[str, Any]]]:
+    """The record start registers, and the rules its claims touch; nothing is written. `items` is the lane's
+    accepted scope (lanefather.scope); without it the scope is `ticket` alone."""
+    chosen = tuple(items) if items is not None else scope.from_ticket(str(ticket))
     store.record_path(lane_id)
     for claim in lane_claims:
         if claim.startswith("/") or ".." in claim.split("/"):
@@ -85,12 +91,13 @@ def prepare(store: state.Store, cwd: Any, lane_id: str, ticket: str, lane_claims
     integration = next((w["path"] for w in worktree_list(cwd) if w.get("branch") == base), None)
     rules = claims.rules_for(lane_claims, git(cwd, "rev-parse", "--show-toplevel"), store.project)
     record: Record = {
-        "id": lane_id, "ticket": str(ticket).lstrip("#"), "branch": branch or f"lane/{lane_id}",
+        "id": lane_id, "ticket": scope.primary(chosen), "branch": branch or f"lane/{lane_id}",
         "base": base, "base_sha": base_sha, "claims": lane_claims, "after": after, "common_dir": common,
         "integration": integration, "worktree": None, "status": "planned", "created": journal.now(),
         "scratch": [str(store.directory / f"{lane_id}.scratch"), *(os.path.realpath(s) for s in scratch)],
         "cargo_targets": worktrees.lane_targets(lane_id, store.project), "overrides": [], "agents": [],
         "rules": [rule["name"] for rule in rules]}
+    scope.write(record, chosen)
     state.set_fix_parents(record, parents or [], batch=batch_fix)
     return record, rules
 
@@ -192,7 +199,8 @@ def register_admitted(store: state.Store, record: Record, decision: admission.De
                         f"after={','.join(after) or '-'} cap={cap} ({source}) {host.host_fields(info)}"),
         ledger_details={"status": status, "branch": record["branch"], "base": record["base"],
                         "base_sha": record["base_sha"], "claims": lane_claims, "after": after,
-                        "worktree": worktree, "cap": cap, "cap_source": source},
+                        "worktree": worktree, "cap": cap, "cap_source": source,
+                        **({"scope": record["scope"]} if "scope" in record else {})},
     )
     # fathers#171: the lane owns its worktree, scratch and build directories through Spawnfather; a fix lane takes
     # its parent's worktree by hand-over (hand_over_fix_lane).
@@ -203,8 +211,10 @@ def start(args: Any, store: state.Store) -> int:
     lane_claims = [c for claim in args.claims for c in claim.split()]
     given = getattr(args, "fix_of", None) or ()
     parents = list(dict.fromkeys(name for value in given for name in value.replace(",", " ").split()))
-    record, rules = prepare(store, os.getcwd(), args.id, args.ticket, lane_claims, args.base, args.after, args.branch,
-                            args.scratch, parents=parents, batch_fix=True)
+    items = scope.from_options(cast(list[tuple[str, bool]], getattr(args, "issues", None) or []),
+                               option_list(getattr(args, "decision", None)), option_list(getattr(args, "spec", None)))
+    record, rules = prepare(store, os.getcwd(), args.id, scope.primary(items), lane_claims, args.base, args.after,
+                            args.branch, args.scratch, parents=parents, batch_fix=True, items=items)
     register(store, record, rules, args.force_reason, args.create, agent=getattr(args, "agent", None))
     if not parents and "review-fixes" in args.id:
         print(f"{store.prog}: warning: {args.id} looks like a fix lane but names no parent, so its land starts "
@@ -268,7 +278,9 @@ def hand_over_fix_lane(
 ) -> tuple[Record, Record]:
     """Register a follow-up fix lane taking over `record`'s landed worktree and transition `record` via `hand_over`."""
     main = main_checkout(record["common_dir"])
-    fix, rules = prepare(store, main, fix_id, record["ticket"], fix_paths, base, [], parents=[record["id"]])
+    # The fix lane does part of its parent's tickets: its merge says Refs, never a second Fixes (#64).
+    fix, rules = prepare(store, main, fix_id, record["ticket"], fix_paths, base, [], parents=[record["id"]],
+                         items=scope.as_partial(scope.of(record)))
     fix["worktree"] = record["worktree"]
     register(store, fix, rules, force_reason, False)
     updated_parent = lifecycle.transition(
@@ -290,6 +302,79 @@ def adopt(args: Any, store: state.Store) -> int:
         adopt_worktree(store, record, args.worktree, args.branch, agent=getattr(args, "agent", None))
     print(f"Lane {args.id} adopted {record['worktree']} on {args.branch}")
     print("\n".join(next_lines(store, record)))
+    return 0
+
+
+def scope_lines(record: Record) -> list[str]:
+    items = scope.of(record)
+    return [f"Lane {record['id']}: scope {scope.describe(items)} (primary ticket "
+            f"{'#' + record['ticket'] if record['ticket'] != scope.NONE else 'none'})",
+            *(f"  {n}. {scope.entry_line(item)}" for n, item in enumerate(items, 1))]
+
+
+def change_scope(store: state.Store, lane_id: str, marks: list[tuple[str, bool]],
+                 additions: list[scope.Item]) -> tuple[tuple[scope.Item, ...], tuple[scope.Item, ...], Record]:
+    """Under the record's lock: mark tickets partial or complete, then append `additions`. A lane that landed has
+    already named its tickets in its merge, so only a planned or active lane's scope changes."""
+    seen: dict[str, tuple[scope.Item, ...]] = {}
+
+    def change(record: Record) -> bool:
+        if not lifecycle.occupying(record):
+            raise LaneError(f"scope refused: lane {lane_id} is {record['status']}; its merge already named its "
+                            "tickets")
+        before = scope.of(record)
+        current = list(before)
+        for number, partial in marks:
+            index = next((i for i, item in enumerate(current)
+                          if isinstance(item, scope.Issue) and item.number == number), None)
+            if index is None:
+                raise LaneError(f"scope refused: lane {lane_id} has no ticket #{number}; add it with --add-ticket "
+                                "or --add-partial")
+            current[index] = scope.Issue(number, partial)
+        after = (*current, *additions)
+        scope.validate(after)
+        seen.update(before=before, after=after)
+        if after == before:
+            return False
+        scope.write(record, after)
+        return True
+
+    record = store.update(lane_id, change)
+    return seen["before"], seen["after"], record
+
+
+def option_list(value: Any) -> list[str]:
+    """An `append` option's values as strings, none when it was not given."""
+    return [str(item) for item in cast(list[Any], value)] if isinstance(value, list) else []
+
+
+def scope_command(args: Any, store: state.Store) -> int:
+    """Print a lane's accepted scope, or change it (lane.scope_changed): owner answers arrive mid-lane."""
+    given = cast(list[tuple[str, bool]], getattr(args, "add_issues", None) or [])
+    additions: list[scope.Item] = [scope.Issue(scope.ticket_number(value), partial) for value, partial in given]
+    additions += [scope.parse_decision(url) for url in option_list(args.add_decision)]
+    additions += [scope.parse_spec(path) for path in option_list(args.add_spec)]
+    partial_marks = [scope.ticket_number(n) for n in option_list(args.mark_partial)]
+    complete_marks = [scope.ticket_number(n) for n in option_list(args.mark_complete)]
+    both = sorted(set(partial_marks) & set(complete_marks))
+    if both:
+        raise LaneError(f"cannot pass both --mark-partial and --mark-complete for #{both[0]}")
+    marks = [(n, True) for n in partial_marks] + [(n, False) for n in complete_marks]
+    if additions or marks:
+        before, after, record = change_scope(store, args.id, marks, additions)
+        if after != before:
+            journal.ledger(f"scope {args.id}: {scope.describe(before)} -> {scope.describe(after)} "
+                           f"ticket={record['ticket']}", kind="lane.scope_changed", lane=record,
+                           details={"before": [scope.to_json(i) for i in before],
+                                    "after": [scope.to_json(i) for i in after], "ticket": record["ticket"]},
+                           store=store)
+    else:
+        record = store.load(args.id)
+    if args.json:
+        print(json.dumps({"v": 1, "lane": record["id"], "ticket": record["ticket"],
+                          "scope": [scope.to_json(item) for item in scope.of(record)]}, indent=2))
+    else:
+        print("\n".join(scope_lines(record)))
     return 0
 
 

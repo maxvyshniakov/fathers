@@ -7,7 +7,7 @@ import pathlib
 from typing import Any
 import unittest
 
-from support import FIXTURE_CONFIG, LaneCase
+from support import FIXTURE_CONFIG, TWO_FINDINGS, LaneCase
 
 # A stand-in gh with a repository's labels and issues in FAKE_TICKETS_STATE; FAKE_TICKETS_FAIL fails every call whose
 # arguments contain it, as an outage or a missing token does.
@@ -198,6 +198,137 @@ class LandTests(TicketCase):
         self.env["LANEFATHER_QUEUE"] = str(queue)
         output = self.lane("next", "--start", "--base", "integrate/q")
         self.assertIn("lane: warning: lane c has no ticket", output)
+
+
+class ScopeClosureTests(TicketCase):
+    """A lane that completes #404 and #405 and does part of #406 (fathers#192, #64): its merge says Fixes for the
+    first two and Refs for the third; land labels the two and comments on all three; a release closes the two."""
+
+    def scoped_lane(self, lane_id: str = "a", message: str = "lane change") -> pathlib.Path:
+        self.scoped(lane_id, "--ticket", "404", "--ticket", "405", "--partial", "406")
+        worktree = pathlib.Path(self.record(lane_id)["worktree"])
+        self.commit(worktree, {"lib/api.txt": "foo\nbaz\n"}, message)
+        self.lane("check", lane_id)
+        return worktree
+
+    def test_the_merge_says_fixes_for_each_completed_ticket_and_refs_for_the_partial_one(self):
+        self.scoped_lane()
+        self.lane("land", "a")
+        self.assertEqual(self.git(self.integration, "log", "-1", "--format=%B").splitlines(),
+                         ["Merge lane/a (#404, #405, #406)", "", "Fixes #404", "Fixes #405", "Refs #406"])
+
+    def test_a_given_message_keeps_its_own_lines_and_gains_only_the_missing_ones(self):
+        self.scoped_lane()
+        self.lane("land", "a", "-m", "Merge the lib change\n\nFixes #405\nRefs #406\n")
+        message = self.git(self.integration, "log", "-1", "--format=%B")
+        self.assertEqual(message.splitlines(),
+                         ["Merge the lib change", "", "Fixes #405", "Refs #406", "", "Fixes #404"])
+
+    def test_land_labels_the_completed_tickets_and_comments_on_every_one(self):
+        self.scoped_lane()
+        output = self.lane("land", "a")
+        self.assertEqual(self.issue("404")["labels"], ["integrated"])
+        self.assertEqual(self.issue("405")["labels"], ["integrated"])
+        self.assertEqual(self.issue("406")["labels"], [], "a partial ticket stays unlabelled")
+        self.assertIn("#406 commented in fixture/straylight (partial: not labelled)", output)
+        [done] = self.land_comments("404")
+        [also] = self.land_comments("405")
+        [partial] = self.land_comments("406")
+        for comment in (done, also, partial):
+            self.assertIn("- Lane scope: #404, #405, #406 (partial)", comment)
+            self.assertIn("?ticket=404", comment, "the preview's {ticket} stays the primary ticket")
+        self.assertIn("`Fixes #404`", done)
+        self.assertIn("`Fixes #405`", also)
+        self.assertIn("Labelled `integrated`", also)
+        self.assertIn("Partial: this merge does part of #406 (`Refs #406`); the issue stays open and is not "
+                      "labelled `integrated`.", partial)
+        self.assertNotIn("Labelled", partial)
+        self.assertNotIn("Fixes #", partial)
+        marked = self.events_of("ticket.marked")
+        self.assertEqual([event["details"]["issue"] for event in marked], ["404", "405", "406"])
+        self.assertEqual([event["details"].get("partial", False) for event in marked], [False, False, True])
+
+    def test_a_red_smoke_leaves_every_ticket_unmarked(self):
+        self.scoped_lane()
+        self.commit(self.integration, {"calls/extra.txt": "qux\n", "tooling/moved.txt": "x\n"},
+                    "the integration calls qux")
+        output = self.lane("land", "a", ok=False)
+        self.assertIn("#404, #405, #406 are not marked integrated: the post-merge smoke is red", output)
+        self.assertEqual([event["details"]["issue"] for event in self.events_of("ticket.skipped")],
+                         ["404", "405", "406"])
+        self.assertEqual(self.gh_calls(), [])
+
+    def test_a_lane_commit_that_says_fixes_for_a_partial_ticket_warns_and_lands(self):
+        self.scoped_lane(message="lane change\n\nFixes #406")
+        lane_commit = self.git(pathlib.Path(self.record("a")["worktree"]), "rev-parse", "HEAD")
+        output = self.lane("land", "a")
+        warning = (f"lane commit {lane_commit[:10]} says Fixes #406, which is partial: GitHub closes #406 when it "
+                   "reaches the default branch")
+        self.assertIn(f"lane: warning: {warning}", output)
+        [conflict] = self.events_of("ticket.trailer_conflict")
+        self.assertEqual((conflict["level"], conflict["details"]["conflicts"]), ("warn", [warning]))
+        self.assertEqual(self.record("a")["status"], "landed")
+
+    def test_a_lane_without_partial_tickets_never_warns_about_its_own_fixes_lines(self):
+        worktree = self.checked()
+        self.commit(worktree, {"lib/api.txt": "foo\nbaz\nqux\n"}, "more\n\nFixes #404")
+        self.lane("check", "a")
+        self.assertNotIn("which is partial", self.lane("land", "a"))
+        self.assertEqual(self.events_of("ticket.trailer_conflict"), [])
+
+    def test_shipped_comments_and_unlabels_the_completed_tickets_only(self):
+        base = self.tip()
+        self.scoped_lane()
+        self.lane("land", "a")
+        output = self.lane("shipped", "v1.4.0", "--since", base)
+        self.assertIn("release v1.4.0: commented on 2 of 2 issues it fixes (#404, #405)", output)
+        self.assertEqual((self.issue("404")["labels"], self.issue("405")["labels"]), ([], []))
+        self.assertTrue(self.land_comments("405")[-1].startswith("Released in `v1.4.0`"))
+        [partial] = self.land_comments("406")
+        self.assertTrue(partial.startswith("<!-- lanefather:land -->"), "the partial ticket has only the land comment")
+        removals = [call[2] for call in self.gh_calls() if "--remove-label" in call]
+        self.assertEqual(removals, ["404", "405"])
+
+    def test_promote_ship_closes_the_completed_tickets_only(self):
+        self.git(self.repo, "branch", "dev")
+        remote = self.tmp / "remote.git"
+        self.git(self.tmp, "init", "-q", "--bare", str(remote))
+        (self.tmp / "no-hooks").mkdir()
+        self.git(self.repo, "config", "core.hooksPath", str(self.tmp / "no-hooks"))
+        self.git(self.repo, "remote", "set-url", "origin", str(remote))
+        self.git(self.repo, "push", "-q", "origin", "main", "dev")
+        self.commit(self.integration, {".lanefather.toml": FIXTURE_CONFIG + ALL_ON + 'repo = "fixture/straylight"\n'},
+                    "name the repository")
+        self.scoped_lane()
+        self.lane("land", "a")
+        self.lane("review", "a")
+        tip = self.tip()
+        output = self.lane("promote", tip, "--ship", "--wait", "0")
+        self.assertIn("release " + tip[:10] + ": commented on 2 of 2 issues it fixes (#404, #405)", output)
+        shipped = f"Shipped to the default branch as [`{tip[:10]}`](https://github.com/fixture/straylight/commit/{tip})."
+        self.assertEqual((self.land_comments("404")[-1], self.land_comments("405")[-1]), (shipped, shipped))
+        self.assertNotIn(shipped, self.land_comments("406"))
+        self.assertEqual(self.issue("406")["labels"], [])
+
+    def test_the_fix_lane_inherits_the_scope_as_partial_and_its_merge_only_refers(self):
+        self.review_text.write_text(TWO_FINDINGS)
+        worktree = self.scoped_lane()
+        self.lane("land", "a")
+        self.lane("review", "a")
+        self.assertIn("scope refused: lane a is landed", self.lane("scope", "a", "--add-partial", "9", ok=False))
+        self.lane("review", "a", "--fix-lane")
+        fix = self.record("a-review-fixes")
+        self.assertEqual(fix["ticket"], "404")
+        self.assertEqual(fix["scope"], [{"issue": "404", "partial": True}, {"issue": "405", "partial": True},
+                                        {"issue": "406", "partial": True}])
+        self.git(worktree, "checkout", "-q", "-B", "lane/a-review-fixes", "integrate/q")
+        self.commit(worktree, {"lib/api.txt": "foo\nbaz\nqux\n"}, "fix(review): keep baz")
+        self.lane("check", "a-review-fixes", cwd=worktree)
+        self.lane("land", "a-review-fixes")
+        message = self.git(self.integration, "log", "-1", "--format=%B")
+        self.assertEqual(message.splitlines()[-3:], ["Refs #404", "Refs #405", "Refs #406"])
+        self.assertNotIn("Fixes", message)
+        self.assertEqual(self.issue("404")["labels"], ["integrated"], "the parent's land labelled it once")
 
 
 class ReleaseTests(TicketCase):

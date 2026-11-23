@@ -9,6 +9,12 @@
 - Start: `lanefather start <id> --ticket <N> --base integrate/<batch> --claims '<package>/**' --create`; the lane's
   worktree is `.claude/worktrees/lane-<id>` of the main checkout. Start (and `adopt`) print the lane's next commands:
   its check and the hand-back.
+- Chained tickets: one lane that completes several tickets names each, in order, with `--ticket <N> --ticket <M>`;
+  one it does only part of with `--partial <N>`, and the owner's answer or a spec it follows with
+  `--decision <comment URL>` or `--spec <path>`. The first completed ticket is the primary one: the implementer's
+  evidence goes there. Its merge says `Fixes` for each completed ticket and `Refs` for each partial one, and a
+  later answer joins the scope with `lanefather scope <id> --add-decision <URL>`
+  ([accepted scope](../../lanefather/docs/reference.md#accepted-scope)).
 - Wait: `lanefather wait <id> --for registered|landed|done [--timeout S]` blocks until the lane is in that state
   (exit 0), or exits 75 with its current state when the timeout (default 3600 s) passes; never a loop over
   `lanefather list`. `lanefather --help` lists each command in one line; `lanefather <command> --help` has its

@@ -30,6 +30,7 @@ from . import (
     review,
     review_gate,
     review_record,
+    scope,
     state,
     tickets,
     verify,
@@ -371,10 +372,12 @@ def merge(
                 store, lane_id, merge_sha=merge_sha, previous=prev_sha, tip=tip, tree=tree,
                 integration=integration, onto=onto, keep=keep_flag, new_overrides=new_overrides, receipt=receipt,
             )
-        ticket = f" (#{record['ticket']})" if record["ticket"] != "none" else ""
+        issues = scope.issues(record)
+        ticket = f" ({', '.join('#' + issue.number for issue in issues)})" if issues else ""
         merge_msg = tickets.merge_message(
-            message or f"Merge {record['branch']}{ticket}", record["ticket"], store.project.tickets
+            message or f"Merge {record['branch']}{ticket}", issues, store.project.tickets
         )
+        tickets.warn_trailer_conflicts(store, record, integration, previous, tip, message or "")
         merge_config = [part for setting in store.project.merge_config for part in ("-c", setting)]
         conflicts = ""
         with landing(record["common_dir"], f"{prog} land {lane_id} (pid {os.getpid()})", wait, store=store) as env:
