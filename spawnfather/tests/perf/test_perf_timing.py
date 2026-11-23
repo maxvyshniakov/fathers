@@ -21,7 +21,7 @@ BUDGET = 10.0  # seconds: either of these takes well under one when nothing else
 
 
 def perf_budget(test: unittest.TestCase, started: float, budget: float, what: str) -> None:
-    """The perf helper repo-kit's test-hygiene knows: fails `test` when `what` took longer than `budget` seconds
+    """The perf helper `tools/hygiene.py` knows: fails `test` when `what` took longer than `budget` seconds
     since `started` (time.monotonic). Only this suite calls it."""
     took = time.monotonic() - started
     test.assertLess(took, budget, f"{what} took {took:.2f} s; its budget is {budget:.0f} s")

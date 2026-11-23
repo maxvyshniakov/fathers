@@ -342,6 +342,8 @@ class Reaper:
         assert self.process.stdin is not None
         with _quiet():
             self.process.stdin.close()
+        with _quiet():
+            self.process.wait(timeout=1)
 
 
 @dataclass
@@ -411,6 +413,8 @@ def run(steps: Sequence[Step], *, memory: float = math.inf, keep_going: bool = F
         except OSError as error:
             say(f"[{step.name}] {error}")
             results.append(Result(step.name, "fail", 0.0))
+            if not halted and not keep_going:
+                halt(signal.SIGTERM)
             return
         deadline = now + step.timeout * 60 if step.timeout > 0 else math.inf
         running[step.name] = _Running(step, process, now, deadline)
@@ -445,6 +449,8 @@ def run(steps: Sequence[Step], *, memory: float = math.inf, keep_going: bool = F
             return
         done = [result.name for result in results]
         for step in startable(steps, done, {name: h.step.memory for name, h in running.items()}, memory):
+            if halted:
+                break
             start(step, steps.index(step))
 
     def on_signal(number: int, _frame: object) -> None:
@@ -529,7 +535,9 @@ def toolchain() -> tuple[str, str]:
 class Verified:
     """The checks that passed on a tree, per check: `v1 <tree> <python> <platform> <check>` (tab-separated) lines
     in the Git common directory's fathers-verified, shared by every worktree. A check's result depends on the tree
-    alone, while which checks a commit selects depends on its base: so the cache is per check, not per commit."""
+    alone, while which checks a commit selects depends on its base: so the cache is per check, not per commit. The
+    pre-push gate also records each commit it passed (`v1 commit:<sha> <python> <platform> pre-push`): once that commit
+    is on origin/main, its base there has no change, which selects every check."""
 
     def __init__(self, common_dir: Path, key: tuple[str, str] | None = None) -> None:
         self.path = common_dir / VERIFIED_RECORD
@@ -546,6 +554,12 @@ class Verified:
             if len(fields) == 5 and fields[0] == "v1" and fields[1] == tree and tuple(fields[2:4]) == self.key:
                 found.add(fields[4])
         return found
+
+    def commit_passed(self, sha: str) -> bool:
+        return "pre-push" in self.passed(f"commit:{sha}")
+
+    def record_commit(self, sha: str) -> None:
+        self.record(f"commit:{sha}", ["pre-push"])
 
     def record(self, tree: str, names: Iterable[str]) -> None:
         """Appends one line per check, each in one write: concurrent runs never interleave inside a line."""

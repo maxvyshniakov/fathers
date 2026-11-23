@@ -42,8 +42,9 @@ runner installs Slotfather alone (`python3 slotfather/install.py --user runner -
   `CHANGELOG.md`, `README.md`, `GLOSSARY.md`, `docs/` and `tests/`, and the same lint gate, `tools/check.py`.
 - `common/`: code the packages share today. It holds [`eventcheck.py`](common/eventcheck.py), the validator of the
   shared event schema that every package's tests import.
-- `tools/`: the repository's check entry ([`checks.py`](tools/checks.py)), Lanefather's verify command
-  (`lane-check`) and the shared Ruff rules (`ruff.toml`).
+- `tools/`: the repository's check entry ([`checks.py`](tools/checks.py)) and its runner (`verify.py`), the
+  pre-push gate (`prepush.py`), test hygiene (`hygiene.py`), Lanefather's verify command (`lane-check`) and the
+  shared Ruff rules (`ruff.toml`).
 - [`GLOSSARY.md`](GLOSSARY.md): the terms the tools share; each package's glossary holds its own.
 - [`notes/sha-map.md`](notes/sha-map.md): the packages moved here from their own repositories with their history;
   the map gives the new commit for each old one.
@@ -53,12 +54,12 @@ and the newest Python on ubuntu-latest. The [local gate](docs/agents/checks.md#f
 
 ## Develop
 
-[Repo-Kit](https://github.com/maxvyshniakov/repo-kit) runs the checks; it needs Bun 1.4.4 and a `GITHUB_TOKEN` that
-reads GitHub Packages (`export GITHUB_TOKEN=$(gh auth token)`). It is a development tool only.
+The checks are standard-library Python too; Ruff and Pyright come from `requirements-dev.txt` (on PATH or through
+uv).
 
 ```sh
-bun install              # once: the kit, and the pre-push gate in .githooks
-bun run verify           # the checks of the packages changed since origin/main; FATHERS_CHECKS=all for every one
+git config core.hooksPath .githooks   # once per clone: the pre-push gate
+python3 tools/checks.py verify        # the checks of the packages changed since origin/main; FATHERS_CHECKS=all for every one
 ```
 
 Each package's checks also run from its directory: `python3 tools/check.py` (Ruff and Pyright) and its tests.

@@ -1,7 +1,0 @@
-{
-  "version": 1,
-  "rules": {
-    "fixed-sleep": {},
-    "timing-assert": {}
-  }
-}

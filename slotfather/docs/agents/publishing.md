@@ -11,7 +11,7 @@ sections only when they have entries, in the order Breaking, Added, Changed, Dep
 Security. Entries are user-facing. Before 1.0 a breaking or broad behaviour change takes a minor version,
 anything else a patch. A release moves the Unreleased entries under the new version and sets it in
 `pyproject.toml` and in `VERSION` in `src/slotfather/version.py`; `tests/test_changelog.py` checks the layout and
-that both match the newest release (Repo-Kit's `check-changelogs` reads only packages under `packages/`).
+that both match the newest release.
 `install.py` ships CHANGELOG.md with the package, where the dashboard's changelog (click the footer's version, or
 `v`) reads it.
 

@@ -6,7 +6,7 @@ development tools, pinned in `requirements-dev.txt`.
 ## Gate
 
 The repository's [checks](../../../docs/agents/checks.md) run Godfather's lint gate and tests whenever a change touches
-`godfather/` or Slotfather's sources (`bun run verify`, the pre-push hook, a lane check). By hand, from `godfather/`:
+`godfather/` or Slotfather's sources (`python3 tools/checks.py verify`, the pre-push hook, a lane check). By hand, from `godfather/`:
 
 ```sh
 python3 -m unittest discover -s tests -t tests -p 'test_<area>.py'     # one file, while working

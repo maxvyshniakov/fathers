@@ -7,9 +7,10 @@ coding_standards = "AGENTS.md"
 report_doc = "docs/agents/orchestration.md"
 
 [checks]
-# Each changed package's checks (tools/checks.py), run through Repo-Kit's lane adapter (.githooks/lane-check).
+# Each changed package's checks (tools/checks.py), run by tools/verify.py; a lane's lease is named through
+# FATHERS_SLOT_LABEL, _PRIORITY, _TICKET, _META and _YIELDABLE.
 verify = "tools/lane-check"
-slot_env = "REPO_KIT_SLOT"
+slot_env = "FATHERS_SLOT"
 
 [admission]
 provider = "slotfather"

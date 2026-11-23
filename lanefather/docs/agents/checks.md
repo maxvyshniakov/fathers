@@ -1,7 +1,7 @@
 # Checks
 
 The repository's [checks](../../../docs/agents/checks.md) run Lanefather's lint gate and tests whenever a change
-touches `lanefather/` (`bun run verify`, the pre-push hook, a lane check). By hand, each through one machine slot:
+touches `lanefather/` (`python3 tools/checks.py verify`, the pre-push hook, a lane check). By hand, each through one machine slot:
 
 - Lint and types: `slotfather run -n 1 --label "<task> lanefather lint" -- python3 tools/check.py`: Ruff with the
   shared rules and strict Pyright against `tools/type-baseline.json`, a budget that only shrinks

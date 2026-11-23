@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
-"""The repository's checks and which of them a change selects (fathers#116).
+"""The repository's checks and which of them a change selects (fathers#116, fathers#235).
 
-Repo-Kit runs the checks: `bun run verify`, the pre-push gate and Lanefather's lane checks (repo-kit.config.mjs reads
-the steps from here). This file adds what Repo-Kit does not do for this repository: choosing each changed package's
-checks from the changed paths.
+The checks run through tools/verify.py: this command's `verify`, the pre-push gate (.githooks/pre-push,
+tools/prepush.py) and Lanefather's lane checks (tools/lane-check). This file names them and chooses each changed
+package's checks from the changed paths.
 
-  python3 tools/checks.py steps            the selected checks as Repo-Kit steps (JSON); FATHERS_CHECKS=all selects
-                                           every check, FATHERS_CHECK_BASE names the base (default origin/main)
-  python3 tools/checks.py run NAME         run one check (the steps' command, through `bun run check NAME`)
   python3 tools/checks.py verify [--keep-going] [--fresh]
-                                           the selected checks through tools/verify.py, without Repo-Kit (fathers#235)
+                                           the selected checks under one machine lease, side by side; a check that
+                                           passed on this clean tree before is skipped (--fresh runs it again).
+                                           FATHERS_CHECKS=all selects every check, FATHERS_CHECK_BASE names the base
+                                           (default origin/main)
+  python3 tools/checks.py run NAME         run one check (each verify step runs this)
   python3 tools/checks.py plan BASE        Lanefather's plan for the changes since BASE (tools/lane-check answers it)
 
 A change under a package selects its lint gate and tests, except package documentation (GLOSSARY.md, docs/**); one
@@ -49,20 +50,16 @@ DEFAULT_BASE = "origin/main"
 DOCUMENTATION = ("LICENSE", ".gitignore", ".github/dependabot.yml")
 # Package documentation that no package check or installer reads (fathers#193).
 PACKAGE_DOCUMENTATION = ("GLOSSARY.md",)
-# Repo-Kit's own files: its configuration check and the root tool tests cover them.
-KIT_FILES = ("package.json", "bun.lock", "bunfig.toml", "repo-kit.config.mjs", ".lanefather.toml")
+# Root configuration the root tool tests cover. A file not named here (a package.json, say) selects everything.
+ROOT_CONFIG = (".lanefather.toml",)
 
 
 @dataclass(frozen=True)
 class Check:
     name: str
-    command: list[str]  # bun arguments, as a Repo-Kit step takes them
-    memory: float  # GiB at its peak, Repo-Kit's step memory (measured 2026-11-13: lint 0.4-0.6, tests 0.1-0.2)
-    timeout: int | None = None  # minutes; Repo-Kit's default (15) without one
-
-
-def python_check(name: str) -> list[str]:
-    return ["run", "check", name]
+    memory: float  # GiB at its peak, what the runner fits beside the others (measured 2026-11-13: lint 0.4-0.6,
+    # tests 0.1-0.2)
+    timeout: int = 15  # minutes
 
 
 TESTS = {
@@ -74,16 +71,15 @@ TESTS = {
 }
 CHECKS = [
     *(check for name in PACKAGES for check in (
-        Check(f"{name} lint", python_check(f"{name} lint"), 0.7),
-        Check(f"{name} tests", python_check(f"{name} tests"), 0.3, 30 if name == "lanefather" else None),
+        Check(f"{name} lint", 0.7),
+        Check(f"{name} tests", 0.3, 30 if name == "lanefather" else 15),
     )),
-    Check("common lint", python_check("common lint"), 0.4),
-    Check("common tests", python_check("common tests"), 0.2),
-    Check("tools", python_check("tools"), 0.2),
-    Check("kit", ["run", "check:kit"], 0.2),
-    Check("test hygiene", ["run", "check:hygiene"], 0.2),
+    Check("common lint", 0.4),
+    Check("common tests", 0.2),
+    Check("tools", 0.2),
+    Check("test hygiene", 0.2),
 ]
-ALWAYS = ("tools", "kit", "test hygiene")
+ALWAYS = ("tools", "test hygiene")
 NAMES = [check.name for check in CHECKS]
 
 
@@ -114,7 +110,7 @@ def owners(path: str) -> set[str] | None:
         if workflow == "package":  # the shape the five call: tools/test_checks.py reads it
             return set()
         return {"common lint", "common tests"} if workflow == "common" else None
-    if path in KIT_FILES or first == ".githooks":
+    if path in ROOT_CONFIG or first == ".githooks":
         return set()
     if path in DOCUMENTATION or first in ("docs", "notes") or ("/" not in path and path.endswith(".md")):
         return set()
@@ -151,7 +147,7 @@ def git(root: Path, *arguments: str) -> str:
 
 
 def changed_paths(root: Path, base: str) -> list[str]:
-    """The paths the checkout changes since `base`: committed, uncommitted and untracked, as Repo-Kit's plan."""
+    """The paths the checkout changes since `base`: committed, uncommitted and untracked."""
     revision = git(root, "rev-parse", "--verify", "--end-of-options", f"{base}^{{commit}}").strip()
     listed = git(root, "diff", "--name-only", "-z", revision, "--").split("\0")
     listed += git(root, "ls-files", "--others", "--exclude-standard", "-z").split("\0")
@@ -159,13 +155,13 @@ def changed_paths(root: Path, base: str) -> list[str]:
 
 
 def encode(name: str) -> str:
-    """A step name as Repo-Kit's check ids carry it (JavaScript's encodeURIComponent)."""
+    """A check's name as its Lanefather id carries it (JavaScript's encodeURIComponent, as Repo-Kit gave them)."""
     return quote(name, safe="-_.!~*'()")
 
 
 def plan(root: Path, base: str) -> dict[str, object]:
     """Lanefather's check contract: {v, full, paths, unowned, suites, reasons, checks: [{id, suite, paths,
-    producer}]}, with the ids Repo-Kit's lane adapter gives the same steps."""
+    producer}]}, with the ids tools/lane-check runs them by."""
     paths = changed_paths(root, base)
     selection = select(paths)
     why = (["A path no rule knows changed: every check runs."] if selection.full
@@ -198,7 +194,7 @@ def selected(environment: Mapping[str, str]) -> list[Check]:
 def step(check: Check) -> runner.Step:
     """A check as the runner's step: `checks.py run NAME` in the root, with its memory and timeout."""
     return runner.Step(check.name, [sys.executable, str(ROOT / "tools/checks.py"), "run", check.name], check.memory,
-                       check.timeout or 15, ROOT)
+                       check.timeout, ROOT)
 
 
 def verify(arguments: list[str]) -> int:
@@ -216,19 +212,6 @@ def verify(arguments: list[str]) -> int:
         return leased
     return runner.gate([step(check) for check in checks], root=ROOT, keep_going="--keep-going" in arguments,
                        use_cache="--fresh" not in arguments, env=environment)
-
-
-def steps(environment: dict[str, str]) -> list[dict[str, object]]:
-    """The Repo-Kit steps to run: every check, or those the changes since the base select."""
-    names = [check.name for check in selected(environment)]
-    rows: list[dict[str, object]] = []
-    for check in CHECKS:
-        if check.name in names:
-            row: dict[str, object] = {"name": check.name, "command": check.command, "memory": check.memory}
-            if check.timeout is not None:
-                row["timeout"] = check.timeout
-            rows.append(row)
-    return rows
 
 
 def lint_tools(*arguments: str) -> list[str]:
@@ -253,11 +236,10 @@ def commands(name: str) -> tuple[Path, list[list[str]]]:
         return ROOT, [[sys.executable, "-m", "unittest", "discover", "-s", "common/tests"]]
     if name == "test hygiene":
         return ROOT, [[sys.executable, "tools/hygiene.py"]]
-    if name == "kit":
-        return ROOT, [["bun", "run", "check:kit"]]
     if name == "tools":
         return ROOT, [[sys.executable, "-m", "unittest", "discover", "-s", "tools", "-p", "test_*.py"],
-                      lint_tools("ruff", "check", "--config", "tools/ruff.toml", "tools", "tools/lane-check")]
+                      lint_tools("ruff", "check", "--config", "tools/ruff.toml", "tools", "tools/lane-check",
+                                 ".githooks/pre-push")]
     raise ValueError(f"unknown check {name!r}; one of: {', '.join(NAMES)}")
 
 
@@ -424,9 +406,6 @@ def run(name: str) -> int:
 
 def main(argv: list[str]) -> int:
     try:
-        if argv[:1] == ["steps"] and len(argv) == 1:
-            print(json.dumps(steps(dict(os.environ))))
-            return 0
         if argv[:1] == ["run"] and len(argv) == 2:
             return run(argv[1])
         if argv[:1] == ["verify"]:

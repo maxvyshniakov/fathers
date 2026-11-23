@@ -6,7 +6,7 @@ checks, pinned in `requirements-dev.txt`; they are not installed on runner hosts
 ## Gate
 
 The repository's [checks](../../../docs/agents/checks.md) run Slotfather's lint gate and tests whenever a change
-touches `slotfather/` (`bun run verify`, the pre-push hook, a lane check). By hand, each through one machine slot:
+touches `slotfather/` (`python3 tools/checks.py verify`, the pre-push hook, a lane check). By hand, each through one machine slot:
 
 ```sh
 slotfather run -n 1 --label "<task> slotfather lint" -- python3 tools/check.py

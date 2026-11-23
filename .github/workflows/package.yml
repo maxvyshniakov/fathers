@@ -3,7 +3,7 @@ name: package
 # The one CI shape (fathers#120): slotfather.yml, lanefather.yml, spawnfather.yml, godfather.yml and common.yml call
 # this with their name and Python floor, and differ only in those and the paths that trigger them
 # (tools/test_checks.py holds them to it). The steps are the local gate's named checks (tools/checks.py), so CI and
-# `bun run verify` run the same commands.
+# `python3 tools/checks.py verify` run the same commands.
 on:
   workflow_call:
     inputs:

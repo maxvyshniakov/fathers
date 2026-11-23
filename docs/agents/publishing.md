@@ -12,12 +12,13 @@
 
 ## Gate
 
-- `.githooks/pre-push` (Repo-Kit) runs `bun run verify --release` on each pushed commit in a clean temporary
-  worktree: the checks of the packages that commit changes since `origin/main`, and the root checks
-  ([checks](checks.md)). A commit that passed once is recorded in `.git/repo-kit-verified` and not run again. Do not
-  run the gate by hand right before a push.
-- `bun install` in the main checkout activates the hooks (`core.hooksPath = .githooks`) and installs the kit the hook
-  and every lane check use. It needs `GITHUB_TOKEN` with `read:packages`, or `gh` logged in.
+- `.githooks/pre-push` ([tools/prepush.py](../../tools/prepush.py)) runs each pushed commit's own
+  `tools/checks.py verify` in a clean temporary worktree: the checks of the packages that commit changes since its
+  merge-base with `origin/main`, and the root checks ([checks](checks.md)). A check that passed on a tree is recorded
+  in `.git/fathers-verified` and not run again, so a push whose checks all passed takes no lease. Do not run the gate
+  by hand right before a push.
+- Once per clone, activate the hook: `git config core.hooksPath .githooks`. Git runs the pushing checkout's own hook:
+  push a commit from a checkout that has this hook.
 
 ## Push
 

@@ -1,14 +1,13 @@
-#!/bin/sh
-# Managed by @maxvyshniakov/repo-kit (repo-kit hooks sync); do not edit.
-# Runs `bun run verify` on the commits being pushed; skip once with git push --no-verify.
-root=$(git rev-parse --show-toplevel)
-cli="$root/node_modules/@maxvyshniakov/repo-kit/src/cli.mjs"
-if [ ! -f "$cli" ]; then
-  common=$(cd "$root" && cd "$(git rev-parse --git-common-dir)/.." && pwd)
-  cli="$common/node_modules/@maxvyshniakov/repo-kit/src/cli.mjs"
-fi
-if [ ! -f "$cli" ]; then
-  echo "pre-push: repo-kit is not installed; run bun install. Nothing was pushed." >&2
-  exit 1
-fi
-exec node "$cli" pre-push "$@"
+#!/usr/bin/env python3
+"""Git's pre-push hook: each pushed commit's own checks in a clean worktree (tools/prepush.py, fathers#235).
+
+Skip once with `git push --no-verify`.
+"""
+from pathlib import Path
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
+
+import prepush  # tools/prepush.py of this checkout
+
+sys.exit(prepush.main(sys.stdin.read(), sys.argv))

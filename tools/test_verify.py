@@ -258,8 +258,19 @@ class CacheTests(unittest.TestCase):
             self.assertEqual(set(), cache.passed("tree2"))
             self.assertEqual(set(), verify.Verified(Path(folder), ("py3.11", "darwin-arm64")).passed("tree1"))
             self.assertEqual(set(), verify.Verified(Path(folder), ("py3.13", "linux-x86_64")).passed("tree1"))
-            (Path(folder) / verify.VERIFIED_RECORD).open("a").write("garbage\nv2\ttree1\tpy3.13\tdarwin-arm64\tx\n")
+            with (Path(folder) / verify.VERIFIED_RECORD).open("a") as record:
+                record.write("garbage\nv2\ttree1\tpy3.13\tdarwin-arm64\tx\n")
             self.assertEqual({"tools", "test hygiene"}, cache.passed("tree1"))
+
+    def test_a_commit_the_pre_push_gate_passed_is_known(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            cache = verify.Verified(Path(folder), ("py3.13", "darwin-arm64"))
+            self.assertFalse(cache.commit_passed("abc"))
+            cache.record_commit("abc")
+            self.assertTrue(cache.commit_passed("abc"))
+            self.assertFalse(cache.commit_passed("abd"))
+            self.assertFalse(verify.Verified(Path(folder), ("py3.12", "darwin-arm64")).commit_passed("abc"))
+            self.assertEqual(set(), cache.passed("abc"))
 
     def gate(self, root: Path, steps: list[verify.Step], **options) -> tuple[int, str]:
         out = io.StringIO()

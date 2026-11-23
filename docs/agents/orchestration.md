@@ -4,8 +4,8 @@
 
 - The installed `lanefather`, run in this repository; [.lanefather.toml](../../.lanefather.toml) gives it the project,
   its own Store (`~/.local/state/lanefather/fathers/lanes`) and the verify command `tools/lane-check`.
-- Once per machine, before the first lane: `bun install` in the main checkout (the lane checks use its Repo-Kit).
-  It, and every lane check's own frozen install, also activates the pre-push gate (`core.hooksPath`).
+- Once per clone, before the first lane: `git config core.hooksPath .githooks` in the main checkout activates the
+  pre-push gate for it and every lane's worktree.
 - Start: `lanefather start <id> --ticket <N> --base integrate/<batch> --claims '<package>/**' --create`; the lane's
   worktree is `.claude/worktrees/lane-<id>` of the main checkout. Start (and `adopt`) print the lane's next commands:
   its check and the hand-back.
@@ -14,7 +14,7 @@
   `lanefather list`. `lanefather --help` lists each command in one line; `lanefather <command> --help` has its
   options and an example.
 - Check: `lanefather check <id>` plans the lane's diff with `tools/lane-check` (each changed package's checks, and
-  the root checks) and runs them through Repo-Kit's lane adapter; the receipt is the evidence.
+  the root checks) and runs them ([tools/verify.py](../../tools/verify.py)); the receipt is the evidence.
 - Land: `lanefather land <id> --into <integration worktree>`, which merges, runs the post-merge smoke and starts the
   review. Then `lanefather done <id>`, and `lanefather gc` for leftovers.
 - Without `--force-reason`: a lane with nothing to land goes with `lanefather drop <id>`; a post-merge smoke that went
@@ -45,5 +45,5 @@
 
 - Work only in the lane's worktree and claims; another package's files belong to its own lane.
 - Heavy commands through `slotfather run` with `--ticket` and a label ([checks](checks.md#heavy-checks)).
-- Changing a `tools/check.py` means changing all four copies; baselines and `test-hygiene-baseline.json` only shrink.
+- Changing a `tools/check.py` means changing all four copies; baselines only shrink.
 - A user-visible change adds its package's changelog entry in the same commit.

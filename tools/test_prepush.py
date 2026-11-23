@@ -20,14 +20,15 @@ ROOT = Path(__file__).resolve().parents[1]
 ZERO = "0" * 40
 A, B = "a" * 40, "b" * 40
 
-# The fixture's tools/checks.py: one check, `unit`, which passes while the committed file `verdict` says pass.
+# The fixture's tools/checks.py: `unit` passes while the committed file `verdict` says pass; a change selects it alone,
+# while no change (a commit already on origin/main) selects every check, `other` too, as tools/checks.py does.
 STUB = '''import os, sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import verify
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_BASE = "origin/main"
-NAMES = ["unit"]
+NAMES = ["unit", "other"]
 class Selection:
     def __init__(self, paths):
         self.checks = {"unit": sorted(paths)}
@@ -70,15 +71,7 @@ class PushTests(unittest.TestCase):
         (self.root / ".githooks").mkdir()
         for name in ("verify.py", "prepush.py"):
             shutil.copy(ROOT / "tools" / name, self.root / "tools" / name)
-        hook = ROOT / ".githooks/pre-push"
-        if hook.read_bytes().startswith(b"#!/usr/bin/env python3"):
-            shutil.copy(hook, self.root / ".githooks/pre-push")
-        else:  # before the switch to the Python hook: the same three lines
-            (self.root / ".githooks/pre-push").write_text(
-                "#!/usr/bin/env python3\nfrom pathlib import Path\nimport sys\n"
-                "sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tools'))\nimport prepush\n"
-                "sys.exit(prepush.main(sys.stdin.read(), sys.argv))\n")
-            (self.root / ".githooks/pre-push").chmod(0o755)
+        shutil.copy(ROOT / ".githooks/pre-push", self.root / ".githooks/pre-push")
         (self.root / "tools/checks.py").write_text(STUB)
         (self.root / "verdict").write_text("pass\n")
         (self.root / ".gitignore").write_text("__pycache__/\n")
@@ -108,15 +101,23 @@ class PushTests(unittest.TestCase):
         self.assertIn("pre-push: tools/checks.py verify on", first.stdout)
         self.assertIn("[unit] unit ran with base None", first.stdout)
         self.assertEqual(1, len(self.worktrees()))
-        self.git("fetch", "-q", "origin")
-        second = self.push("main:refs/heads/copy")
-        self.assertEqual(0, second.returncode, second.stderr)
-        self.assertIn("already passed its checks", second.stdout)
-        self.assertNotIn("unit ran", second.stdout)
-        self.git("commit", "-q", "--amend", "-m", "the same tree")  # another commit, the same tree
-        third = self.push("HEAD:refs/heads/amended")
-        self.assertIn("already passed its checks", third.stdout)
-        self.assertNotIn("unit ran", third.stdout)
+        (self.root / "notes.txt").write_text("a change\n")
+        self.git("add", "notes.txt")
+        self.git("commit", "-qm", "a change")
+        change = self.push("main")
+        self.assertEqual(0, change.returncode, change.stderr)
+        self.assertIn("unit ran with base", change.stdout)
+        # origin/main is that commit now: its base has no change, which selects every check, and only the record of
+        # the commit itself says it passed (fathers#235).
+        again = self.push("main:refs/heads/copy")
+        self.assertEqual(0, again.returncode, again.stderr)
+        self.assertIn("already passed its checks", again.stdout)
+        self.assertNotIn("unit ran", again.stdout)
+        self.git("commit", "-q", "--amend", "-m", "the same tree")  # another commit, the same tree and selection
+        amended = self.push("HEAD:refs/heads/amended")
+        self.assertEqual(0, amended.returncode, amended.stderr)
+        self.assertIn("already passed its checks", amended.stdout)
+        self.assertNotIn("unit ran", amended.stdout)
 
     def test_a_failing_commit_is_refused_and_its_worktree_removed(self) -> None:
         self.assertEqual(0, self.push("main").returncode)
@@ -155,6 +156,11 @@ class PushTests(unittest.TestCase):
 
     def test_a_commit_whose_rules_differ_from_the_hooks_is_always_checked(self) -> None:
         self.assertEqual(0, self.push("main").returncode)
+        (self.root / "notes.txt").write_text("a change\n")
+        self.git("add", "notes.txt")
+        self.git("commit", "-qm", "a change")
+        self.assertEqual(0, self.push("main").returncode)
+        self.git("commit", "-q", "--amend", "-m", "the same tree, not pushed")  # no record of this commit itself
         sha = self.git("rev-parse", "HEAD")
         env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
         self.assertEqual(set(), _pending(self.root, env, sha))

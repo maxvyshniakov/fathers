@@ -6,7 +6,8 @@ the base pinned to its merge-base with origin/main, so uncommitted files cannot 
 selection rules apply. A check that passed on a tree is recorded in the Git common directory (fathers-verified, see
 tools/verify.py) and not run again: a push whose checks all passed before takes no lease and runs nothing. That
 shortcut is taken only when the commit's tools/checks.py is this hook's own, so a commit that changes the rules is
-always asked. Skip once with `git push --no-verify`.
+always asked. A commit the hook passed is recorded too, so pushing it again skips even once origin/main holds it
+(where its base has no change, which selects every check). Skip once with `git push --no-verify`.
 """
 from __future__ import annotations
 
@@ -54,9 +55,19 @@ def base_of(root: Path, env: Mapping[str, str], sha: str) -> str | None:
     return git(root, env, "merge-base", sha, checks.DEFAULT_BASE)
 
 
+def verified(root: Path, env: Mapping[str, str]) -> verify.Verified | None:
+    common = git(root, env, "rev-parse", "--path-format=absolute", "--git-common-dir")
+    return verify.Verified(Path(common)) if common else None
+
+
 def pending(root: Path, env: Mapping[str, str], sha: str) -> set[str] | None:
-    """The checks `sha` selects that have not passed on its tree; None when this hook cannot tell, because the
-    commit's tools/checks.py is not this hook's own."""
+    """The checks `sha` selects that have not passed on its tree (none for a commit this hook passed); None when this
+    hook cannot tell, because the commit's tools/checks.py is not this hook's own."""
+    cache = verified(root, env)
+    if cache is None:
+        return None
+    if cache.commit_passed(sha):
+        return set()
     ours = git(root, env, "hash-object", str(TOOLS / "checks.py"))
     if ours is None or ours != git(root, env, "rev-parse", "--verify", "--quiet", f"{sha}:tools/checks.py"):
         return None
@@ -65,10 +76,7 @@ def pending(root: Path, env: Mapping[str, str], sha: str) -> set[str] | None:
     paths = [path for path in (listed or "").split("\0") if path]
     names = set(checks.select(paths).checks) if paths else set(checks.NAMES)
     tree = git(root, env, "rev-parse", f"{sha}^{{tree}}")
-    common = git(root, env, "rev-parse", "--path-format=absolute", "--git-common-dir")
-    if tree is None or common is None:
-        return None
-    return names - verify.Verified(Path(common)).passed(tree)
+    return None if tree is None else names - cache.passed(tree)
 
 
 def check_commit(root: Path, env: Mapping[str, str], sha: str) -> tuple[int, int | None]:
@@ -84,8 +92,12 @@ def check_commit(root: Path, env: Mapping[str, str], sha: str) -> tuple[int, int
             print(f"pre-push: git worktree add failed: {added.stderr.strip()}", file=sys.stderr)
             return 1, None
         base = base_of(root, env, sha)
-        run_env = {**env, **({"FATHERS_CHECK_BASE": base} if base else {})}
+        run_env = dict(env)
         run_env.pop("FATHERS_CHECKS", None)
+        if base:
+            run_env["FATHERS_CHECK_BASE"] = base
+        else:
+            run_env.pop("FATHERS_CHECK_BASE", None)
         return verify.run_forwarding([sys.executable, "tools/checks.py", "verify"], cwd=Path(directory), env=run_env)
     finally:
         subprocess.run(["git", "worktree", "remove", "--force", directory], cwd=root, env=dict(env),
@@ -130,4 +142,7 @@ def main(stdin: str, argv: Sequence[str], environment: Mapping[str, str] | None 
         if code:
             print(f"\npre-push: tools/checks.py verify failed on {sha[:10]}; nothing was pushed.", file=sys.stderr)
             return 1
+        cache = verified(root, env)
+        if cache:
+            cache.record_commit(sha)
     return 0

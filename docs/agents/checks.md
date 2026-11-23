@@ -1,7 +1,7 @@
 # Checks
 
 The installed commands use only Python's standard library (3.11+: each package's
-`requires-python`). Ruff, Pyright, Bun and Repo-Kit are development tools only.
+`requires-python`), and so do the repository's checks in `tools/`. Ruff and Pyright are development tools only.
 
 ## Focused
 
@@ -14,19 +14,23 @@ The installed commands use only Python's standard library (3.11+: each package's
 
 ## Full gate
 
-- `bun run verify` (Repo-Kit, [repo-kit.config.mjs](../../repo-kit.config.mjs)) runs the checks the changes since
-  `origin/main` select ([tools/checks.py](../../tools/checks.py)): `<package> lint` and `<package> tests` for each
-  changed package (every package for `common/`; Slotfather's sources also select `godfather tests`), `common lint`
-  and `common tests` for `common/` and `install.py`, and always `tools`, `kit` (`repo-kit check`) and
-  `test hygiene`. A path no rule knows selects everything, and so does a tree without changes.
-  `FATHERS_CHECKS=all bun run verify` runs every check; `FATHERS_CHECK_BASE=<ref>` names another base.
-- It leases two slots itself and runs the steps side by side. Every check took 2026-11-13: lint gates 2 to 14 s,
-  Godfather's tests 1.5 min, Spawnfather's 2, Slotfather's 4-5, Lanefather's 13-18 (the whole run: as long as Lanefather's).
+- `python3 tools/checks.py verify` runs the checks the changes since `origin/main` select
+  ([tools/checks.py](../../tools/checks.py)): `<package> lint` and `<package> tests` for each changed package (every
+  package for `common/`; Slotfather's sources also select `godfather tests`), `common lint` and `common tests` for
+  `common/` and `install.py`, and always `tools` and `test hygiene`. A path no rule knows selects everything, and so
+  does a tree without changes. `FATHERS_CHECKS=all python3 tools/checks.py verify` runs every check;
+  `FATHERS_CHECK_BASE=<ref>` names another base; `--keep-going` lets the others finish after a failure.
+- It leases two slots itself (`fathers verify`) and runs the checks side by side
+  ([tools/verify.py](../../tools/verify.py)). Every check took 2026-11-13: lint gates 2 to 14 s, Godfather's tests
+  1.5 min, Spawnfather's 2, Slotfather's 4-5, Lanefather's 13-18 (the whole run: as long as Lanefather's).
+- A check that passed on a clean tree is recorded in `.git/fathers-verified` (per tree, Python and platform) and
+  skipped the next time, in any worktree and by the pre-push hook; `--fresh` runs it again.
 - The pre-push hook runs it on the pushed commits and a lane's `lanefather check` on the lane's diff
   ([orchestration](orchestration.md)); do not run it again by hand right before either.
 - CI runs the same named checks (`<package> lint`, `<package> tests`) through one reusable workflow, on each
   package's Python floor and the newest Python on Ubuntu ([publishing](publishing.md#ci)). On macOS run
-  `FATHERS_CHECKS=all bun run verify` locally; this includes the PTY and detached-process tests on the local Python.
+  `FATHERS_CHECKS=all python3 tools/checks.py verify` locally; this includes the PTY and detached-process tests on
+  the local Python.
 
 ## Lint gate
 
@@ -40,11 +44,13 @@ The installed commands use only Python's standard library (3.11+: each package's
 
 ## Heavy checks
 
-- Whole test suites, `bun run verify` and anything else that takes more than a few seconds run under a slot:
+- Whole test suites and anything else that takes more than a few seconds run under a slot:
   `slotfather run -n 1 --priority interactive --ticket <N> --label "<ticket> <what it does>" -- <command>`
-  (`normal` is the default priority; the label is required). Repo-Kit's verify and pre-push take their own lease.
-- Test hygiene: `repo-kit test-hygiene` keeps fixed sleeps and timing assertions in tests from growing
-  (`test-hygiene-baseline.json`, shrink-only: `bun run repo-kit test-hygiene --update` after removing some).
+  (`normal` is the default priority; the label is required). `checks.py verify`, the pre-push hook and lane checks
+  take their own lease.
+- Test hygiene ([tools/hygiene.py](../../tools/hygiene.py), the `test hygiene` check): no fixed sleep of 0.2 s or more
+  and no raw timing assertion in a test file, unless the line or the comment above it gives `sleep-ok: <reason>` or
+  `load-tolerant: <reason>`; a budget belongs in the perf suite (`perf/`, `test_perf_*.py`).
 
 ## Browser and visual
 
@@ -56,7 +62,6 @@ The installed commands use only Python's standard library (3.11+: each package's
 - Ruff 0.14.3 and Pyright 1.1.407 in each package's `requirements-dev.txt`: Slotfather's and Godfather's baselines
   key on Pyright's messages, which another version rewrites. Move all four together, with the baselines, when a
   typing ticket retires those budgets.
-- Bun 1.4.4 and Repo-Kit 0.7.0, exact (`package.json`, `bun.lock`): each commit is verified by the kit it pins.
 - uv 0.13.5 in the Lanefather and Spawnfather workflows, which run the pinned tools through uv.
 
 ## Review

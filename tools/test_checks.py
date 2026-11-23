@@ -19,9 +19,10 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import checks  # tools/checks.py, beside this file
+import verify  # tools/verify.py, beside this file
 
 ROOT = Path(__file__).resolve().parents[1]
-ALWAYS = {"tools", "kit", "test hygiene"}
+ALWAYS = {"tools", "test hygiene"}
 
 
 def package(name: str) -> set[str]:
@@ -89,7 +90,13 @@ class SelectionTests(unittest.TestCase):
     def test_each_check_remembers_the_paths_that_chose_it(self) -> None:
         plan = checks.select(["slotfather/src/slotfather/cli.py", "README.md"])
         self.assertEqual(["slotfather/src/slotfather/cli.py"], plan.checks["godfather tests"])
-        self.assertEqual(["README.md", "slotfather/src/slotfather/cli.py"], plan.checks["kit"])
+        self.assertEqual(["README.md", "slotfather/src/slotfather/cli.py"], plan.checks["tools"])
+
+    def test_root_tooling_selects_the_root_checks_and_a_new_root_file_everything(self) -> None:
+        self.assertEqual(ALWAYS, self.selected("tools/verify.py", ".githooks/pre-push", ".lanefather.toml"))
+        for path in ("package.json", "bun.lock", "Makefile"):
+            with self.subTest(path=path):
+                self.assertTrue(checks.select([path]).full)
 
 
 class PlanTests(unittest.TestCase):
@@ -112,7 +119,7 @@ class PlanTests(unittest.TestCase):
         (root / "lanefather/new.py").write_text("")  # untracked: the plan counts it too
         return root
 
-    def test_the_plan_names_repo_kit_check_ids_with_the_paths_that_chose_them(self) -> None:
+    def test_the_plan_names_lanefather_check_ids_with_the_paths_that_chose_them(self) -> None:
         root = self.repository()
         plan = checks.plan(root, "HEAD~1")
         self.assertEqual({"v": 1, "full": False, "unowned": [], "suites": ["verify"],
@@ -152,36 +159,52 @@ class PlanTests(unittest.TestCase):
         self.assertEqual(1, result.returncode)
         self.assertIn("--changed --base REF --plan --json", result.stderr)
 
-    def test_ids_are_encoded_as_repo_kit_encodes_step_names(self) -> None:
+    def test_a_run_refuses_an_unknown_check_before_it_leases(self) -> None:
+        result = subprocess.run([sys.executable, str(ROOT / "tools/lane-check"), "--checks", "verify:nope"],
+                                capture_output=True, text=True)
+        self.assertEqual((1, "lane-check: unknown check selection\n"), (result.returncode, result.stderr))
+
+    def test_a_run_knows_every_check_by_its_plan_id(self) -> None:
+        # The catalog tools/lane-check builds: every check, under the id the plan names it by.
+        ids = [f"verify:{checks.encode(check.name)}" for check in checks.CHECKS]
+        selection, _ = verify.lane_selection(verify.lane_arguments(["--checks", ",".join(ids)]),
+                                             [(i, checks.step(c)) for i, c in zip(ids, checks.CHECKS, strict=True)])
+        self.assertEqual(ids, [check_id for check_id, _ in selection])
+
+    def test_ids_are_encoded_as_encode_uri_component_encodes_names(self) -> None:
         self.assertEqual("godfather%20tests", checks.encode("godfather tests"))
         self.assertEqual("a%3Ab-c_d.e!~*'()", checks.encode("a:b-c_d.e!~*'()"))
 
 
-class StepTests(unittest.TestCase):
-    """What repo-kit.config.mjs reads: `python3 tools/checks.py steps`."""
+class SelectedTests(unittest.TestCase):
+    """What `checks.py verify` runs: checks.selected, as runner steps."""
 
-    def steps(self, **environment: str) -> list[dict[str, object]]:
-        result = subprocess.run([sys.executable, str(ROOT / "tools/checks.py"), "steps"], cwd=ROOT,
-                                env={**os.environ, **environment}, capture_output=True, text=True, check=True)
-        return json.loads(result.stdout)
+    def test_all_selects_every_check_with_its_memory_and_timeout(self) -> None:
+        self.assertEqual(checks.CHECKS, checks.selected({"FATHERS_CHECKS": "all"}))
+        for check in checks.CHECKS:
+            step = checks.step(check)
+            self.assertEqual([sys.executable, str(ROOT / "tools/checks.py"), "run", check.name], step.argv)
+            self.assertEqual((ROOT, check.memory, check.timeout), (step.cwd, step.memory, step.timeout))
+            self.assertGreater(check.memory, 0, check)
+        self.assertEqual(30, checks.step(next(c for c in checks.CHECKS if c.name == "lanefather tests")).timeout)
 
-    def test_every_check_is_a_repo_kit_step_with_its_memory(self) -> None:
-        steps = self.steps(FATHERS_CHECKS="all")
-        self.assertEqual([check.name for check in checks.CHECKS], [step["name"] for step in steps])
-        for step in steps:
-            self.assertEqual("run", step["command"][0], step)
-            self.assertGreater(step["memory"], 0, step)
+    def test_a_base_narrows_the_selection_to_the_changed_packages(self) -> None:
+        names = {check.name for check in checks.selected({"FATHERS_CHECK_BASE": "HEAD"})}
+        self.assertTrue(ALWAYS <= names <= set(checks.NAMES))
 
-    def test_a_base_narrows_the_steps_to_the_changed_packages(self) -> None:
-        names = {step["name"] for step in self.steps(FATHERS_CHECK_BASE="HEAD")}
-        everything = {check.name for check in checks.CHECKS}
-        self.assertTrue(ALWAYS <= names <= everything)
+    def test_no_such_base_selects_everything(self) -> None:
+        self.assertEqual(checks.CHECKS, checks.selected({"FATHERS_CHECK_BASE": "refs/heads/no-such-base-235"}))
 
     def test_an_unknown_selection_is_refused(self) -> None:
-        result = subprocess.run([sys.executable, str(ROOT / "tools/checks.py"), "steps"], cwd=ROOT,
+        result = subprocess.run([sys.executable, str(ROOT / "tools/checks.py"), "verify"], cwd=ROOT,
                                 env={**os.environ, "FATHERS_CHECKS": "some"}, capture_output=True, text=True)
         self.assertEqual(2, result.returncode)
         self.assertIn("FATHERS_CHECKS", result.stderr)
+
+    def test_an_unknown_verify_option_is_refused(self) -> None:
+        with mock.patch("sys.stderr", new_callable=io.StringIO) as err:
+            self.assertEqual(2, checks.main(["verify", "--release"]))
+        self.assertIn("verify takes --keep-going and --fresh", err.getvalue())
 
 
 WORKFLOWS = ROOT / ".github/workflows"
@@ -380,6 +403,8 @@ class CommandTests(unittest.TestCase):
             (ROOT / "godfather", [[sys.executable, "-m", "unittest", "discover", "-s", "tests", "-t", "tests"]]),
             checks.commands("godfather tests"),
         )
+        self.assertEqual((ROOT, [[sys.executable, "tools/hygiene.py"]]), checks.commands("test hygiene"))
+        self.assertIn(".githooks/pre-push", checks.commands("tools")[1][-1])
         with self.assertRaisesRegex(ValueError, "unknown check"):
             checks.commands("nosuch check")
 
@@ -519,6 +544,24 @@ class ParallelRunnerTests(unittest.TestCase):
 
 class RepositoryRuleTests(unittest.TestCase):
     """One lint gate for the four packages: the same file, the same pinned tools, the shared Ruff rules."""
+
+    def test_no_node_or_bun_tooling(self) -> None:
+        # The installed commands and their checks are standard-library Python (fathers#235).
+        for name in ("package.json", "bun.lock", "bunfig.toml", "repo-kit.config.mjs", "test-hygiene-baseline.json"):
+            with self.subTest(file=name):
+                self.assertFalse((ROOT / name).exists())
+
+    def test_the_hooks_are_one_executable_python_pre_push(self) -> None:
+        self.assertEqual(["pre-push"], sorted(path.name for path in (ROOT / ".githooks").iterdir()))
+        hook = ROOT / ".githooks/pre-push"
+        self.assertTrue(os.access(hook, os.X_OK))
+        self.assertTrue(hook.read_text().startswith("#!/usr/bin/env python3\n"))
+        self.assertIn("import prepush", hook.read_text())
+
+    def test_lanefather_names_lane_leases_with_the_runners_prefix(self) -> None:
+        text = (ROOT / ".lanefather.toml").read_text()
+        self.assertIn(f'slot_env = "{verify.SLOT_ENV}"', text)
+        self.assertIn('verify = "tools/lane-check"', text)
 
     def test_the_packages_carry_one_check_py(self) -> None:
         reference = (ROOT / "slotfather/tools/check.py").read_bytes()
