@@ -14,7 +14,26 @@ While `run`'s command runs, its holder looks at the command's process tree: firs
 
 While leases run, holders also append a machine sample to `machine.jsonl` at most every `SLOTFATHER_MACHINE_EVERY` seconds (default 15; shared between holders by the file's age and a lock of its own, never the queue lock): load averages, the cumulative CPU ticks (busy is the change between samples), the memory-pressure level and free-memory percentage, swap, and the slots held. It rotates like the history.
 
-`stats` groups requests by label and by command kind (or, with `--by meta.KEY`, by that metadata key; requests without it group under `-`) (program and first argument: `bun run-browser-checks.mjs`, `verify.sh --checks [95]` for a list of 95 checks) and gives, per group, the median and 90th-percentile wait and run, typical slots, mean cores used (CPU seconds over wall seconds), **cores used per slot held** (CPU seconds over wall seconds times slots) and the peak resident memory. Below it: the same over every measured lease, and the slots at which that use would fill the cores; the mean slots held while any lease ran and how often all were held; and from the machine samples, the share of time the one-minute load stood over the cores (more runnable threads than cores) and under them, the mean CPU busy share, how often a slot's worth of cores sat idle, busy cores per held slot (includes work without a lease), memory pressure and the least free swap. `--json` prints all of it; `--top N` limits the table.
+**Outside leases.** While the one-minute load is at least one, the sample also reads one `ps` of the machine and
+takes out every process a held lease owns, by the rule `status --json --pid` and `procs` follow: its holder's tree,
+a process whose environment carries the lease's `SLOTFATHER_LEASE` (read for at most the 32 busiest processes of at
+least 1 % CPU outside every tree), and a detached browser or WebKit XPC helper attributed to it. When what is left
+comes to at least one core of `ps` CPU share, the sample stores it as `outside`: `cpu` (cores), `processes`, and
+`top`, the 8 busiest groups by command family and owner, each with its `cpu` and `processes`. A family is the
+program's name or the outermost app bundle it runs from (`node`, `Google Chrome`, `WindowServer`), never an
+argument or a directory, which can hold secrets and paths. An owner is the Spawnfather entry whose tree or process
+group holds the process (`spawnfather LABEL`; the holder asks `spawnfather list --json` at most once a minute), else
+the nearest agent or terminal session above it (`claude 4120`), else none. A quieter sample stores no `outside`.
+`ps` CPU share is a decaying average of the last seconds on macOS and the average over the process's life on Linux.
+Samples carrying `outside` are version 2; version 1 samples still read and count in the machine part. Measured on a
+12-core Mac with about 870 processes: the `ps` and the attribution take about 0.1 s of CPU per sample, plus about
+0.2 s for the Spawnfather call once a minute; a fault in any of it leaves `outside` out, never the sample or the
+lease.
+
+`stats` groups requests by label and by command kind (or, with `--by meta.KEY`, by that metadata key; requests without it group under `-`) (program and first argument: `bun run-browser-checks.mjs`, `verify.sh --checks [95]` for a list of 95 checks) and gives, per group, the median and 90th-percentile wait and run, typical slots, mean cores used (CPU seconds over wall seconds), **cores used per slot held** (CPU seconds over wall seconds times slots) and the peak resident memory. Below it: the same over every measured lease, and the slots at which that use would fill the cores; the mean slots held while any lease ran and how often all were held; and from the machine samples, the share of time the one-minute load stood over the cores (more runnable threads than cores) and under them, the mean CPU busy share, how often a slot's worth of cores sat idle, busy cores per held slot (includes work without a lease), memory pressure and the least free swap; and "outside
+leases": the hours of samples that stored `outside`, the core-hours outside leases over them, and those core-hours
+by family and by owner, busiest first (`--json`: `outside`, with `samples`, `hours`, `core_hours`, `families` and
+`owners`). A sample's groups past its top 8 count in its total but not by family or owner. `--json` prints all of it; `--top N` limits the table.
 
 **Choosing capacity.** `slotfather slots N` should make the slots' use fill the cores without holding the load over them: with *c* cores used per slot held, *cores / c* slots fill the machine. Check the machine part too: much time over the cores with all slots held means fewer slots; a slot's cores often idle while requests wait means more.
 

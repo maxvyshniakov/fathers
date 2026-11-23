@@ -34,6 +34,7 @@ MEMBERS = "pid=,ppid=,uid=,tty=,stat=,lstart=,command="  # procs: identities, se
 SWEEP = "pid=,ppid=,uid=,rss=,tty=,lstart=,command="  # the sweep's snapshot
 CPU = "pid=,ppid=,%cpu=,rss=,comm="  # the dashboard block's CPU sample
 HELPER_SNAPSHOT = "pid=,ppid=,uid=,lstart=,command="  # macOS detached browser/XPC correlation snapshot
+OUTSIDE = "pid=,ppid=,pgid=,uid=,pcpu=,lstart=,command="  # outside_snapshot(): who uses the machine outside leases
 STARTS = "pid=,stat=,lstart="  # the sweep's check before a signal; running()
 OWNER = "uid="  # process_uid()
 NAMES = "pid=,comm="  # names(): the program of a process (the lock wait's helpers)
@@ -353,19 +354,34 @@ _USER_BROWSER_PROFILE_SUBSTRINGS = (
 )
 
 
+def snapshot(spec: str, timeout: float = 5) -> dict[int, _proc.Proc] | None:
+    """One full-table ps of the columns `spec` names, with whole commands, as pid -> Proc in local time. None when ps
+    fails, times out, or omits its caller (unavailable inspection, never an empty result)."""
+    try:
+        rows = table(["-axww", "-o", spec], env=_platform.c_locale(), timeout=timeout)
+    except PsError:
+        return None
+    return _proc.parse(rows, spec, "local")
+
+
+def outside_snapshot(timeout: float = 5) -> dict[int, _proc.Proc] | None:
+    """The machine's processes with their group, CPU share and whole command, for what a machine sample stores of
+    the use outside leases (outside.py, fathers#239); None when ps cannot give them."""
+    return snapshot(OUTSIDE, timeout)
+
+
 def helper_snapshot(timeout: float = 5) -> ProcessContext | None:
     """One full-table snapshot of pid, ppid, uid, lstart and command for detached browser helper correlation.
     Returns None when ps fails, times out, or omits its caller (unavailable inspection, never an empty result)."""
-    try:
-        rows = table(["-axww", "-o", HELPER_SNAPSHOT], env=_platform.c_locale(), timeout=timeout)
-    except PsError:
+    found = snapshot(HELPER_SNAPSHOT, timeout)
+    if found is None:
         return None
     parents: dict[int, int] = {}
     uids: dict[int, int] = {}
     starts_map: dict[int, float | None] = {}
     raw_starts: dict[int, str] = {}
     cmds: dict[int, str] = {}
-    for pid, proc in _proc.parse(rows, HELPER_SNAPSHOT, "local").items():
+    for pid, proc in found.items():
         parents[pid] = proc.ppid
         uids[pid] = proc.uid
         raw_starts[pid] = proc.start

@@ -6,6 +6,13 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 
 ### Added
 
+- Machine samples record who uses the machine outside leases: a sample taken while processes no lease owns use at
+  least one core stores the 8 busiest command families with their CPU share, process count and owner (the
+  Spawnfather entry or agent session that started them), after taking out each lease's tree, processes carrying
+  its marker and its detached browser helpers. Families carry no arguments or paths. `stats` adds "outside leases":
+  core-hours by family and by owner (`--json`: `outside`). `machine.jsonl` lines are version 2; older lines still
+  read (fathers#239).
+
 - Requests can ask for the cores they use instead of a slot count: `run --cores C` holds the slots that C cores
   need (`--cores 6` is 4 slots on a 12-core, 8-slot machine), and `run --cores auto` the slots that its label
   family's recent measured runs used, one slot until there are enough of them. `run` warns when its family's runs

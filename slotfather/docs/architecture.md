@@ -33,6 +33,7 @@ Definitions: [glossary](../GLOSSARY.md). Naming and wire aliases: [terminology](
 | `macos_process` | Pure leaf macOS `libproc` process identities, `KERN_PROCARGS2` environments, and targeted `/bin/ps` argument reads with identity validation (stdlib-only imports; loaded lazily on macOS). |
 | `platform` | macOS/Linux host inspection: `linux()`/`macos()` predicates, process identity (`same_holder()`), unified `memory_snapshot()`, swap, `vm_stat`, PSI, load, CPU ticks, and cgroups. |
 | `process` | The one module that observes live processes (`ps`, `lsof`, `/proc/PID/cwd`, `launchctl`/`systemctl` service managers, lazy native macOS dispatch): the process tables with their column sets and failure policy (fathers#121), lease markers in environments, detached browser helper attribution, and `lease_membership()`, the one rule for which lease a process is in (fathers#38). |
+| `outside` | What a machine sample stores of the use outside leases (fathers#239): one `ps`, the leases' processes taken out by `process.lease_membership()`, the rest grouped by command family and owner, top 8. |
 | `procs` | Read-only process queries (`slotfather procs --json`) for guards and other tools, delegating OS process/CWD reads to `process`. |
 | `query` | Compatible queue snapshots and status output; `look()`, the one look under the queue lock that every reader takes (#20, fathers#36): `status`, `status --json` (with `--pid`, `--full`), the long-wait line, `available`, `advise`, `slots`, the dashboard block and the sweep's protection. |
 | `queue` | The queue as stored, read (fathers#36): the process table a look is judged on, reaping, the earlier queues' holders, unknown live entries, the lease this process runs under, lazy estimators, and live `schedule.Host` / `schedule.Admission` wiring (`live_host()`, `admission()`). |
@@ -73,7 +74,7 @@ A pinned installation shares one user's directory even when a service changes `H
 | `queue/*.yield` | Cooperative requests, never permission to stop a holder. |
 | `queue.log[.1]` | Timestamped grants, releases and reaping; retained event syntax supports existing history readers. Past 4 MiB it becomes `queue.log.1`, replacing the older one, under the queue lock; older clients keep appending to whichever file is current. |
 | `history.jsonl[.1]` | Current record version 2. Unversioned version-1 history remains readable. |
-| `machine.jsonl[.1]` | Record version 1; unavailable facts remain unavailable. |
+| `machine.jsonl[.1]` | Current record version 2, which adds `outside` (fathers#239); version-1 lines remain readable. Unavailable facts remain unavailable. |
 | `estimates.json` | Disposable cache version 2. Rebuilt when its version or history stamp changes. |
 | `sweep.json`, `sweep.jsonl[.1]` | Cleanup settings and version-1 results. Cleanup never owns lease admission. |
 

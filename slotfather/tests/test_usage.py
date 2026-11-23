@@ -303,9 +303,10 @@ class RunUsageTests(SlotCase):
         samples = [json.loads(line) for line in (self.state / "machine.jsonl").read_text().splitlines()]
         self.assertTrue(samples)
         first = samples[0]
-        self.assertEqual((1, 12, 4, 2, 1), (first["v"], first["cores"], first["capacity"], first["held"],
+        self.assertEqual((2, 12, 4, 2, 1), (first["v"], first["cores"], first["capacity"], first["held"],
                                            first["leases"]))
         self.assertEqual(3, len(first["load"]))
+        self.assertNotIn("outside", first, "SLOTFATHER_LOADAVG=0: no ps of the machine for use outside leases")
         if sys.platform == "darwin":
             self.assertEqual(4, len(first["ticks"]))
 
