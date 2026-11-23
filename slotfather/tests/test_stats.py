@@ -83,6 +83,40 @@ class StatsTests(SlotCase):
         self.assertEqual((0.25, 897), (found["pressure_elevated"], found["swap_free_mb_min"]))
         self.assertEqual(5.0, found["busy_cores_per_held_slot"])
 
+    def test_outside_leases_core_hours_by_family_and_owner_over_old_and_new_samples(self):
+        base = 1_800_000_000.0
+        node = {"family": "node", "owner": "claude 100", "cpu": 2.0, "processes": 3}
+        window = {"family": "WindowServer", "owner": None, "cpu": 0.5, "processes": 1}
+        chrome = {"family": "Google Chrome", "owner": "claude 100", "cpu": 1.0, "processes": 4}
+        samples: list[dict[str, Any]] = [{"v": 1, "at": base, "load": [9, 1, 1], "cores": 12, "held": 1}]
+        # Three version 2 samples 60 s apart (one taken below a core outside leases stores none), one v1 between.
+        samples += [{"v": 2, "at": base + 60, "load": [9, 1, 1], "cores": 12, "held": 1,
+                     "outside": {"cpu": 2.5, "processes": 9, "top": [node, window]}},
+                    {"v": 1, "at": base + 120, "load": [9, 1, 1], "cores": 12, "held": 1},
+                    {"v": 2, "at": base + 180, "load": [9, 1, 1], "cores": 12, "held": 1,
+                     "outside": {"cpu": 3.0, "processes": 9, "top": [node, chrome]}},
+                    {"v": 2, "at": base + 240, "load": [9, 1, 1], "cores": 12, "held": 1},
+                    {"v": 2, "at": base + 300, "load": [9, 1, 1], "cores": 12, "held": 1,
+                     "outside": "not a record"}]
+        self.write("machine.jsonl", samples)
+        found = json.loads(self.stats("--json"))["outside"]
+        self.assertEqual(2, found["samples"])
+        self.assertEqual(0.033, found["hours"], "each sample stands for the 60 s to the next")
+        self.assertEqual(0.092, found["core_hours"])
+        self.assertEqual([("node", 0.067), ("Google Chrome", 0.017), ("WindowServer", 0.008)],
+                         [(row["family"], row["core_hours"]) for row in found["families"]])
+        self.assertEqual([("claude 100", 0.083), (None, 0.008)],
+                         [(row["owner"], row["core_hours"]) for row in found["owners"]])
+        text = self.stats()
+        self.assertIn("outside leases, 0.03 h sampled at a core or more: 0.09 core-hours", text)
+        self.assertIn("by family: node 0.07, Google Chrome 0.02, WindowServer 0.01", text)
+        self.assertIn("by owner: claude 100 0.08, (none) 0.01", text)
+
+    def test_no_outside_section_without_such_samples(self):
+        self.write("machine.jsonl", [{"v": 1, "at": 1_800_000_000.0, "load": [1, 1, 1], "cores": 12}])
+        self.assertEqual(0, json.loads(self.stats("--json"))["outside"]["samples"])
+        self.assertNotIn("outside leases", self.stats())
+
     def test_a_gap_with_no_lease_running_is_not_busy_time(self):
         base = 1_800_000_000.0
         # Two samples 15 s apart fully busy, then an idle hour before the next sample.

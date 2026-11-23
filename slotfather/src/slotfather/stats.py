@@ -174,14 +174,20 @@ def held_time(items: list[dict[str, Any]], since: float | None, until: float, ca
             "all_held": round(full / busy, 3) if busy else None}
 
 
-def machine(samples: list[dict[str, Any]], cores: int, capacity: int) -> dict[str, Any]:
-    """The machine while leases ran: each sample stands for the time to the next one, at most GAP seconds."""
+def weighed(samples: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[float]]:
+    """The timed samples in order, each with the seconds it stands for: the time to the next one, at most GAP; the
+    last stands for the usual gap."""
     samples = sorted((s for s in samples if isinstance(s.get("at"), (int, float))), key=lambda s: float(s["at"]))
-    if not samples:
-        return {"samples": 0}
     gaps = [float(b["at"]) - float(a["at"]) for a, b in itertools.pairwise(samples)]
     usual = min(percentile(gaps, 50) or _config.MACHINE_EVERY, GAP)
-    weights = [min(g, GAP) for g in gaps] + [usual]
+    return samples, ([min(g, GAP) for g in gaps] + [usual] if samples else [])
+
+
+def machine(samples: list[dict[str, Any]], cores: int, capacity: int) -> dict[str, Any]:
+    """The machine while leases ran: each sample stands for the time to the next one, at most GAP seconds."""
+    samples, weights = weighed(samples)
+    if not samples:
+        return {"samples": 0}
     total_weight = sum(weights) or 1.0
     load1: list[float | None] = [
         float(raw[0]) if isinstance(raw := s.get("load"), list) and raw and isinstance(raw[0], (int, float)) else None
@@ -244,6 +250,41 @@ def machine(samples: list[dict[str, Any]], cores: int, capacity: int) -> dict[st
         "swap_free_mb_min": min((int(f) if f.is_integer() else f for f in swap_free if f is not None), default=None),
         "memory_available_mb_min": min((int(a) if a.is_integer() else a for a in available if a is not None), default=None),
     }
+
+
+def outside(samples: list[dict[str, Any]], top: int = 25) -> dict[str, Any]:
+    """Use outside leases (fathers#239): core-hours by command family and by owner over the samples that stored
+    what ran outside the leases (version 2 lines taken at a core or more of it; older lines store none), each sample
+    standing for the time to the next one, at most GAP seconds. A family or owner past a sample's top groups is in
+    its total but not in its rows."""
+    hours = core_hours = 0.0
+    count = 0
+    families: dict[str, float] = {}
+    owners: dict[str | None, float] = {}
+    for sample, weight in zip(*weighed(samples), strict=True):
+        found: Any = sample.get("outside")
+        record = cast(dict[str, Any], found) if isinstance(found, dict) else {}
+        if not isinstance(record.get("cpu"), (int, float)):
+            continue
+        count += 1
+        hours += weight / 3600
+        core_hours += float(record["cpu"]) * weight / 3600
+        rows: Any = record.get("top")
+        for row in cast(list[Any], rows if isinstance(rows, list) else []):
+            item = cast(dict[str, Any], row) if isinstance(row, dict) else {}
+            if not isinstance(item.get("cpu"), (int, float)):
+                continue
+            area = float(item["cpu"]) * weight / 3600
+            name = str(item.get("family") or "?")
+            who = item.get("owner") if isinstance(item.get("owner"), str) else None
+            families[name] = families.get(name, 0.0) + area
+            owners[who] = owners.get(who, 0.0) + area
+
+    def ranked(totals: dict[Any, float], key: str) -> list[dict[str, Any]]:
+        order = sorted(totals.items(), key=lambda item: (-item[1], str(item[0] or "")))
+        return [{key: name, "core_hours": round(value, 3)} for name, value in order[:top]]
+    return {"samples": count, "hours": round(hours, 3), "core_hours": round(core_hours, 3),
+            "families": ranked(families, "family"), "owners": ranked(owners, "owner")}
 
 
 SWEPT = ("removed", "orphan", "dev-server")
@@ -328,6 +369,7 @@ def summarize(directory: Path | None = None, since: float | None = None, label: 
                      for v in sorted({i.get("v") or 1 for i in items})},
         "overall": overall, "held": held_time(items, since, moment, recorded_capacity(items, capacity)),
         "machine": machine(samples, cores, capacity),
+        "outside": outside(samples),
         "fill_slots": round(cores / per_slot, 1) if per_slot else None,
         "sweeps": sweeps(swept),
         "asks": _runtype.by_family(items, cores / max(1, capacity)),
@@ -440,6 +482,14 @@ def report(summary: dict[str, Any], top: int = 25) -> str:
             lines.append(f"  {row['family']}: {number(row['slots_p50'], 0)} slots, {number(row['cores_p50'])} "
                          f"({number(row['cores_p90'])}) of {number(row['cores_asked_p50'])} cores over "
                          f"{row['measured']} runs; -n {row['slots_needed']} would hold it")
+    out = cast(dict[str, Any], summary.get("outside") or {})
+    if out.get("samples"):  # fathers#239: who kept the cores busy outside the leases
+        lines.append(f"outside leases, {out['hours']:.2f} h sampled at a core or more: {out['core_hours']:.2f} "
+                     "core-hours")
+        lines.append("  by family: " + ", ".join(f"{row['family']} {row['core_hours']:.2f}"
+                                                 for row in out["families"][:top]))
+        lines.append("  by owner: " + ", ".join(f"{row['owner'] or '(none)'} {row['core_hours']:.2f}"
+                                                for row in out["owners"][:top]))
     w = cast(dict[str, Any], summary.get("sweeps") or {})
     if w.get("runs"):
         found = cast(dict[str, Any], w.get("last_found") or {})

@@ -15,6 +15,7 @@ from . import config as _config
 from . import entry as _entry
 from . import idle as _idle
 from . import lineage as _lineage
+from . import outside as _outside
 from . import platform as _platform
 from . import process as _process
 from . import settings as _settings
@@ -214,12 +215,15 @@ class Watch(threading.Thread):
 
 def machine_facts(directory: Path) -> dict[str, Any]:
     """One machine sample: load, cumulative CPU ticks (busy is the change between two samples), memory pressure,
-    swap and the slots held."""
-    held = [e for _, e in _state.entries(directory) if _entry.is_held(e)]
+    swap and the slots held, and while the one-minute load is a core or more, what runs outside the leases when
+    that comes to a core (outside.py); a fault measuring that leaves it out, never the sample."""
+    pairs = [(path, e) for path, e in _state.entries(directory) if _entry.is_held(e)]
+    held = [e for _, e in pairs]
+    load = os.getloadavg()
     snap = _platform.memory_snapshot(include_free_pct=True, honor_memory_file=False)
     item: dict[str, Any] = {
         "v": _config.MACHINE_VERSION, "t": _config.now(), "at": round(time.time(), 2),
-        "load": [round(v, 2) for v in os.getloadavg()], "ticks": _platform.cpu_ticks(), "cores": _config.cores(),
+        "load": [round(v, 2) for v in load], "ticks": _platform.cpu_ticks(), "cores": _config.cores(),
         "pressure": snap.pressure_level, "memory_free_pct": snap.free_pct,
         "swap_total_mb": None if snap.swap_total_mb is None else round(snap.swap_total_mb),
         "swap_free_mb": None if snap.swap_total_mb is None else round(snap.swap_free_mb or 0.0),
@@ -241,6 +245,12 @@ def machine_facts(directory: Path) -> dict[str, Any]:
             )
     with contextlib.suppress(_config.SlotError):
         item["capacity"] = _settings.total()
+    try:  # SLOTFATHER_LOADAVG stands for the load here, as for admission
+        found = _outside.sample(pairs) if _platform.loads()[0] >= _outside.LOAD_MIN else None
+    except Exception:  # noqa: BLE001 - who is busy outside the leases must never cost the sample
+        found = None
+    if found is not None:
+        item["outside"] = found
     return item
 
 

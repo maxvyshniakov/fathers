@@ -154,7 +154,7 @@ HISTORY_MAX = 4 << 20  # bytes of history.jsonl; past it the file becomes histor
 HISTORY_VERSION = 2
 
 
-MACHINE_VERSION = 1  # machine.jsonl lines
+MACHINE_VERSION = 2  # machine.jsonl lines; 2 adds `outside` (fathers#239)
 
 
 MACHINE_MAX = 4 << 20  # bytes of machine.jsonl before it becomes machine.jsonl.1
