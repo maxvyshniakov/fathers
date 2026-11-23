@@ -275,7 +275,7 @@ class BriefRulesTests(LaneCase):
 class AdoptAndListTests(LaneCase):
     """The Agent tool creates its own worktree; tools/lane adopts it."""
 
-    def agent_worktree(self, name, branch):
+    def agent_worktree(self, name: str, branch: str) -> pathlib.Path:
         worktree = self.repo / ".claude" / "worktrees" / f"agent-{name}"
         self.git(self.repo, "worktree", "add", "-q", "-b", f"worktree-agent-{name}", str(worktree), "integrate/q")
         self.git(worktree, "checkout", "-q", "-B", branch, "integrate/q")

@@ -276,7 +276,7 @@ class CheckAndLandTests(LaneCase):
         self.assertIn("post-merge red", output)
         self.assertRegex(output.split("ran the failed checks:")[-1], r"\n  lib-check: caller \(#404\), rename \(#404\)")
 
-    def receipt_of(self, lane_id):
+    def receipt_of(self, lane_id: str) -> dict[str, Any]:
         return json.loads((self.state / f"{lane_id}.receipt.json").read_text())
 
     def test_the_post_merge_receipt_names_the_merge_tree_when_the_integration_moves_during_the_smoke(self):
@@ -381,7 +381,7 @@ class OverlappingLandTests(LaneCase):
     """#573: land holds its lock only for the merge; each post-merge smoke runs on its own detached checkout of its
     merge, so lands overlap. 154 serial post-merge runs had taken about 59 h."""
 
-    def checked(self, lane_id, path):
+    def checked(self, lane_id: str, path: str) -> str:
         worktree = self.created(lane_id, path)
         self.commit(worktree, {path: f"{lane_id}\n"})
         self.lane("check", lane_id)

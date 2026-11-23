@@ -138,7 +138,7 @@ class DoneTests(LaneCase):
 class AutoDoneTests(LaneCase):
     """#446: land finishes the lane after a green post-merge smoke, so it no longer counts toward the lane cap."""
 
-    def agent_lane(self, lane_id, claim):
+    def agent_lane(self, lane_id: str, claim: str) -> pathlib.Path:
         self.start(lane_id, claim)
         worktree = self.repo / ".claude" / "worktrees" / f"agent-{lane_id}"
         self.git(self.repo, "worktree", "add", "-q", "-b", f"worktree-agent-{lane_id}", str(worktree), "integrate/q")

@@ -29,7 +29,7 @@ class PromoteGateTests(LaneCase):
         ledger = self.repo / ".git" / "verified-trees"
         return [row.split()[0] for row in ledger.read_text().splitlines()] if ledger.exists() else []
 
-    def landed(self, lane_id, changes):
+    def landed(self, lane_id: str, changes: dict[str, str]) -> str:
         worktree = self.created(lane_id, *changes)
         self.commit(worktree, changes)
         self.lane("check", lane_id)
@@ -99,7 +99,7 @@ class PromoteGateTests(LaneCase):
         self.assertNotIn(self.git(self.repo, "rev-parse", tip + "^{tree}"), self.stamps())
         self.assertNotEqual(self.git(self.repo, "rev-parse", "dev"), tip)
 
-    def promote_in_background(self, sha):
+    def promote_in_background(self, sha: str) -> subprocess.Popen[str]:
         process = subprocess.Popen([sys.executable, "-m", "lanefather", "promote", sha, "--no-push", "--wait", "60"],
                                    cwd=self.integration, env=self.env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                    text=True)
@@ -201,7 +201,7 @@ class PerfSuiteTests(LaneCase):
         # A tree whose verification plan has the perf suite.
         self.commit(self.integration, {"tools/verification_plan.py": FAKE_PLAN + 'PERF = "perf"\n'}, "perf suite")
 
-    def landed(self, lane_id, changes):
+    def landed(self, lane_id: str, changes: dict[str, str]) -> str:
         worktree = self.created(lane_id, *changes)
         self.commit(worktree, changes)
         self.lane("check", lane_id)
@@ -305,7 +305,7 @@ class PromoteInstallDeployTests(LaneCase):
     def ran(self):
         return [line.split("|") for line in self.steps.read_text().splitlines()] if self.steps.exists() else []
 
-    def landed(self, lane_id, changes):
+    def landed(self, lane_id: str, changes: dict[str, str]) -> str:
         worktree = self.created(lane_id, *changes)
         self.commit(worktree, changes)
         self.lane("check", lane_id)

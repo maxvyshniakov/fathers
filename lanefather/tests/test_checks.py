@@ -10,6 +10,7 @@ import subprocess
 import sys
 import textwrap
 import time
+import types
 from typing import Any
 import unittest
 import unittest.mock
@@ -22,7 +23,7 @@ class ClaimsFollowTheDiffTests(LaneCase):
     script before every land. check adds the lane's changed paths to its claims and warns only on an overlap with
     another planned or active lane."""
 
-    def receipt(self, lane_id):
+    def receipt(self, lane_id: str) -> dict[str, Any]:
         return json.loads((self.state / f"{lane_id}.receipt.json").read_text())
 
     def test_a_changed_path_no_other_lane_claims_joins_the_claims_without_a_warning(self):
@@ -157,7 +158,7 @@ class LoadThrottleTests(LaneCase):
     load wait is off by default; with LANEFATHER_LOAD_THROTTLE=1 a verify run of check, land or promote starts only while
     load15 is at or below the local advisory limit (1.5 x cores), and the result records that wait."""
 
-    def receipt(self, name):
+    def receipt(self, name: str) -> dict[str, Any]:
         return json.loads((self.state / f"{name}.json").read_text())
 
     def test_by_default_a_loaded_machine_runs_at_once_and_the_receipt_records_the_load(self):
@@ -208,7 +209,7 @@ class LoadThrottleTests(LaneCase):
             self.assertEqual(result["load"]["end"][2], 0.1)
         self.assertNotIn("load-wait", (self.state / "ledger.log").read_text())
 
-    def in_process(self, **env):
+    def in_process(self, **env: str) -> types.SimpleNamespace:
         lane = load_lane()
         patcher = unittest.mock.patch.dict(os.environ, {**self.env, "LANEFATHER_LOAD_THROTTLE": "1",
                                                         "LANEFATHER_LOAD_POLL": "0.01", **env}, clear=True)
@@ -295,7 +296,7 @@ class RedCheckClassificationTests(LaneCase):
         path = pathlib.Path(str(self.verify_log) + ".runs")
         return [tuple(line.split(" ", 4)) for line in path.read_text().splitlines()] if path.exists() else []
 
-    def base_checkouts(self, lane_id):
+    def base_checkouts(self, lane_id: str) -> list[str]:
         scratch = pathlib.Path(self.record(lane_id)["scratch"][0])
         listed = [line for line in self.git(self.repo, "worktree", "list", "--porcelain").splitlines()
                   if line.startswith("worktree ") and "base-" in line]
@@ -354,7 +355,7 @@ class RedCheckClassificationTests(LaneCase):
         self.assertEqual(self.base_checkouts("core"), [])
         self.lane("land", "core")
 
-    def break_structure(self, base_too=False):
+    def break_structure(self, base_too: bool = False) -> None:
         """The structure check (the fixture's cheap tier, #639) fails while lib/structure-broken exists."""
         files = {"checks/structure.sh": "test ! -e lib/structure-broken\n"}
         self.commit(self.integration, dict(files, **({"lib/structure-broken": "base\n"} if base_too else {})),
@@ -821,7 +822,7 @@ class RedCheckClassificationTests(LaneCase):
 class ToolchainAndEnvironmentReceiptTests(LaneCase):
     """#571 review findings: a receipt or its results never outlive the Rust toolchain they ran with."""
 
-    def receipt(self, lane_id):
+    def receipt(self, lane_id: str) -> dict[str, Any]:
         return json.loads((self.state / f"{lane_id}.receipt.json").read_text())
 
     def pin_rust(self):

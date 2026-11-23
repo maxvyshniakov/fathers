@@ -28,7 +28,6 @@ import time
 import types
 from typing import Any
 import unittest
-import unittest.mock
 
 # The repository root: lanefather's package is importable from it.
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -962,22 +961,24 @@ class LaneCase(unittest.TestCase):
     def review(self, label: str) -> dict[str, Any]:
         return json.loads((self.state / f"{label}.review.json").read_text())
 
-    def wait_review(self, label, timeout=60):
+    def wait_review(self, label: str, timeout: float = 60) -> dict[str, Any]:
         """The review receipt once its background run finished."""
         path = self.state / f"{label}.review.json"
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            receipt = json.loads(path.read_text()) if path.exists() else None
+            receipt: dict[str, Any] | None = json.loads(path.read_text()) if path.exists() else None
             if receipt and receipt["status"] != "running":
                 return receipt
             time.sleep(0.05)
         self.fail(f"the review {label} did not finish within {timeout} s")
 
-    def stop_reviews(self):
+    def stop_reviews(self) -> None:
         """Background reviews end before the fixture goes: release a held one and wait for its process."""
         if self.env.get("FIXTURE_REVIEW_HOLD"):
             pathlib.Path(self.env["FIXTURE_REVIEW_HOLD"]).write_text("")
-        for path in self.state.glob("*.review.json") if self.state.exists() else []:
+        if not self.state.exists():
+            return
+        for path in self.state.glob("*.review.json"):
             receipt = json.loads(path.read_text())
             pid, deadline = receipt.get("pid"), time.monotonic() + 30
             while receipt.get("status") == "running" and pid and time.monotonic() < deadline:
@@ -987,7 +988,7 @@ class LaneCase(unittest.TestCase):
                     break
                 time.sleep(0.05)
 
-    def background_land(self, lane_id, hold, **env):
+    def background_land(self, lane_id: str, hold: pathlib.Path, **env: str) -> subprocess.Popen[str]:
         """lanefather land in the background; its post-merge smoke holds until `hold` exists."""
         process = subprocess.Popen([sys.executable, "-m", "lanefather", "land", lane_id], cwd=self.integration,
                                    env={**self.env, "FIXTURE_HOLD": f"post-merge-{lane_id}:{hold}", **env},
@@ -997,7 +998,7 @@ class LaneCase(unittest.TestCase):
         self.addCleanup(hold.touch)
         return process
 
-    def wait_started(self, hold, process, timeout=60):
+    def wait_started(self, hold: pathlib.Path, process: subprocess.Popen[str], timeout: float = 60) -> str:
         """The checkout the held run started in, once it started."""
         started = pathlib.Path(str(hold) + ".started")
         deadline = time.monotonic() + timeout
@@ -1005,7 +1006,7 @@ class LaneCase(unittest.TestCase):
             # load-tolerant: every caller waits the 60 s default for a run that starts in about a second.
             self.assertLess(time.monotonic(), deadline, f"{hold.name}: the held run did not start within {timeout} s")
             if process.poll() is not None:
-                self.fail(f"exited before its held run: {process.stdout.read()}")
+                self.fail(f"exited before its held run: {process.stdout.read() if process.stdout else ''}")
             time.sleep(0.05)
         return started.read_text()
 

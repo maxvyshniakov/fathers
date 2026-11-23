@@ -568,7 +568,7 @@ class ReviewFixRoundTests(ReviewGateCase):
         self.assertNotEqual(self.git(self.repo, "rev-parse", "dev"), tip)
         self.lane("promote", fix, "--no-push", "--wait", "0")
 
-    def ship(self, tip, ok=True):
+    def ship(self, tip: str, ok: bool = True) -> str:
         return self.lane("promote", tip, "--ship", "--no-push", "--wait", "0", ok=ok)
 
     def test_a_failed_overall_review_runs_again_on_its_original_base(self):
