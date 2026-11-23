@@ -98,7 +98,7 @@ def working_dirs(
         return Cwds(found, foreign, notes, True)
     flags = "-Fpin" if check_removed is not None else "-Fpn"
     try:
-        result = run(["lsof", "-nP", "-a", "-d", "cwd", "-u", str(uid), "-w", flags], timeout=timeout, runner=runner)
+        result = run(["lsof", "-nP", "-a", "-d", "cwd", "-u", str(uid), flags], timeout=timeout, runner=runner)
     except ProcTableError as error:
         if strict:
             raise ProcTableError(f"cannot read working directories: {error.detail}", error.detail) from None

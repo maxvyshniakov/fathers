@@ -373,7 +373,7 @@ class WorkingDirTests(unittest.TestCase):
         lenient = proc.working_dirs({}, self.uid, use_proc=False, runner=lsof)
         self.assertEqual({300: proc.Cwd(str(self.work), None), 301: proc.Cwd("/tmp", None)}, lenient.paths)
         self.assertTrue(lenient.complete)
-        self.assertEqual(["lsof", "-nP", "-a", "-d", "cwd", "-u", "501", "-w", "-Fpn"], calls[0])
+        self.assertEqual(["lsof", "-nP", "-a", "-d", "cwd", "-u", "501", "-Fpn"], calls[0])
         strict = proc.working_dirs({300: self.uid, 301: 0}, self.uid, use_proc=False, strict=True, runner=lsof)
         self.assertEqual({300: proc.Cwd(os.path.realpath(self.work), None)}, strict.paths)
 

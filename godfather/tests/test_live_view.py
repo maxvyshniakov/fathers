@@ -135,7 +135,10 @@ class LiveTests(LiveCase):
         screen.write(b"\x1b[<65;20;25M")  # the wheel scrolls it (its arrows move its cursor, fathers#152)
 
         def listed(name: str) -> bool:  # a row of EVENTS (DETAILS shows the cursor's row, the newest, by label)
-            return any(re.search(rf"\d\d:\d\d:\d\d\s+\S+\s+{name}\s", line) for line in screen.rows().values())
+            return any(
+                re.search(rf"(?:\d\d:\d\d:\d\d|[A-Z][a-z]{{2}}\s+\d\d:[^\s]+)\s+\S+\s+{name}\s", line)
+                for line in screen.rows().values()
+            )
 
         screen.until(lambda _: not listed("job39"), 3, "EVENTS scrolled past the newest")
         self.queue(holders=[item("busy", 300)], events=events + [event(n) for n in range(40, 43)])
