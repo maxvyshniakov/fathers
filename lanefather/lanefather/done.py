@@ -598,10 +598,8 @@ def cleanup(plan: FinishPlan, force_reason: str | None, store: state.Store) -> t
     if refusals and not force_reason:
         raise LaneError("done refused (not landed or not safe to remove):\n- " + "\n- ".join(refusals))
     if refusals:
-        journal.ledger(f"override done {record['id']}: {force_reason} ({'; '.join(refusals)})", kind="override",
-                       level="warn", lane=record,
-                       details={"command": "done", "reason": force_reason, "refusals": refusals},
-                       directory=store.directory, project=store.project)
+        journal.override("done", record, force_reason, refusals, audited=False, directory=store.directory,
+                         project=store.project)
     holding = git(plan.integration, "rev-parse", "HEAD") if plan.integration else None
     return remove(record, store, plan.spawnfather, plan.main, plan.proof, verb="done", holding=holding)
 
@@ -651,16 +649,39 @@ def nothing_added(cwd: str, commit: str, bases: list[tuple[str, str]]) -> tuple[
 
 
 def drop(args: Any, store: state.Store) -> int:
-    """`drop ID` (fathers#167): remove a planned or active lane that adds nothing to its base, with done's cleanup
-    and refusals for what still works there. Nothing it removes can be lost, so it takes no --force-reason: a
-    lane with commits beyond its base, a worktree HEAD that has some, or uncommitted or untracked changes refuse."""
-    prog, lane_id = store.prog, args.id
+    """`drop ID [ID ...]` (fathers#167, fathers#237): drop_lane on each id in turn; one that refuses is reported and
+    the others go on. Exits with the first refusal's code."""
+    ids = [args.id] if isinstance(args.id, str) else list(args.id)
+    failed = 0
+    for lane_id in dict.fromkeys(ids):
+        try:
+            drop_lane(lane_id, store)
+        except LaneError as error:
+            if len(ids) == 1:
+                raise
+            print(f"{store.prog}: drop {lane_id}: {error}", file=sys.stderr)
+            failed = failed or error.code
+    return failed
+
+
+def drop_lane(lane_id: str, store: state.Store) -> str:
+    """Remove a planned or active lane that adds nothing to its base, with done's cleanup and refusals for what
+    still works there; returns why it adds nothing. Nothing it removes can be lost, so it takes no --force-reason:
+    a lane with commits beyond its base, a worktree HEAD that has some, or uncommitted or untracked changes
+    refuse."""
+    prog = store.prog
     with store.locked("state"):
         record = store.load(lane_id)
         if lifecycle.awaiting_done(record):
             raise LaneError(f"drop refused: lane {lane_id} is {record['status']}: {prog} done {lane_id} finishes it")
         if not lifecycle.occupying(record):
             raise LaneError(f"drop refused: lane {lane_id} is already {record['status']}")
+        unmarked = review_record.ReviewRecord.load(store, lane_id).open_findings
+        if unmarked:
+            # A dropped lane is done, and a done lane gets no fix round, while its findings go on holding lands.
+            raise LaneError(f"drop refused: lane {lane_id}'s review has {len(unmarked)} unmarked "
+                            f"finding{'s' if len(unmarked) != 1 else ''}, which hold lands: mark each first "
+                            f"({prog} review {lane_id}); a dropped lane gets no fix round")
         common = record.get("common_dir")
         if not common or not os.path.isdir(common):
             raise LaneError(f"lane {lane_id} names no repository that exists ({common or 'none'})")
@@ -721,7 +742,7 @@ def drop(args: Any, store: state.Store) -> int:
         )
     print(f"Lane {lane_id} dropped ({why}): claims released, {freed / 1e9:.1f} GB freed")
     print_removed(removed)
-    return 0
+    return why
 
 
 def footprint(record: Record) -> int:

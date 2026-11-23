@@ -7,7 +7,7 @@ from pathlib import Path
 import subprocess
 from typing import Any
 
-from . import config, receipts, state
+from . import admission, config, receipts, state
 from .errors import LaneError
 from .gitops import main_checkout
 
@@ -35,7 +35,8 @@ def summary(lane_id: str, directory: Path) -> dict[str, Any]:
     config_path = Path(root) / config.CONFIG_NAME if root else None
     cfg = config.load(config_path) if config_path and config_path.is_file() else config.Config()
     store = state.Store(cfg, directory=directory)
-    return receipts.lane_view(store, record).for_show()
+    # fathers#237: a lane whose branch and worktree are gone says so.
+    return dict(receipts.lane_view(store, record).for_show(), gone=admission.gone(record))
 
 
 def show(
@@ -71,4 +72,6 @@ def show(
         print(f"Lane {result['id']} · {result['status']}")
         for key in ('project', 'ticket', 'branch', 'base', 'checks', 'review', 'claims', 'after', 'worktree'):
             print(f'{key}: {result[key]}')
+        if result['gone']:
+            print(f'gone: {admission.GONE}; {cfg.command} drop {result["id"]} frees it')
     return 0

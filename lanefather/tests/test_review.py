@@ -239,10 +239,14 @@ class ReviewGateTests(ReviewGateCase):
         queue = self.lane("list")
         self.assertEqual(queue.splitlines()[-1], "1 finished review with unmarked findings: a#1, a#2, a#3, a#4")
 
-        self.lane("land", "b", "--force-reason", "owner requested an urgent land")
+        forced = self.lane("land", "b", "--force-reason", "owner requested an urgent land")
         audit = self.record("b")["overrides"][-1]
         self.assertEqual(audit["reason"], "owner requested an urgent land")
         self.assertEqual(len(audit["refusals"]), 2)
+        # Review of fathers#172, finding 3: a forced land prints each held finding it overrides, worded as refused.
+        for refusal in audit["refusals"]:
+            self.assertIn(f"- {refusal}", blocked)
+            self.assertIn(f"lane: overridden: {refusal}", forced)
         self.assertIn("override land b: owner requested an urgent land", (self.state / "ledger.log").read_text())
 
         self.lane("review", "a", "--mark", "1", "rejected:known", "--mark", "2", "rejected:known")

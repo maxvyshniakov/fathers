@@ -53,6 +53,26 @@ def lane_subject(lane: state.Record | str, directory: Path) -> dict[str, Any]:
     return {"type": "lane", "id": lane_id, **({"ticket": ticket} if ticket and ticket != "none" else {})}
 
 
+def override(command: str, record: state.Record | None, reason: str | None, refusals: list[str], *,
+             subject: dict[str, Any] | None = None, qualifier: str = "", described: str | None = None,
+             details: dict[str, Any] | None = None, audited: bool = True, store: state.Store | None = None,
+             directory: Path | None = None, project: config.Config | None = None) -> dict[str, Any]:
+    """Audit one `--force-reason`: append it to the lane record's `overrides` (not when `audited` is false, as
+    for `done` and a repeated `review`; nor without a record: `promote` and `findings` override a commit's gate, named
+    by `subject`) and write the warn ledger line of kind `override`, `override <command> <id>[ <qualifier>]: <reason>
+    (<described>, by default the refusals joined by '; ')`. Returns the override entry."""
+    entry: dict[str, Any] = {"at": now(), "reason": reason, "refusals": refusals}
+    if record is not None and audited:
+        record.setdefault("overrides", []).append(entry)
+    about = str(record["id"] if record is not None else (subject or {}).get("id"))
+    target = f"{about} {qualifier}" if qualifier else about
+    ledger(f"override {command} {target}: {reason} ({'; '.join(refusals) if described is None else described})",
+           kind="override", level="warn", lane=record, subject=None if record is not None else subject,
+           details={"command": command, "reason": reason, "refusals": refusals, **(details or {})},
+           store=store, directory=directory, project=project)
+    return entry
+
+
 def ledger(message: str, *, kind: str, lane: state.Record | str | None = None,
            subject: dict[str, Any] | None = None, details: dict[str, Any] | None = None, level: str = "info",
            store: state.Store | None = None, directory: Path | None = None,

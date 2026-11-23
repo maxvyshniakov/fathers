@@ -527,15 +527,15 @@ class ReceiptReadersTableTests(LaneCase):
                 view = receipts.lane_view(store, rec, logs=status_lane["logs"])
                 self.assertEqual(
                     json.dumps(list_lane, sort_keys=True),
-                    json.dumps(view.for_list(rec), sort_keys=True),
+                    json.dumps(dict(view.for_list(rec), project="straylight", gone=False), sort_keys=True),
                 )
                 self.assertEqual(
                     show_raw.strip(),
-                    json.dumps(view.for_show()),
+                    json.dumps(dict(view.for_show(), gone=False)),
                 )
                 self.assertEqual(
                     json.dumps(status_lane, sort_keys=True),
-                    json.dumps(view.for_status(), sort_keys=True),
+                    json.dumps(dict(view.for_status(), gone=False), sort_keys=True),
                 )
 
                 # 4 & 5. `land.merge_problem` and `checks.select`

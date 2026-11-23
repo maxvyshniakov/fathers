@@ -102,10 +102,7 @@ def findings(args: Any, store: state.Store) -> int:
     report = gate_report(store, cwd, common_dir(cwd), sha, since)
     held = [e["text"] for e in report["unfinished"] + report["blocking"] + report["unknown"]]
     if held and args.force_reason:
-        journal.ledger(f"override findings {sha}: {args.force_reason} ({'; '.join(held)})", kind="override",
-                       level="warn", subject={"type": "commit", "id": sha},
-                       details={"command": "findings", "reason": args.force_reason, "refusals": held},
-                       store=store)
+        journal.override("findings", None, args.force_reason, held, subject={"type": "commit", "id": sha}, store=store)
     report["held"] = bool(held) and not args.force_reason
     if args.json:
         print(json.dumps(report, sort_keys=True))

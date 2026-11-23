@@ -8,7 +8,7 @@ page), read-only.
                             "branch", "base", "worktree", "claims",
                             "after", "created", "receipt": {"status", "tree_match", "path"},
                             "post_merge": str | null, "review": {"status", "open", "findings"},
-                            "logs": {phase: path}, "outcome"}]}
+                            "logs": {phase: path}, "outcome", "gone"}]}
                 | {"project", "state_dir", "error"}]}
 
 The lanes are those not done. A project that cannot be read gives its error entry, never a failed snapshot. It takes
@@ -85,7 +85,10 @@ def lane_entry(record: state.Record, directory: Path, repo: str | None, trees: d
                logs: dict[str, str], *, store: state.Store | None = None) -> dict[str, Any]:
     current = store or state.Store(config.Config(), directory=directory)
     tree = trees.get(str(record.get("branch", "")))
-    return receipts.lane_view(current, record, tip_tree=tree, repository=repo, logs=logs).for_status()
+    entry = receipts.lane_view(current, record, tip_tree=tree, repository=repo, logs=logs).for_status()
+    # fathers#237: its branch and worktree are gone, so it can only be dropped.
+    entry["gone"] = tree is None and admission.gone(record)
+    return entry
 
 
 def project_entry(found: registry.Project) -> dict[str, Any]:
@@ -152,7 +155,7 @@ def status(args: Any) -> int:
               + f"  {project['state_dir']}")
         for lane in project["lanes"]:
             print(f"    {lane['id']}  {lane['status']}  receipt {lane['receipt']['status']}"
-                  f"  review {lane['review']['status']}")
+                  f"  review {lane['review']['status']}" + (f"  gone: {admission.GONE}" if lane.get("gone") else ""))
         for row in project.get("damaged", []):
             print(f"    damaged {row['path']}: restore the record or remove the file; start, land, promote and gc "
                   "refuse until then")

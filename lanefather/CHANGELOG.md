@@ -8,6 +8,16 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
 
 ### Added
 
+- `lanefather list --all-projects` shows every repository's lanes in a shared Store, each row naming its project;
+  `list --json` gives each lane its `project` (fathers#236).
+- Gone lanes (fathers#237): a planned or active lane whose repository exists but whose branch and worktree are both
+  gone is marked `gone` by `list`, `show` and `status` (text and JSON). `start` refused by the lane cap names the
+  gone lanes it counted and the `lanefather drop A B` that frees them; refused by a claim overlap with a gone lane,
+  it names the `drop` instead of `--after`. `drop` takes several ids. `gc` drops this repository's gone lanes, and
+  `gc --dry-run` reports them; `start` never drops one itself.
+  `drop` (and so `gc`) refuses a lane whose review has unmarked findings: a dropped lane is done and gets no fix
+  round, while its findings go on holding lands.
+
 - A lane can name all of its accepted scope (fathers#192, fathers#64): `start` takes `--ticket N` more than once for
   the tickets it completes and `--partial N` for those it does only part of, kept in the order given, and
   `--decision URL` and `--spec PATH` for the owner decisions and specs it answers to. On land the merge says
@@ -196,6 +206,11 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
 
 ### Changed
 
+- `lanefather list` shows only the lanes of the repository it runs in, as its cap line counts them, not every
+  project's lanes in a shared Store (fathers#236). `check`, `wait`, `land`, `review`, `done`, `drop`, `recheck`,
+  `keep` and `scope` refuse another repository's lane and name where to run them: from the wrong checkout `drop`
+  used to remove another project's lane. `show` still reads any lane.
+
 - Spawnfather now removes what a lane owns (fathers#171). `start`, `adopt` and the fix-lane hand-over register the
   lane's worktree, scratch and build directories with Spawnfather; `done`, `drop` and `gc` ask it to stop what was
   left running there and remove them, and register a lane started before the upgrade on the spot. Lanefather's
@@ -272,6 +287,12 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
 
 ### Fixed
 
+- A land forced past other lanes' unmarked review findings with `--force-reason` prints each finding it overrides
+  (`lane: overridden: <finding>`, worded as the refusal) before merging; before, they reached only the override
+  record and the ledger (review of fathers#172).
+- `list`'s count of finished reviews with unmarked findings covers the repository it runs in, like its lanes and its
+  cap line (`--all-projects` the whole Store), and `list --json` gives it as `pending_reviews` (each lane with its
+  finding numbers); before, it counted every repository's reviews and was text-only (review of fathers#172).
 - `drop`'s list of the paths a lane changes beyond its base, `land`'s merge conflict paths and
   `promote --ship`'s refused-directory check read paths with non-ASCII or unusual bytes as they are, not as Git's
   quoted escapes (`"caf\303\251.txt"`).
