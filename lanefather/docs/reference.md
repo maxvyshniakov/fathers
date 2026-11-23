@@ -92,7 +92,7 @@ never an implementer's report. `start` refuses `--ticket none` beside another ti
 named twice, a decision that is not one issue comment's URL, and a spec path that is absolute or has `..`. A lane
 needs `--ticket` (`none` for no ticket) or `--partial`.
 
-A ticket is a number of the lane's own repository (`12` or `#12`, stored as `12`, as always), or a ticket of another
+A ticket is a number of the lane's own repository (`N` or `#N`, stored as `N`, as always), or a ticket of another
 repository (fathers#238): `owner/repo#N`, or its issue URL `https://github.com/<owner>/<repo>/issues/<n>`, both stored
 as `owner/repo#N`. `start` refuses any other form, such as a pull request's URL or a comment's. The same number in
 two repositories is two tickets. A foreign ticket the lane completes gets `Fixes owner/repo#N` in the merge, a
