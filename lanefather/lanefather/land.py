@@ -245,6 +245,8 @@ def check_other_reviews(store: state.Store, record: state.Record,
         raise LaneError("\n".join([f"land refused: other finished reviews have unmarked {blocks} findings", *lines,
                                   "For findings that need a fix:", *(f"  {line}" for line in fixes),
                                   "--force-reason overrides and is logged"]))
+    for text in refusals:
+        print(f"lane: overridden: {text}", file=sys.stderr)
     override = {"at": journal.now(), "reason": force_reason, "refusals": refusals}
     record.setdefault("overrides", []).append(override)
     journal.ledger(f"override land {record['id']}: {force_reason} ({'; '.join(refusals)})", kind="override",

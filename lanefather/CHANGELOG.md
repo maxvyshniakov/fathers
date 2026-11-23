@@ -287,6 +287,9 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
 
 ### Fixed
 
+- A land forced past other lanes' unmarked review findings with `--force-reason` prints each finding it overrides
+  (`lane: overridden: <finding>`, worded as the refusal) before merging; before, they reached only the override
+  record and the ledger (review of fathers#172).
 - `list`'s count of finished reviews with unmarked findings covers the repository it runs in, like its lanes and its
   cap line (`--all-projects` the whole Store), and `list --json` gives it as `pending_reviews` (each lane with its
   finding numbers); before, it counted every repository's reviews and was text-only (review of fathers#172).

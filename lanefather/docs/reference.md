@@ -139,7 +139,8 @@ ticket.`
 Unmarked P3 findings are printed as warnings. A running or missing review can finish alongside later lands.
 A fix lane may land while its valid parents have unmarked findings. A finished review of an unrelated lane can
 still hold the merge. When several landed reviews need a fix, the refusal suggests one batch with `--fix-of`.
-`--force-reason` logs the reason and the blocking findings in the override record.
+`--force-reason` prints each blocking finding it overrides (`lane: overridden: ...`) and logs the reason and the
+findings in the override record.
 The text output from `list` ends with the count of finished reviews with unmarked findings and their
 `lane#number` references, for the repository it runs in (`--all-projects`: the whole Store); `list --json` gives
 them as `pending_reviews`, each `{"lane": id, "findings": [n, ...]}`. The separate batch gate uses its configured `[review] blocks` severities.
