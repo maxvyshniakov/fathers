@@ -28,7 +28,9 @@ unknown, so spared), or one whose tree holds such a process or a session; other
 users' processes; processes with a terminal; agent and terminal sessions (claude, codex, tmux, sshd); system
 and app bundle processes; launchd jobs and systemd services' main processes; the sweep and its ancestors. A stop
 sends SIGTERM to the process and its descendants and SIGKILL to those still there after `grace` seconds, each
-time only to a pid whose start time is unchanged. Without --live nothing is signalled. Every sweep appends a line
+time only to a pid whose start time is unchanged; Spawnfather sends them (`spawnfather reap --pid --started --cmd
+--tree`, sweep_forward.py, fathers#171), or this release still does without one, with a deprecation warning.
+Without --live nothing is signalled. Every sweep appends a line
 to sweep.jsonl beside the queue (`slotfather stats` counts them); stops are also written to queue.log. Settings
 (ages, grace, the enabled classes) live in sweep.json beside the queue: `slotfather sweep config`.
 """
@@ -53,7 +55,7 @@ from . import process as _process
 from . import query as _query
 from . import settings as _settings
 from . import state as _state
-from . import sweep_disk, sweep_os, sweep_plan
+from . import sweep_disk, sweep_forward, sweep_os, sweep_plan
 from .sweep_os import SweepError, stop
 from .config import SWEEP_CLASSES as CLASSES, SWEEP_DISK_CLASSES as DISK_CLASSES
 from .sweep_plan import Carriers
@@ -188,11 +190,23 @@ def sweep(directory: Path, live: bool = False, dev_servers: bool = False, only: 
     protected, carriers = protection(*leases(directory), procs=snap.procs)
     before = read_state(directory).get("gone_since", {})
     items = sweep_plan.plan(snap, found_settings, protected, carriers, only, live, dev_servers, before)
-    if live:
+    stops_by: str | None = None  # who stopped the trees: spawnfather, or (deprecated) slotfather itself
+    deprecated: list[str] = []
+    if live and any(item["action"] == "stop" for item in items):
+        forward = sweep_forward.find()
+        stops_by = "spawnfather" if forward is not None else "slotfather"
+        if forward is None:
+            deprecated.append(sweep_forward.DEPRECATED)
         for item in items:
             if item["action"] == "stop":
-                item.update(stop(item, snap, found_settings["grace"]))
+                outcome = forward.stop(item, snap, found_settings["grace"]) if forward is not None else \
+                    stop(item, snap, found_settings["grace"])
+                if outcome.get("reason"):
+                    outcome["reason"] = f"{item['reason']}; {outcome['reason']}"
+                item.update(outcome)
                 item["action"] = item.pop("result")
+                if item["action"] == "spared":
+                    continue  # Spawnfather refused: nothing was signalled
                 swept = item
                 _events.record(directory, f"sweep {item['action']} {item['class']} pid {item['pid']} ({item['kind']}, "
                                           f"age {_config.duration(item['age'])}, {len(item['tree'])} process(es)): "
@@ -214,7 +228,8 @@ def sweep(directory: Path, live: bool = False, dev_servers: bool = False, only: 
               "only": sorted(only) if only is not None else None,
               "settings": {k: found_settings[k] for k in DEFAULTS},
               "settings_error": found_settings.get("error"), "live_refused": refused,
-              "notes": snap.notes + found_settings["warnings"] + (
+              "stops_by": stops_by, "deprecated": deprecated,
+              "notes": snap.notes + deprecated + found_settings["warnings"] + (
                   [found_settings["error"] + ("; the live sweep stopped nothing" if refused else "")]
                   if "error" in found_settings else []),
               "items": items, "containers": docker, "memory": memory, "disk": disk, "found": counts,
@@ -410,6 +425,8 @@ def main(argv: list[str] | None = None) -> int:
     except (SweepError, _config.SlotError) as error:
         print(f"slotfather sweep: {error}\n{USAGE}", file=sys.stderr)
         return 2
+    for warning in report["deprecated"]:
+        print(f"slotfather sweep: warning: {warning}", file=sys.stderr)
     if as_json:
         print(json.dumps(report, sort_keys=True))
     else:

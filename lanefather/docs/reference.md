@@ -544,7 +544,7 @@ unless `LANEFATHER_REGISTRY` is set.
  "projects": [
    {"project": "Straylight", "state_dir": "/Users/me/.local/state/straylight-orchestration/lanes",
     "config": "/Users/me/straylight/.lanefather.toml", "repository": "maxvyshniakov/straylight",
-    "cap": 4, "cap_source": "slotfather derived; derived: 4", "active": 3, "planned": 0,
+    "checkout": "/Users/me/straylight", "cap": 4, "cap_source": "slotfather derived; derived: 4", "active": 3, "planned": 0,
     "gate": {"sha": "cedf8b97...", "status": "red", "at": "2026-11-12T04:06:19Z"},
     "lanes": [{"id": "710-speech-paste-phase", "status": "active",
                "ticket": {"number": "710", "url": "https://github.com/maxvyshniakov/straylight/issues/710"},
@@ -560,7 +560,8 @@ unless `LANEFATHER_REGISTRY` is set.
 The lanes are those not done. `receipt.tree_match` compares the receipt's tree with the lane branch's, null when
 either is unknown; `review.status` is the review receipt's, `stopped` for a running review whose process is gone;
 `logs` holds the newest run log of each phase (`check`, `rerun`, `base`, `post-merge`, `review`); `gate` is the newest
-batch gate; `outcome` stays null until lane parking is implemented and records one. `cap` is the project's lifetime admission answer,
+batch gate; `outcome` stays null until lane parking is implemented and records one. `checkout` is the project's main
+checkout (its real path), the project a lane owner names in Spawnfather (`lane:<checkout>/<id>`, fathers#171). `cap` is the project's lifetime admission answer,
 or its derived cap with the reason when admission is unavailable. A project that cannot be read gives
 `{"project", "state_dir", "error"}`, never a failed snapshot; one whose configuration file is missing and that no
 command has seen for 7 days is left out, and the next registration drops it. The command takes no locks, writes

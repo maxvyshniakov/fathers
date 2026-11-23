@@ -37,8 +37,10 @@ v            1
 host         str
 time         RFC 3339 UTC
 projects     [project]
-project      {project, state_dir, config, repository, cap, cap_source, active, planned, gate, lanes, damaged}
+project      {project, state_dir, config, repository, checkout, cap, cap_source, active, planned, gate, lanes, damaged}
              | {project, state_dir, error}        a project that cannot be read; the rest of the page works
+  checkout   str | null                           the main checkout's real path, the project a Spawnfather lane
+                                                  owner names (fathers#171); null from an older Lanefather
   gate       {sha, status, at} | null             the newest batch gate; status "red" puts 🔥 in the summary
   lanes      [lane]                               the lanes not done
 lane         id            str                    unique within its project only

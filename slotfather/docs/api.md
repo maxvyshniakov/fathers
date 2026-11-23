@@ -351,9 +351,11 @@ A PID enters `cwd_unknown` or `lease_unknown` only if a second, targeted `ps` fi
 time the scan saw: a short-lived helper (`lsof`, git, a shell) that exited between the scan and the read is gone, not
 unknown. A re-check that `ps` does not answer fails the query.
 
-Each process contains `pid`, `ppid`, `uid`, `tty`, `start`, `cmd`, `cwd`,
+Each process contains `pid`, `ppid`, `uid`, `tty`, `start`, `started`, `cmd`, `cwd`,
 `ancestors`, `sessions` and `leases`. `start` is the C-locale `ps lstart`
-identity with whitespace normalized. Zombies are excluded. `ancestors` lists
+identity with whitespace normalized, in local time; `started` is the same moment
+as epoch seconds (`null` when it does not read), the identity that crosses to
+another tool, such as `spawnfather reap --pid --started --cmd` (fathers#171). Zombies are excluded. `ancestors` lists
 parents nearest first, without PID 1. `sessions` contains the process itself
 and ancestors recognized as terminal, agent, remote-login or CI sessions;
 each record contains `pid`, `start` and `cmd`. This is observed ancestry,

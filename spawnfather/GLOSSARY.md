@@ -14,8 +14,9 @@ Terms shared with the other tools (owner, reap, orphan, sweep, process identity)
 - **Hand-over**: giving an entry to another session, which then owns it.
 - **TTL**: the longest an entry may run, whatever its owner; `extend` renews it.
 - **Reap**: ending an entry: SIGTERM, a grace period, SIGKILL, to verified identities only.
-- **Process identity**: a process's pid together with its start time; a reused pid has another identity. _Avoid_:
-  identity alone.
+- **Process identity**: a process's pid together with its start time; a reused pid has another identity. Between
+  tools it is the shared **identity** `{pid, started, cmd}` ([GLOSSARY.md](../GLOSSARY.md)), which `reap --pid
+  --started --cmd` takes.
 - **Known members**: the identities seen in an entry while it ran; a reap without a live leader signals only these.
 - **Hook claim**: the PreToolUse hook's record of which subagent ran a Bash command naming spawnfather, or a background
   Bash call.

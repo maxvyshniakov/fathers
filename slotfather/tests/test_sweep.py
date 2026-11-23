@@ -868,6 +868,127 @@ class LiveTests(SweepCase):
         self.assertEqual(before, entry_path.read_bytes(), "unknown entry is left untouched")
 
 
+SPAWNFATHER = pathlib.Path(TOOL).resolve().parent.parent / "spawnfather"  # this repository's (fathers#171)
+sweep_forward = importlib.import_module("slotfather.sweep_forward")
+
+
+class ForwardUnitTests(unittest.TestCase):
+    """What a live sweep asks Spawnfather, and how its answers read back, with a fake `spawnfather`."""
+
+    def answering(self, code: int, out: Any = None, err: str = "") -> tuple[Any, list[list[str]]]:
+        calls: list[list[str]] = []
+
+        def run(argv: list[str], **_: Any) -> subprocess.CompletedProcess[str]:
+            calls.append(argv)
+            if argv[1:] == ["capabilities", "--json"]:
+                body = {"lifetimes": {"v": 1, "reap": ["owner", "identity"]}}
+                return subprocess.CompletedProcess(argv, 0, json.dumps(body), "")
+            return subprocess.CompletedProcess(argv, code, "" if out is None else json.dumps(out), err)
+        return run, calls
+
+    def item(self) -> tuple[dict[str, Any], Any]:
+        s = snap([proc(100, 1, "node vitest run", age=600), proc(101, 100, "node worker")])
+        return {"pid": 100, "class": "orphan", "kind": "vitest", "tree": [100, 101], "reason": "ppid 1"}, s
+
+    def test_the_call_names_the_identity_and_the_tree(self):
+        run, calls = self.answering(0, {"v": 1, "results": [{"result": "stopped", "pids": [100, 101]}]})
+        with unittest.mock.patch.dict(os.environ, {"SLOTFATHER_SPAWNFATHER": "/bin/spawnfather"}):
+            found = sweep_forward.find(run)
+        assert found is not None
+        item, s = self.item()
+        self.assertEqual({"result": "stopped", "signalled": [100, 101], "left": []}, found.stop(item, s, 2.0))
+        self.assertEqual(["reap", "--pid", "100", "--started", str(int(NOW - 600)), "--cmd=node vitest run",
+                          "--tree", "--reason", "slotfather sweep: orphan (vitest)", "--grace", "2", "--via", "sweep",
+                          "--json"], calls[-1][1:])
+
+    def test_a_refusal_spares_and_a_failure_fails(self):
+        item, s = self.item()
+        run, _ = self.answering(3, err="spawnfather: refusing pid 100: an entry owns it now (reap that entry)\n")
+        found = sweep_forward.Spawnfather("spawnfather", run)
+        self.assertEqual({"result": "spared", "signalled": [], "left": [],
+                          "reason": "Spawnfather refused: refusing pid 100: an entry owns it now (reap that entry)"},
+                         found.stop(item, s, 2.0))
+        run, _ = self.answering(1, {"v": 1, "results": [{"result": "failed", "pids": [100]}]},
+                                "spawnfather: pid 100: failed\n")
+        failed = sweep_forward.Spawnfather("spawnfather", run).stop(item, s, 2.0)
+        self.assertEqual(("failed", "pid 100: failed"), (failed["result"], failed["error"]))
+        run, _ = self.answering(2, err="spawnfather: unrecognized arguments: --started\n")
+        self.assertEqual("failed", sweep_forward.Spawnfather("spawnfather", run).stop(item, s, 2.0)["result"])
+        run, _ = self.answering(3, err="spawnfather: the process table cannot be read\n")
+        unread = sweep_forward.Spawnfather("spawnfather", run).stop(item, s, 2.0)
+        self.assertEqual(("failed", "the process table cannot be read"), (unread["result"], unread["error"]),
+                         "a table Spawnfather cannot read is a failure, never a reason to spare")
+
+    def test_a_spawnfather_without_identity_reaps_is_none(self):
+        def old(argv: list[str], **_: Any) -> subprocess.CompletedProcess[str]:
+            return subprocess.CompletedProcess(argv, 0, json.dumps({"lifetimes": {"v": 1, "reap": ["owner"]}}), "")
+
+        with unittest.mock.patch.dict(os.environ, {"SLOTFATHER_SPAWNFATHER": "/bin/spawnfather"}):
+            self.assertIsNone(sweep_forward.find(old))
+            self.assertIsNotNone(sweep_forward.find(self.answering(0)[0]))
+
+
+class ForwardLiveTests(SweepCase):
+    """`sweep --live` stops through this repository's Spawnfather, and without one falls back with a warning."""
+
+    def setUp(self):
+        super().setUp()
+        self.configure("removed_age", "0", "orphan_age", "0", "classes", "removed,orphan,dev-server", "grace", "2",
+                       "session_removed_age", "0")
+
+    def use_spawnfather(self) -> pathlib.Path:
+        if not (SPAWNFATHER / "spawnfather" / "cli.py").is_file():
+            self.skipTest("needs this repository's spawnfather")
+        program = self.tmp / "bin" / "spawnfather"
+        program.parent.mkdir(exist_ok=True)
+        program.write_text(f"#!/bin/sh\nPYTHONPATH='{SPAWNFATHER}' exec '{sys.executable}' -m spawnfather \"$@\"\n")
+        program.chmod(0o755)
+        state = self.tmp / "spawnfather-state"
+        self.env.update(SLOTFATHER_SPAWNFATHER=str(program), SPAWNFATHER_STATE=str(state), SPAWNFATHER_REPOS="",
+                        SPAWNFATHER_CLAUDE_SESSIONS=str(self.tmp / "no-claude-sessions"))
+        return state
+
+    def test_an_orphan_is_stopped_through_spawnfather(self):
+        state = self.use_spawnfather()
+        pid = self.orphan("forwarded")
+        live = self.sweep("--live", "--json", "--pid", str(pid))
+        report = json.loads(live.stdout)
+        self.assertEqual(("stopped", "spawnfather", []),
+                         (report["items"][0]["action"], report["stops_by"], report["deprecated"]), report)
+        self.assertNotIn("warning", live.stderr)
+        self.assertTrue(self.wait_gone(pid))
+        events = [json.loads(line) for line in (state / "events.jsonl").read_text().splitlines()]
+        reaped = [e for e in events if e["kind"] == "unowned.reaped"]
+        self.assertEqual([(str(pid), "slotfather sweep: orphan (runner)", "stopped")],
+                         [(e["subject"]["id"], e["details"]["reason"], e["details"]["result"]) for e in reaped])
+        self.assertRegex((self.state / "queue.log").read_text(), rf"sweep stopped orphan pid {pid} ")
+
+    def test_a_process_spawnfather_owns_is_spared(self):
+        self.use_spawnfather()
+        pid = self.orphan("owned")
+        adopted = subprocess.run([self.env["SLOTFATHER_SPAWNFATHER"], "adopt", str(pid), "--ttl", "1h"],
+                                 env=self.env, capture_output=True, text=True, timeout=20)
+        self.assertEqual(0, adopted.returncode, adopted.stderr)
+        report = self.report("--live", "--pid", str(pid))
+        self.assertEqual("spared", report["items"][0]["action"], report)
+        self.assertIn("Spawnfather refused: refusing pid", report["items"][0]["reason"])
+        self.assertTrue(self.alive(pid))
+
+    def test_without_spawnfather_the_sweep_stops_itself_and_warns(self):
+        pid = self.orphan("fallback")
+        live = self.sweep("--live", "--json", "--pid", str(pid))
+        report = json.loads(live.stdout)
+        self.assertEqual(("stopped", "slotfather"), (report["items"][0]["action"], report["stops_by"]), report)
+        self.assertEqual([sweep_forward.DEPRECATED], report["deprecated"])
+        self.assertIn(f"slotfather sweep: warning: {sweep_forward.DEPRECATED}", live.stderr)
+        logged = [json.loads(line) for line in (self.state / "sweep.jsonl").read_text().splitlines()]
+        self.assertIn(sweep_forward.DEPRECATED, logged[-1]["notes"])
+        self.assertTrue(self.wait_gone(pid))
+        dry = self.sweep("--json", "--pid", str(self.orphan("dry")))
+        self.assertEqual(([], None), (json.loads(dry.stdout)["deprecated"], json.loads(dry.stdout)["stops_by"]))
+        self.assertNotIn("warning", dry.stderr)
+
+
 class SessionLiveTests(SweepCase):
     def setUp(self):
         super().setUp()

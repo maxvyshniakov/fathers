@@ -6,6 +6,11 @@ Versions and release rules: [README.md](README.md#versions).
 
 ### Added
 
+- LANE DETAILS lists everything a lane owns through Spawnfather (fathers#171): its worktree, scratch and build
+  folders, wherever they are, first, then what its agents started inside its worktree. On SPAWNS their `lane`
+  column names the lane and SPAWN DETAILS links it. A lane is matched by its project and its id, so a lane of the
+  same id in another project never takes another's spawns.
+
 - MACHINE says in red when sustained CPU load or the expected-peak memory budget closes admission (fathers#206):
   `CPU load high` and `memory budget full` in its border, beside `memory short`, from Slotfather's `load_block` and
   `memory_budget_block`, and a waiting request's details list the reason under `blocked`. An older Slotfather sends

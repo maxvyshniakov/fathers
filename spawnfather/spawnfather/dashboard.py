@@ -33,6 +33,8 @@ class Row(TypedDict):
     agent: Optional[str]
     agent_type: Optional[str]
     lane: Optional[str]
+    owner_kind: Optional[str]  # claude, codex, shell or lane (fathers#171)
+    lane_project: Optional[str]  # a lane owner's project, or the project a tagged entry's lane names
     owner_alive: Optional[bool]
     age: float
     ttl: Optional[float]
@@ -106,7 +108,7 @@ def row(entry: Entry, table: Optional[_procs.Table], now: float) -> Row:
     owner = entry.get("owner") or {}
     return {"id": entry["id"], "state": entry.get("state"), "owner": _owner.describe(owner),
             "session": owner.get("session"), "agent": owner.get("agent"), "agent_type": owner.get("agent_type"),
-            "lane": owner.get("lane"),
+            "lane": owner.get("lane"), "owner_kind": owner.get("kind"), "lane_project": owner.get("lane_project"),
             "owner_alive": _owner.alive(owner, table) if entry.get("state") in _entry.ACTIVE else None,
             "age": now - float(entry.get("created") or now), "ttl": entry.get("ttl"),
             "ttl_left": float(entry.get("expires") or now) - now, "keep": entry.get("keep"),
@@ -184,7 +186,7 @@ def capabilities(store: Store) -> Dict[str, Any]:
         dashboard["changelog"] = changelog
     # What a requester that owns lifetimes through Spawnfather negotiates (Lanefather, fathers#171).
     lifetimes = {"v": 1, "owners": ["lane"], "kinds": ["worktree", "dir"],
-                 "reap": ["owner", "worktree", "base", "disposable", "override", "stop-inside"],
+                 "reap": ["owner", "worktree", "base", "disposable", "override", "stop-inside", "identity"],
                  "hand": ["owner", "kind"]}
     return {"v": 1, "tool": "spawnfather", "version": __version__, "commit": _release.commit().strip(" ()"),
             "dashboard": dashboard, "lifetimes": lifetimes}

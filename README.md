@@ -12,6 +12,18 @@ Each is a separate package with its own version, changelog, documentation and te
 
 The installed commands use only the Python standard library (3.11+) on macOS or Linux.
 
+## Responsibilities
+
+Each responsibility has one owner (fathers#171); the others ask it rather than keep a copy.
+
+| Owner | Responsibility | What the others do |
+| --- | --- | --- |
+| Slotfather | **Capacity**: leases, the queue, admission and load. It reads processes (lease membership, CPU) and decides which leftovers its sweep may stop, but stops none itself. | `slotfather sweep --live` hands each tree it would stop to Spawnfather. |
+| Lanefather | **Work**: a lane's worktree, claim, checks, integration and review, and when a lane's things are no longer needed. It removes nothing itself and keeps its own refusals (unlanded commits, the landing lock, fix lanes). | `start` registers the lane's worktree and folders with Spawnfather as owner `lane:<checkout>/<id>`; `done`, `drop` and `gc` ask it to reap them. Without Spawnfather, they refuse. |
+| Spawnfather | **Lifetime**: owning, TTLs, stopping any process and removing any worktree or folder, behind one set of guards, and sweeping what no one owns. | Slotfather and Lanefather name a process by its identity (`{pid, started, cmd}`) or an owner, and Spawnfather checks again before it acts. |
+| Godfather | **Showing all three**: their snapshots, settings and one event feed. It changes nothing but through their commands. | A lane's spawns join it by project and id; LANE DETAILS lists them. |
+| `common/` | **Shared reading**: the one process-table reader (pid, start time and command, trees, groups, working directories), installed with each command. | Every tool reads processes through it; none signals through it. |
+
 ## Install
 
 ```sh

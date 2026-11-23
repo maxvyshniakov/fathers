@@ -47,6 +47,9 @@ class ProcsTests(unittest.TestCase):
         self.assertEqual([51], item["ancestors"])
         self.assertEqual([51], [session["pid"] for session in item["sessions"]])
         self.assertEqual([], item["leases"])
+        from slotfather import platform as sf_platform
+        # `started`: the same moment as epoch seconds, the identity another tool takes (fathers#171)
+        self.assertEqual(int(sf_platform.started_at("Wed Nov 4 10:00:01 2026") or 0), item["started"])
         self.assertFalse(self.directory.exists(), "queries must never create or reap queue state")
         self.assertEqual(1, run.call_count, "the fast PID query reads ps once and never runs lsof")
 

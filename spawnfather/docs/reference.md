@@ -53,7 +53,7 @@ characters. An event follows the change it describes; one that cannot be written
 | `resource.stopped` | resource | its stop ran and it is gone (or was gone already); `reason`, `result`, `resource`, `steps`; a lane owner's `owner`; `override: {reason, lifted}` when an override lifted a guard; `stopped` when --stop-inside stopped processes first; also the sweep's and `reap --worktree`'s removal of an unowned worktree (no `entry` in the subject) |
 | `resource.stop_failed` (error) | resource | a stop command failed or timed out, or it still runs; the entry keeps running; `error`, `steps` |
 | `unowned.reported` (warn) | process or resource | a sweep listed it for the first time; a process: `cmd`, `cwd`, `root`, `why`, `start`, `age`; a resource: `kind`, `id`, `name`, `why` |
-| `unowned.reaped` | process | `reap --pid --force`; `cmd`, `start`, `result`, `pids` |
+| `unowned.reaped` | process | `reap --pid --force` or `reap --pid --started --cmd`; `cmd`, `start`, `result`, `pids`, `reason`; by identity also `started` (epoch seconds) |
 | `sweep.finished` | sweep | `reaped`, `failed`, `gone`, `running`, `unowned`, `pruned`, `errors` |
 | `hook.failed` (error) | hook | the hook hit an error and let the event pass; `error` |
 
@@ -72,7 +72,9 @@ A command run with `GODFATHER_ACTOR` set carries `via: "godfather"`.
   [{pid, start, cmd, cwd, root, why, age, alive}] from the last sweep, unowned_resources: [{kind, id, name, why},
   and for a worktree also repo, branch, age, size] from the last sweep, sweep: {time, result}, cpu, errors}`; `cpu`
   is the last sweep's CPU report (Sweep), `null` before one wrote it. Version 2 adds `cpu` to version 1 and changes
-  nothing else. A resource entry's row has `resource: {kind, id, name}` and
+  nothing else. Each row also names its owner's kind (`owner_kind`: `claude`, `codex`, `shell` or `lane`) and
+  `lane_project`, a lane owner's project (fathers#171; added within version 2). A resource entry's row has
+  `resource: {kind, id, name}` and
   `processes: null`. It changes nothing.
 - `spawnfather changelog --json [--since VERSION]`: the installed release's CHANGELOG.md for Godfather's what's new
   (`godfather/docs/contracts/changelog.md`): `{v: 1, tool: "spawnfather", version, source, entries: [{version, date,
@@ -147,14 +149,22 @@ Slotfather's "another user's queue" (fathers#118) and is not used here.
 - **A failed TTL reap**: the supervisor tries again after 1 s, then 2, 4 and so on up to 60 s, and only the first
   failure of a streak writes `entry.reap_failed`; each failure still updates `last_error`.
 - **Never** a process spawnfather did not start or adopt, except `reap --pid PID --force` on a pid the last sweep
-  listed as unowned, with the same start time and command and still unowned.
+  listed as unowned, with the same start time and command and still unowned, and `reap --pid PID --started EPOCH
+  --cmd CMD [--tree] --reason TEXT` (fathers#171) on the process its caller names by that identity: the epoch
+  second it started (within one second: Linux derives it from the uptime) and its command must both match what
+  runs now, and the same policy as `--force` applies (this user's, no terminal, no agent session, nothing of the
+  kind below it, not protected, no entry holding it: exit 3 otherwise). No sweep need have listed it: Slotfather's
+  `sweep --live` decides which leftovers go, under its leases, and asks this call to stop them. A pid that runs
+  another process, or none, is `gone` (exit 0); `--tree` takes its descendants too (less any unsafe one with its
+  subtree); `--dry-run` shows `would-stop`.
 - **Another entry's**: an entry holds a process directly (its leader, a known member, a daemon, its supervisor),
   through its leader's group, or below one of those. An adopted entry (`adopt`, a background call's shell) leaves
   out of its reap what another active entry holds more firmly, or as firmly and is newer: an attached `spawnfather
   own --keep-for session` that a script ran in the shell keeps running in the shell's group after the subagent's
   stop, and a process adopted inside the shell is still reaped by its own entry's reap. Adoption leaves out of its
   known members what another entry holds directly.
-- **One policy**: `adopt`, a reap, `reap --pid --force`, the sweep's unowned report and its unowned resources
+- **One policy**: `adopt`, a reap, `reap --pid --force`, `reap --pid --started`, the sweep's unowned report and its
+  unowned resources
   decide what they may touch by the same rules (`spawnfather/safety.py`).
 
 ## Resources
@@ -220,7 +230,8 @@ above one), and that run below no live agent session (pid, start time and comman
 requester's one-shot removal of a worktree no entry owns (one an entry owns is refused, 3), through the same guards.
 `hand --owner lane:... [--kind KIND] --to lane:...` moves a lane's entries to another lane (a fix lane taking its
 parent's worktree). `capabilities --json` names the contract: `lifetimes: {v: 1, owners: ["lane"], kinds:
-["worktree", "dir"], reap: [...], hand: [...]}`. The sweep still leaves alone a worktree Lanefather's lane records
+["worktree", "dir"], reap: [...], hand: [...]}`; `reap` lists `identity` where `reap --pid --started --cmd`
+is offered (Slotfather looks for it before it forwards a live sweep's stops). The sweep still leaves alone a worktree Lanefather's lane records
 name for one release (lanes started before Lanefather registered them); a registered one is an owned entry. The branch goes after it only at the tip that was checked: a branch that
 moved meanwhile stays, and the stop is a warning. A refused stop is `resource.stop_failed` with `error: "kept: WHY"`,
 and the entry keeps running. At its owner's end the ending session's own process (and at SessionEnd everything

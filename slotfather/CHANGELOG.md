@@ -130,6 +130,8 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
   it up; queue.log and EVENTS record it, and `status` flags it (`long-wait=`, JSON `long_wait`).
 - QUEUE shows each request's priority after its state: ⚡ interactive, 🐢 batch, nothing for normal; the
   details put the same mark before the priority's name.
+- `slotfather procs --json` gives each process's start as epoch seconds too (`started`), the form another tool
+  takes to name the same process (fathers#171).
 
 ### Changed
 
@@ -192,6 +194,17 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
   Settings, and flashes in the text colour while its panel scrolls.
 - The holder palette is "Neon": eight saturated hues (hot pink, orange, acid green, spring teal, cyan, electric
   violet, magenta, green), more distinct from one another, with inks at 4.6:1 or more.
+- `slotfather sweep --live` stops processes through Spawnfather, the one tool that stops them (fathers#171): each
+  tree the sweep decides may go is handed to `spawnfather reap --pid --started --cmd --tree`, which checks its start
+  time and command again before a signal. Slotfather still decides what goes and keeps every lease's processes. A
+  tree Spawnfather refuses (one of its entries owns it) is reported as spared with its reason. `--json` and
+  `sweep.jsonl` add `stops_by`. `SLOTFATHER_SPAWNFATHER` names the command.
+
+### Deprecated
+
+- A live sweep without Spawnfather (or with one too old to stop a process by its identity) still stops processes
+  itself in this release, with a warning on stderr and a note in its output and in `sweep.jsonl` (`deprecated`).
+  The next release drops this: install Spawnfather with `python3 install.py spawnfather`.
 
 ### Removed
 

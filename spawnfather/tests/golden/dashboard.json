@@ -73,7 +73,8 @@
       "base",
       "disposable",
       "override",
-      "stop-inside"
+      "stop-inside",
+      "identity"
      ],
      "v": 1
     },

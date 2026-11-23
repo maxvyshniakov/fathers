@@ -173,7 +173,9 @@ full pages one key away.
       worktree; otherwise no link (never by id alone across projects);
     - request ↔ entry: an entry whose leader or a known member pid is in the request's process tree, or whose lane
       matches the request's lane;
-    - lane ↔ entry: the entry's lane equals the lane id and its directory is inside the lane's worktree.
+    - lane ↔ entry: a lane owner's entry (its worktree, folders) by its lane project and id, whatever its directory;
+      another entry by its lane id, its directory inside the lane's worktree and its lane project, if any
+      (fathers#171).
 
 ### Settings
 

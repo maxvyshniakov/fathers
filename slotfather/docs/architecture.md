@@ -48,6 +48,7 @@ Definitions: [glossary](../GLOSSARY.md). Naming and wire aliases: [terminology](
 | `sweep_disk` | Machine-wide disk hygiene (`docker-anonymous`, `docker-dangling-images`, `docker-superseded`, `claude-scratch`, `package-caches`, `low-disk`) with Spawnfather scratchpad sparing (fathers#6). |
 | `sweep_os` | Machine adapters for `sweep`: `ps`, `lsof`, `/proc`, `launchd`, `systemd`, `docker`, memory inspection, and signalling. |
 | `sweep_plan` | Pure process classifier and cleanup planner operating on a `sweep_os` snapshot. |
+| `sweep_forward` | The live sweep's stops through Spawnfather (`spawnfather reap --pid --started --cmd --tree`, fathers#171), and the one-release deprecated fallback to `sweep_os`'s own stop. |
 | `usage` | Process-tree accounting and machine sampling while work runs. |
 | `version` | Runtime source identity (`version.json` or checkout digest) and `version` / `--version` output. |
 

@@ -19,6 +19,13 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
   session's or anything below a live session). `reap --worktree PATH` removes a worktree no one owns through the
   same guards. `hand --owner lane:A --kind worktree --to lane:B` hands a lane's worktree to its fix lane.
   `capabilities --json` names this contract as `lifetimes`.
+- `spawnfather reap --pid PID --started EPOCH --cmd CMD [--tree] --reason TEXT` stops a process no entry owns by
+  the identity its caller read: its pid, the second it started and its command, all checked again before a signal
+  (fathers#171). No sweep of Spawnfather's need have listed it; the rules of `reap --pid --force` still apply, and a
+  pid that now runs another process, or none, is reported `gone`. Slotfather's `sweep --live` stops its leftovers
+  through it. `--tree` takes the process's descendants too.
+- `status --json` and `list --json` rows name the owner's kind (`owner_kind`) and a lane owner's project
+  (`lane_project`), so a dashboard joins a lane's worktrees and folders to the right lane.
 
 - A subagent's background Bash commands are owned on their own (fathers#166). `install.py --mastack` registers,
   through Mastack's lifecycle rewriters, `junkfather hook` for `run_in_background` Bash calls, with the permission

@@ -157,6 +157,7 @@ class Lane(TypedDict):
     project: str
     state_dir: str
     repository: Optional[str]
+    checkout: Optional[str]  # its project's main checkout: the project a Spawnfather lane owner names
     status: str
     ticket: Ticket
     branch: Optional[str]
@@ -182,6 +183,7 @@ class _Project(TypedDict):
     project: str
     state_dir: str
     repository: Optional[str]
+    checkout: Optional[str]  # its main checkout's real path (Lanefather `checkout`); None from an older Lanefather
     lanes: List[Lane]
 
 
@@ -236,6 +238,8 @@ class Entry(TypedDict):
     session: Optional[str]
     agent: Optional[str]
     lane: Optional[str]
+    owner_kind: Optional[str]  # claude · codex · shell · lane; None from an older Spawnfather
+    lane_project: Optional[str]  # a lane owner's project (its main checkout), or a tagged entry's lane's
     owner_alive: Optional[bool]
     age: float
     ttl: Optional[float]

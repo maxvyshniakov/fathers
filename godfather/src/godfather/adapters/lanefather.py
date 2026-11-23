@@ -78,6 +78,7 @@ def _lane(raw: dict[str, Any], project: Project) -> Lane:
     return {
         "id": str(raw["id"]), "key": (project["state_dir"], str(raw["id"])), "project": project["project"],
         "state_dir": project["state_dir"], "repository": project.get("repository"),
+        "checkout": project.get("checkout"),
         "status": _decoding.text(raw.get("status")) or "?",
         "ticket": {"number": _decoding.text(str(ticket.get("number"))) if ticket.get("number") is not None else None,
                    "url": _decoding.text(ticket.get("url"))},
@@ -115,7 +116,7 @@ def decode(snapshot: Any) -> Lanes:
         name = _decoding.text(item.get("project")) or posixpath.basename(state_dir.rstrip("/")) or state_dir
         project: Project = {"project": name, "state_dir": state_dir,
                             "repository": _decoding.text(item.get("repository")),
-                            "lanes": []}
+                            "checkout": _decoding.text(item.get("checkout")), "lanes": []}
         if "error" in item:
             project["error"] = str(item.get("error") or "unreadable")
             decoded.append(project)

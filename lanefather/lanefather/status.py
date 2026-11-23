@@ -2,7 +2,7 @@
 page), read-only.
 
   {"v": 1, "host", "time", "registry",
-   "projects": [{"project", "state_dir", "config", "repository", "cap", "cap_source", "active", "planned",
+   "projects": [{"project", "state_dir", "config", "repository", "checkout", "cap", "cap_source", "active", "planned",
                  "gate": {"sha", "status", "at"} | null,
                  "lanes": [{"id", "status", "ticket": {"number", "url"}, "branch", "base", "worktree", "claims",
                             "after", "created", "receipt": {"status", "tree_match", "path"},
@@ -110,7 +110,8 @@ def project_entry(found: registry.Project) -> dict[str, Any]:
     repo = found.repository
     logs = latest_logs(directory, {str(r["id"]) for r in shown})
     return {"project": found.name, "state_dir": str(directory), "config": configured,
-            "repository": repo, "cap": cap, "cap_source": source,
+            "repository": repo, "checkout": os.path.realpath(main_checkout(common)) if common else None,
+            "cap": cap, "cap_source": source,
             "active": sum(1 for r in records if lifecycle.active(r)),
             "planned": sum(1 for r in records if lifecycle.planned(r)),
             "gate": receipts.newest_gate(store),

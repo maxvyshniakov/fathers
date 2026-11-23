@@ -51,6 +51,9 @@ class SlotCase(unittest.TestCase):
                         SLOTFATHER_CORES="12", SLOTFATHER_MEMORY_GIB="64", SLOTFATHER_MEMORY_FILE=str(self.memory),
                         # the host's own load must not hold grants (fathers#184): tests that want it set it
                         SLOTFATHER_LOADAVG="0",
+                        # a live sweep never reaches the machine's own Spawnfather (fathers#171): tests that forward
+                        # name this repository's
+                        SLOTFATHER_SPAWNFATHER=str(self.tmp / "no-spawnfather"),
                         LOG=str(self.log),
                         RELEASE=str(self.release_dir))
         self.processes: list[subprocess.Popen[Any]] = []

@@ -22,6 +22,8 @@ ProcError = _proc.ProcTableError
 Proc = _proc.Proc
 norm = _proc.norm
 command_matches = _proc.command_matches
+same_process = _proc.same_process
+EPOCH_SLACK = _proc.EPOCH_SLACK
 
 
 def started_at(lstart: str) -> Optional[float]:

@@ -213,16 +213,23 @@ class FinishedLaneTests(LaneCase):
         # fathers#171, decision 1: without Spawnfather nothing removes the lane, so every done refuses (exit 3).
         stand_in = self.tmp / "bin" / "spawnfather"
         stand_in.rename(self.tmp / "spawnfather.off")
-        worktree = self.agent_lane("a", "lib/a.txt")
-        self.lane("land", "a")
-        self.assertIn("python3 install.py spawnfather", self.lane("review", "a"))
-        self.assertTrue(worktree.exists())
-        self.assertIn("1 refused", self.lane("done", "--finished"))
-        self.assertTrue(worktree.exists())
-        code, output = run_in_process(["done", "a"], self.integration, self.env)
-        self.assertEqual((3, True), (code, "Spawnfather is not installed" in output), output)
-        self.assertTrue(worktree.exists())
-        (self.tmp / "spawnfather.off").rename(stand_in)
+        saved_path = self.env["PATH"]
+        self.env["PATH"] = os.pathsep.join(
+            p for p in saved_path.split(os.pathsep) if not (pathlib.Path(p) / "spawnfather").exists()
+        )
+        try:
+            worktree = self.agent_lane("a", "lib/a.txt")
+            self.lane("land", "a")
+            self.assertIn("python3 install.py spawnfather", self.lane("review", "a"))
+            self.assertTrue(worktree.exists())
+            self.assertIn("1 refused", self.lane("done", "--finished"))
+            self.assertTrue(worktree.exists())
+            code, output = run_in_process(["done", "a"], self.integration, self.env)
+            self.assertEqual((3, True), (code, "Spawnfather is not installed" in output), output)
+            self.assertTrue(worktree.exists())
+        finally:
+            self.env["PATH"] = saved_path
+            (self.tmp / "spawnfather.off").rename(stand_in)
         self.lane("done", "a")
         self.assert_removed("a", worktree)
 

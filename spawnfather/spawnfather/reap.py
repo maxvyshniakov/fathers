@@ -464,6 +464,43 @@ def reap_unowned(store: Store, pid: int, table: _procs.Table, force: bool, reaso
              "how": "unowned, forced"}]
 
 
+def reap_identity(store: Store, pid: int, started: float, cmd: str, table: _procs.Table, reason: str, *,
+                  tree: bool = False, grace: Optional[float] = None, dry_run: bool = False, via: Optional[str] = None,
+                  stopper: Optional[Stopper] = None) -> List[Dict[str, Any]]:
+    """Stop an unowned process its caller names by its identity {pid, started (epoch seconds), cmd}: Slotfather's
+    live sweep, which decided it may go (fathers#171). No sweep of Spawnfather's need have listed it; the policy is
+    `reap --pid --force`'s (safety.force_refusal with that identity: the start within EPOCH_SLACK and the command,
+    this user's, not a terminal's, an agent session's or protected, nothing of that kind below it, no entry holding
+    it). With `tree`, its descendants go too (safety.forced_targets). The one result row: `gone` (exit 0) when the pid
+    runs another process or none, since the one named has ended; Refused (exit 3) when the policy refuses it."""
+    proc = table.get(pid)
+    if not _procs.same_process(started, cmd, proc):
+        why = "it no longer runs" if proc is None else "the pid now belongs to another process"
+        return [{"id": f"pid {pid}", "result": "gone", "reason": f"{reason}; {why}", "pids": [],
+                 "how": "unowned, by identity"}]
+
+    def owned(candidate: int) -> bool:
+        return any(candidate in {p.pid for p in members(e, table)[0]} for e in store.entries()
+                   if e.get("state") in _entry.ACTIVE)
+
+    refused = _safety.force_refusal(pid, table, store, owned, identity=(started, cmd))
+    if refused:
+        raise Refused(f"refusing pid {pid}: {refused}", REFUSED)
+    assert proc is not None
+    targets = _safety.forced_targets(pid, table) if tree else [proc]
+    if dry_run:
+        return [{"id": f"pid {pid}", "result": "would-stop", "reason": reason, "pids": [p.pid for p in targets],
+                 "how": "unowned, by identity"}]
+    outcome = (stopper or stop)(targets, _settings.value("reap.grace", store.root) if grace is None else grace)
+    _events.write(store.root, "unowned.reaped", {"type": "process", "id": str(pid), "pid": pid},
+                  _events.caller(via), {"cmd": proc.cmd, "start": proc.start, "started": int(started),
+                                        "reason": reason, "result": outcome["result"],
+                                        "pids": [p.pid for p in targets]},
+                  None if outcome["result"] in STOPPED else "error")
+    return [{"id": f"pid {pid}", "result": outcome["result"], "reason": reason, "pids": [p.pid for p in targets],
+             "how": "unowned, by identity"}]
+
+
 def matches_owner(entry: Entry, owner: str, agent: Optional[str], *, lifecycle: Optional[Lifecycle] = None) -> bool:
     """`reap --owner OWNER [--agent AGENT]`: a session's entries (not those handed away), or a subagent's entries
     not kept for the session. The SubagentStop hook also excludes its auto-owned background calls."""

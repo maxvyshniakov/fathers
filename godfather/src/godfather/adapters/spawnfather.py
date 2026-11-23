@@ -67,7 +67,8 @@ def _entry(raw: dict[str, Any]) -> Entry:
     found: Entry = {"id": str(raw["id"]), "key": ("entry", str(raw["id"])), "kind": "entry",
              "phase": _decoding.text(raw.get("state")) or "running", "owner": _decoding.text(raw.get("owner")) or "?",
              "session": _decoding.text(raw.get("session")), "agent": _decoding.text(raw.get("agent")),
-             "lane": _decoding.text(raw.get("lane")),
+             "lane": _decoding.text(raw.get("lane")), "owner_kind": _decoding.text(raw.get("owner_kind")),
+             "lane_project": _decoding.text(raw.get("lane_project")),
              "owner_alive": owner_alive if isinstance(owner_alive, bool) else None,
              "age": _decoding.number(raw.get("age")) or 0.0, "ttl": _decoding.number(raw.get("ttl")),
              "ttl_left": _decoding.number(raw.get("ttl_left")) or 0.0,
@@ -222,12 +223,31 @@ def of_request(item: Mapping[str, Any], decoded: Decoded, lane: Optional[Mapping
 
 
 def in_lane(entry: Mapping[str, Any], lane: Mapping[str, Any]) -> bool:
-    """An entry belongs to a lane when its lane is the lane's id and its directory is inside the lane's worktree."""
-    return entry.get("lane") == lane["id"] and _lanefather.inside(entry.get("cwd"), lane.get("worktree"))
+    """An entry belongs to a lane by its project and its id, never by the id alone (fathers#171).
+
+    A lane owner's entry (`owner_kind` lane: the lane's worktree, scratch and build folders, wherever they are) joins
+    when its `lane_project` is the lane's project checkout, whatever its directory. Beside a Lanefather that names no
+    checkout, the project is the one holding the lane's worktree, or the entry is that worktree itself. Any other
+    entry tagged with the lane's id joins when its directory is inside the lane's worktree and the project it names,
+    if any, is the lane's."""
+    if entry.get("lane") != lane["id"]:
+        return False
+    project, checkout = entry.get("lane_project"), lane.get("checkout")
+    if entry.get("owner_kind") == "lane":
+        if checkout:
+            return _lanefather.same_dir(project, checkout)
+        resource: Mapping[str, Any] = cast(Mapping[str, Any], entry.get("resource") or {})
+        return _lanefather.inside(lane.get("worktree"), project) or bool(
+            resource.get("kind") == "worktree" and _lanefather.same_dir(resource.get("id"), lane.get("worktree")))
+    if project and checkout and not _lanefather.same_dir(project, checkout):
+        return False
+    return _lanefather.inside(entry.get("cwd"), lane.get("worktree"))
 
 
 def of_lane(lane: Mapping[str, Any], decoded: Decoded) -> list[Entry]:
-    return [entry for entry in entries(decoded) if in_lane(entry, lane)]
+    """The lane's spawns: its owner's worktree, folders and processes, then what its agents started inside."""
+    found = [entry for entry in entries(decoded) if in_lane(entry, lane)]
+    return sorted(found, key=lambda entry: entry.get("owner_kind") != "lane")
 
 
 def lease_of(entry: Mapping[str, Any], items: list[dict[str, Any]]) -> Optional[int]:

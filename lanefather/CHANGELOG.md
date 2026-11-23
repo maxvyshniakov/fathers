@@ -8,6 +8,9 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
 
 ### Added
 
+- `lanefather status --json` names each project's main checkout (`checkout`, its real path): the project its
+  lanes own their worktrees and folders under in Spawnfather, so Godfather shows a lane's spawns (fathers#171).
+
 - Subset `--only` reruns for failing test files (fathers#147): when a verifier advertises `"only"` capability and
   reports `failed_tests: [...]`, `Rerun` passes `--only <test,...>` to both lane and base reruns, records the subset
   tests in the receipt (`classification.checks[].tests`, `classification.runs[].tests`), and leaves a check

@@ -64,6 +64,7 @@ Copy this into an agent brief:
 | `adopt PID [--ttl …]` | records a running process; its group when it leads one, else it and its descendants |
 | `list [--all] [--json]` | what runs, whose it is, its age, its TTL left, how many processes it has |
 | `reap --id ID` / `--owner SESSION\|AGENT [--agent A]` / `--lane L` / `--pid PID [--force]` | ends entries: SIGTERM, a grace period (`--grace`, 10 s), SIGKILL; `--expired`, `--dry-run`, `--json` |
+| `reap --pid PID --started EPOCH --cmd CMD [--tree] --reason TEXT` | stops an unowned process by its identity (pid, start second, command), as Slotfather's live sweep asks; the `--force` policy applies |
 | `hand ID --to SESSION\|self` | gives an entry to another session |
 | `extend ID --ttl D` | a new TTL from now |
 | `sweep [--dry-run] [--json] [--quiet]` | reaps expired and orphaned entries, reports unowned agent processes and unowned simulators, containers, serve routes and worktrees |

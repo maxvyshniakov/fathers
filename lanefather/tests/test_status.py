@@ -76,6 +76,9 @@ class StatusTests(LaneCase):
         self.assertTrue(mine["logs"]["check"].endswith(".log"))
         self.assertEqual(theirs["ticket"], {"number": "7", "url": "https://github.com/fixture/other/issues/7"})
         self.assertEqual(other["repository"], "fixture/other")
+        # the main checkout's real path: the project a lane owner names in Spawnfather (fathers#171)
+        self.assertEqual((fixture["checkout"], other["checkout"]),
+                         (os.path.realpath(self.repo), os.path.realpath(self.tmp / "other")))
         self.assertIsNone(mine["outcome"])
         self.assertIsNone(fixture["gate"])
         self.assertIsInstance(fixture["cap"], int)

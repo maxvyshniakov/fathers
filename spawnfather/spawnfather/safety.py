@@ -4,13 +4,14 @@ sweep's unowned report and its unowned resources (docs/reference.md, Ending an e
 Never touched, nor anything below them: a process with a terminal and an agent session (Claude Code, Codex) are
 `unsafe`; pid 0 and 1, Spawnfather itself and its ancestors are `protected`; another user's process is not ours.
 An unowned process is only reported, and stopped only by `reap --pid --force` when the last sweep listed it and it
-is still that process; an unowned resource is only ever reported.
+is still that process, or by `reap --pid --started --cmd` when it is still the process the caller names by its
+identity (Slotfather's live sweep, fathers#171); an unowned resource is only ever reported.
 """
 from __future__ import annotations
 
 import os
 import re
-from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Set
+from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Set, Tuple
 
 from . import procs as _procs
 from .state import Store, as_dict, as_list, read_json
@@ -107,19 +108,31 @@ def adopt_refusal(pid: int, table: _procs.Table, owned: Callable[[int], bool], o
     return None
 
 
-def force_refusal(pid: int, table: _procs.Table, store: Store, owned: Callable[[int], bool]) -> Optional[str]:
+def force_refusal(pid: int, table: _procs.Table, store: Store, owned: Callable[[int], bool],
+                  identity: Optional[Tuple[float, str]] = None) -> Optional[str]:
     """Why `reap --pid --force` may not stop this unowned pid, or None: the last sweep must have listed it, and it
-    must still be that process and still unowned. `owned` tells whether an entry holds it now."""
+    must still be that process and still unowned. `owned` tells whether an entry holds it now. With `identity`
+    (`reap --pid --started --cmd`: the epoch second it started and its command, as the caller saw it) that identity
+    takes the place of the sweep's listing: the start within EPOCH_SLACK and the command must both match."""
     proc = table.get(pid)
-    listed = listed_unowned(store, pid)
-    if listed is None:
-        return "the last sweep did not list it (run spawnfather sweep)"
-    if proc is None:
-        return "it no longer runs"
-    if proc.start != _procs.norm(listed.get("start") or ""):
-        return "the pid now belongs to another process (its start time changed)"
-    if listed.get("cmd") is not None and not _procs.command_matches(proc.cmd, str(listed["cmd"])):
-        return "the pid now belongs to another process (its command changed)"
+    if identity is None:
+        listed = listed_unowned(store, pid)
+        if listed is None:
+            return "the last sweep did not list it (run spawnfather sweep)"
+        if proc is None:
+            return "it no longer runs"
+        if proc.start != _procs.norm(listed.get("start") or ""):
+            return "the pid now belongs to another process (its start time changed)"
+        if listed.get("cmd") is not None and not _procs.command_matches(proc.cmd, str(listed["cmd"])):
+            return "the pid now belongs to another process (its command changed)"
+    else:
+        started, cmd = identity
+        if proc is None:
+            return "it no longer runs"
+        if not _procs.same_process(started, None, proc):
+            return "the pid now belongs to another process (its start time changed)"
+        if not _procs.command_matches(proc.cmd, cmd):
+            return "the pid now belongs to another process (its command changed)"
     if proc.uid != os.getuid() or unsafe(proc) or pid in protected(table):
         return "not a process spawnfather may stop"
     if untouchable_tree(pid, table):

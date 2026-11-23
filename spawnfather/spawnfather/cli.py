@@ -17,6 +17,8 @@ watchers, simulators, containers, worktrees) and ends them when their owner ends
                    | --pid PID [--force] | --worktree PATH)
                    [--base REF]... [--disposable PATTERN]... [--override REASON] [--stop-inside]
                    [--expired] [--reason TEXT] [--grace S] [--dry-run] [--json] [--quiet]
+  spawnfather reap --pid PID --started EPOCH --cmd CMD [--tree] --reason TEXT [--grace S] [--dry-run] [--json]
+                   (an unowned process by its identity, as Slotfather's live sweep names it)
   spawnfather hand (ID | --owner lane:PROJECT/ID [--kind KIND]) --to SESSION|self|lane:PROJECT/ID
   spawnfather extend ID --ttl 2h
   spawnfather sweep [--dry-run] [--json] [--quiet] | sweep --plist [--interval S]
@@ -35,6 +37,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import shlex
 import sys
@@ -153,12 +156,18 @@ def parser() -> Parser:
     p.add_argument("--stop-inside", action="store_true",
                    help="worktrees and folders: first stop the unowned processes working inside (not a terminal's, "
                         "an agent session's or anything below a live one)")
-    p.add_argument("--pid", type=int, help="the entry holding this pid; with --force an unowned pid sweep listed")
+    p.add_argument("--pid", type=int, help="the entry holding this pid; with --force an unowned pid sweep listed; "
+                                           "with --started and --cmd an unowned pid by its identity")
+    p.add_argument("--started", type=float, metavar="EPOCH",
+                   help="with --pid and --cmd: the second the process started (epoch); a pid that now runs another "
+                        "process, or none, is gone")
+    p.add_argument("--cmd", help="with --pid and --started: the process's command line as the caller read it")
+    p.add_argument("--tree", action="store_true", help="with --started: also stop the process's descendants")
     p.add_argument("--force", action="store_true",
                    help="with --pid: stop an unowned process the last sweep reported; with --id: skip the "
                         "command check (the start time is still checked)")
     p.add_argument("--expired", action="store_true", help="only entries past their TTL")
-    p.add_argument("--reason", default="reap")
+    p.add_argument("--reason", help="why, for the events (default reap; --started needs one)")
     p.add_argument("--grace", type=float, help="seconds between SIGTERM and SIGKILL (default: the reap.grace "
                                                "setting)")
     p.add_argument("--dry-run", action="store_true")
@@ -375,6 +384,17 @@ def reap_command(store: Store, args: argparse.Namespace) -> int:
     chosen = [bool(args.id), bool(args.owner), bool(args.lane), args.pid is not None, bool(args.worktree)]
     if sum(chosen) != 1:
         raise Usage("reap takes one of --id, --owner, --lane, --pid or --worktree")
+    identity = args.started is not None or args.cmd is not None or args.tree
+    if identity:
+        if args.pid is None or args.started is None or args.cmd is None:
+            raise Usage("--started, --cmd and --tree go with --pid, and --started and --cmd with each other")
+        if not math.isfinite(args.started):
+            raise Usage("--started must be a finite epoch second")
+        if args.force or args.expired or args.lifecycle is not None:
+            raise Usage("--started takes no --force, --expired or --lifecycle")
+        if not (args.reason or "").strip():
+            raise Usage("--started needs a --reason")
+    args.reason = args.reason or "reap"
     if args.agent and not args.owner:
         raise Usage("--agent goes with --owner SESSION")
     lane_owner = _owner.is_lane_owner(args.owner)
@@ -407,6 +427,10 @@ def reap_command(store: Store, args: argparse.Namespace) -> int:
         table = _procs.read_or_none()
         if table is None:
             raise Refused("the process table cannot be read")
+        if identity:
+            return report(_reap.reap_identity(store, args.pid, args.started, args.cmd, table, args.reason,
+                                              tree=args.tree, grace=args.grace, dry_run=args.dry_run, via=args.via),
+                          args)
         if args.force:
             return report(_reap.reap_unowned(store, args.pid, table, True, args.reason, args.grace, args.dry_run,
                                              args.via), args)

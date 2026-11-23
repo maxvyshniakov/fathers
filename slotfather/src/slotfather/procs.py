@@ -212,7 +212,9 @@ def query(pid: int | None = None, cwd: str | None = None, directory: Path | None
     for number in selected:
         process = processes[number]
         chain = _lineage.ancestors(parents, number)
-        records.append({**process._asdict(), "cwd": cwds.get(number), "ancestors": chain,
+        started = platform.started_at(process.start)
+        records.append({**process._asdict(), "started": None if started is None else int(started),
+                        "cwd": cwds.get(number), "ancestors": chain,
                         "sessions": [{"pid": item, "start": processes[item].start, "cmd": processes[item].cmd}
                                      for item in [number, *chain] if session(processes[item])],
                         "leases": [{**leases[index], "via": via} for index, via in membership.leases.get(number, [])]})
