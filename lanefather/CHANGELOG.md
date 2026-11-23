@@ -272,6 +272,9 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
 
 ### Fixed
 
+- `drop`'s list of the paths a lane changes beyond its base, `land`'s merge conflict paths and
+  `promote --ship`'s refused-directory check read paths with non-ASCII or unusual bytes as they are, not as Git's
+  quoted escapes (`"caf\303\251.txt"`).
 - A check that did not run because a check it depends on failed now names the check that actually failed behind it
   (fathers#195): when the report says it waits on another skipped check, Lanefather follows the chain to the failed
   prerequisite and says whether that one is a regression, pre-existing or flaky under load. The check output adds a

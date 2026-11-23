@@ -389,7 +389,8 @@ def merge(
             merged = subprocess.run(["git", *merge_config, "merge", "--no-ff", "-m", merge_msg, record["branch"]],
                                     cwd=integration, capture_output=True, text=True, env=env)
             if merged.returncode:
-                conflicts = git(integration, "diff", "--name-only", "--diff-filter=U", check=False)
+                conflicts = git(integration, "-c", "core.quotePath=false", "diff", "--name-only", "--diff-filter=U",
+                                check=False)
                 subprocess.run(["git", "merge", "--abort"], cwd=integration, capture_output=True, env=env)
         if merged.returncode:
             journal.ledger(f"land {lane_id} conflict: {conflicts.replace(chr(10), ' ')}", kind="lane.conflict",

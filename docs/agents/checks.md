@@ -7,7 +7,9 @@ The installed commands use only Python's standard library (3.11+: each package's
 
 - One test file, from the package's directory: `python3 -m unittest tests/test_<area>.py` (Godfather:
   `python3 -m unittest discover -s tests -t tests -p 'test_<area>.py'`).
-- One package's lint gate, from its directory: `python3 tools/check.py` (about 10 s).
+- One package's lint gate, from its directory: `python3 tools/check.py` (about 10 s). After a small edit run
+  `uvx ruff@0.14.3 check <file>` there first (under 1 s, with the package's rules): an unused import or a long line
+  fails in a second, not 10 s into `python3 tools/checks.py run "<package> lint"`.
 - The root tools: `python3 tools/checks.py run tools`. Any check by name: `python3 tools/checks.py run "<name>"`.
 - `common/`'s tests (the CLI convention's helper and the root entry points), from the root:
   `python3 -m unittest discover -s common/tests`.
@@ -50,7 +52,8 @@ The installed commands use only Python's standard library (3.11+: each package's
   take their own lease.
 - Test hygiene ([tools/hygiene.py](../../tools/hygiene.py), the `test hygiene` check): no fixed sleep of 0.2 s or more
   and no raw timing assertion in a test file, unless the line or the comment above it gives `sleep-ok: <reason>` or
-  `load-tolerant: <reason>`; a budget belongs in the perf suite (`perf/`, `test_perf_*.py`).
+  `load-tolerant: <reason>`; a budget belongs in the perf suite (`perf/`, `test_perf_*.py`). In any Python file a
+  `git` call with `--name-only` or `--name-status` passes `-c core.quotePath=false` or `-z` (`git-quoted-paths`).
 
 ## Browser and visual
 

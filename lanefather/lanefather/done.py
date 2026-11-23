@@ -645,7 +645,7 @@ def nothing_added(cwd: str, commit: str, bases: list[tuple[str, str]]) -> tuple[
             return True, f"its commits since {name} at {fork[:10]} change nothing"
     name, base = bases[0]
     fork = git(cwd, "merge-base", commit, base, check=False) or base
-    paths = git(cwd, "diff", "--name-only", fork, commit).splitlines()
+    paths = git(cwd, "-c", "core.quotePath=false", "diff", "--name-only", fork, commit).splitlines()
     shown = ", ".join(paths[:5]) + (f" and {len(paths) - 5} more" if len(paths) > 5 else "")
     return False, f"changes {len(paths)} path{'s' if len(paths) != 1 else ''} beyond {name}: {shown}"
 

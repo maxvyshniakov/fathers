@@ -1,5 +1,5 @@
-"""tools/hygiene.py (fathers#235): what counts as a fixed sleep or a raw timing assertion, the markers that allow
-one, which files are tests, and that this repository has none."""
+"""tools/hygiene.py (fathers#235): what counts as a fixed sleep, a raw timing assertion or a Git path list Git may
+quote, the markers that allow one, which files are tests, and that this repository has none."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -82,6 +82,31 @@ class TimingTests(unittest.TestCase):
         self.assertFalse(hygiene.calls_perf_helper("# perf_budget('x', 1)\n"))
 
 
+class QuotedPathTests(unittest.TestCase):
+    def lines(self, source: str) -> list[int]:
+        return [line for line, _ in hygiene.quoted_paths(source)]
+
+    def test_a_path_list_git_may_quote_is_found(self) -> None:
+        for source in ('git(cwd, "diff", "--name-only", base)', 'subprocess.run(["git", "diff", "--name-only"])',
+                       'run(("git", "ls-tree", "--name-only", sha))', 'git(root, "diff", "--name-status", a, b)',
+                       'git(cwd, *["diff", "--name-only"])', 'git("-c", "core.quotePath=true", "diff", "--name-only")'):
+            with self.subTest(source=source):
+                self.assertEqual([1], self.lines(source))
+        # The innermost call that passes it, at the line it starts on.
+        self.assertEqual([2], self.lines('x = 1\npaths = sorted(set(subprocess.check_output(\n'
+                                         '    ["git", "diff", "--name-only"])))'))
+
+    def test_an_unquoted_or_nul_separated_list_and_strings_are_not(self) -> None:
+        for source in ('git(cwd, "-c", "core.quotePath=false", "diff", "--name-only", base)',
+                       'git(cwd, "-c", "core.quotepath=off", "diff", "--no-renames", "--name-only")',
+                       'subprocess.run(["git", "-c", "core.quotePath=false", "ls-tree", "--name-only", sha])',
+                       'git(root, "diff", "--name-only", "-z", base, "--")',
+                       'text = \'subprocess.check_output(["git", "diff", "--name-only"])\'',
+                       '# git(cwd, "diff", "--name-only")', 'git(cwd, "diff", "--stat")'):
+            with self.subTest(source=source):
+                self.assertEqual([], self.lines(source))
+
+
 class FileTests(unittest.TestCase):
     def test_test_files_are_matched_like_repo_kits_globs(self) -> None:
         is_test, excluded = hygiene.matcher(hygiene.TESTS), hygiene.matcher(hygiene.EXCLUDE)
@@ -106,15 +131,24 @@ class FileTests(unittest.TestCase):
             (root / "pkg/tests/perf/test_ok.py").write_text("perf_budget('x', 1)\n")
             (root / "pkg/tests/fixtures").mkdir()
             (root / "pkg/tests/fixtures/test_skip.py").write_text("import time\ntime.sleep(1)\n")
+            (root / "pkg/pkg").mkdir()
+            (root / "pkg/pkg/diff.py").write_text('import subprocess\nsubprocess.run(["git", "diff", "--name-only"])\n')
+            (root / "pkg/tool").write_text('#!/usr/bin/env python3\ngit("diff", "--name-only", "-z")\ngit("diff", '
+                                           '"--name-only")\n')
+            (root / "pkg/notes.txt").write_text('git("diff", "--name-only")\n')
             findings, unrun, scanned = hygiene.scan(root)
             self.assertEqual(3, scanned)
-            self.assertEqual([("fixed-sleep", "pkg/tests/test_a.py", 2)], [(f.rule, f.file, f.line) for f in findings])
+            self.assertEqual([("git-quoted-paths", "pkg/pkg/diff.py", 2), ("git-quoted-paths", "pkg/tool", 3),
+                              ("fixed-sleep", "pkg/tests/test_a.py", 2)],
+                             [(f.rule, f.file, f.line) for f in findings])
             self.assertEqual(["pkg/tests/test_budget.py"], unrun)
             result = subprocess.run([sys.executable, str(ROOT / "tools/hygiene.py")], cwd=root, capture_output=True,
                                     text=True)
             self.assertEqual(1, result.returncode)
             self.assertIn("fixed-sleep: pkg/tests/test_a.py:2: time.sleep(1)", result.stderr)
             self.assertIn("pkg/tests/test_budget.py states a perf budget", result.stderr)
+            self.assertIn("git-quoted-paths: pkg/pkg/diff.py:2: --name-only without -c core.quotePath=false or -z",
+                          result.stderr)
 
     def test_this_repository_has_no_finding(self) -> None:
         findings, unrun, scanned = hygiene.scan(ROOT)

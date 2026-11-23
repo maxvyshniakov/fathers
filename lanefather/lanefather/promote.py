@@ -315,8 +315,8 @@ def step_ahead_warnings(run: PromoteRun) -> None:
 
 def step_ship_refusal(run: PromoteRun) -> None:
     cfg = run.store.project
-    if run.ship and cfg.ship_refuses and git(run.cwd, "ls-tree", "--name-only", f"{run.sha}:{cfg.ship_refuses}",
-                                             check=False):
+    if run.ship and cfg.ship_refuses and git(run.cwd, "-c", "core.quotePath=false", "ls-tree", "--name-only",
+                                             f"{run.sha}:{cfg.ship_refuses}", check=False):
         raise LaneError(f"promote --ship refused: {run.sha[:10]} still has {cfg.ship_refuses}/; {cfg.ship_refusal}")
 
 

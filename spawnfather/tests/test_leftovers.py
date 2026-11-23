@@ -1,14 +1,18 @@
 """Unowned processes of a Claude Code session that is gone (fathers#168): the sweep stops one only when its
 environment ties it to a session and that session is certainly gone, never one a Slotfather lease or an active entry
 holds; everything uncertain stays report-only. Fake process tables and environments, an injected clock and stopper;
-one test reads a real child's environment and stops it."""
+one test reads a real child's environment and stops it, and the Linux reader runs against a fake /proc on every
+system, so a macOS run checks what CI's Linux runs."""
 from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
 import subprocess
 import sys
+import tempfile
 import time
+import unittest
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 from unittest import mock
 
@@ -345,3 +349,54 @@ class EnvironmentTests(Case):
                                          environ=REAL_ENVIRONMENTS, stopper=reap.stop)
         self.assertEqual(([], ["stopped"]), (kept, [r["result"] for r in rows]))
         self.assertIsNotNone(child.wait(30), "the child ended")
+
+
+class ProcEnvironTests(unittest.TestCase):
+    """procs.environments' Linux branch, /proc/<pid>/cmdline and /proc/<pid>/environ, on a fake /proc."""
+
+    CMD = "node server.js --port 3000"
+    ENV = {"CLAUDE_CODE_SESSION_ID": ["s-linux-168"], "CLAUDE_PID": ["4242"]}
+
+    def setUp(self) -> None:
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.root = Path(folder.name)
+        patcher = mock.patch.object(procs.sys, "platform", "linux")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def process(self, pid: int, argv: Sequence[str], env: Mapping[str, str]) -> Path:
+        here = self.root / str(pid)
+        here.mkdir()
+        (here / "cmdline").write_bytes(b"".join(arg.encode() + b"\0" for arg in argv))
+        (here / "environ").write_bytes(b"".join(f"{k}={v}".encode() + b"\0" for k, v in env.items()))
+        return here
+
+    def read(self, cmds: Mapping[int, str]) -> Dict[int, Optional[Dict[str, List[str]]]]:
+        return REAL_ENVIRONMENTS(cmds, proc_root=str(self.root))
+
+    def test_the_command_the_table_read_has_its_session_read_from_environ(self) -> None:
+        self.process(700, self.CMD.split(" "), {"PATH": "/usr/bin", "CLAUDE_CODE_SESSION_ID": "s-linux-168",
+                                                "CLAUDE_PID": "4242", "OTHER": "a=b"})
+        self.assertEqual({700: self.ENV}, self.read({700: self.CMD}))
+
+    def test_a_reused_pid_whose_cmdline_differs_is_never_read(self) -> None:
+        self.process(700, ["python3", "-m", "http.server"], {"CLAUDE_CODE_SESSION_ID": "s-someone-else",
+                                                             "CLAUDE_PID": "1"})
+        self.assertEqual({700: None}, self.read({700: self.CMD}))
+        self.assertEqual({700: None}, self.read({700: "python3 -m http.server --more"}),
+                         "a longer command is another one")
+        self.assertEqual({700: None}, self.read({700: ""}), "no command read: nothing to match")
+
+    def test_missing_or_unreadable_files_fail_closed(self) -> None:
+        self.assertEqual({701: None}, self.read({701: self.CMD}), "the process is gone")
+        (self.process(702, self.CMD.split(" "), {}) / "environ").unlink()
+        environ = self.process(703, self.CMD.split(" "), {}) / "environ"
+        environ.unlink()
+        environ.mkdir()  # unreadable as a file whoever runs the test
+        (self.process(704, self.CMD.split(" "), {"CLAUDE_PID": "4242"}) / "cmdline").unlink()
+        self.assertEqual({702: None, 703: None, 704: None}, self.read({pid: self.CMD for pid in (702, 703, 704)}))
+
+    def test_an_environment_without_the_names_reads_as_empty_not_unknown(self) -> None:
+        self.process(705, self.CMD.split(" "), {"PATH": "/usr/bin", "XCLAUDE_PID": "1"})
+        self.assertEqual({705: {}}, self.read({705: self.CMD}))

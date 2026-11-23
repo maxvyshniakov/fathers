@@ -73,20 +73,22 @@ def identities(pids: List[int], command: bool = False) -> Dict[int, Any]:
 LINK_NAMES = ("CLAUDE_CODE_SESSION_ID", "CLAUDE_PID")  # what ties a process to the Claude Code session it came from
 
 
-def environments(cmds: Mapping[int, str], names: Sequence[str] = LINK_NAMES
+def environments(cmds: Mapping[int, str], names: Sequence[str] = LINK_NAMES, proc_root: str = "/proc"
                  ) -> Dict[int, Optional[Dict[str, List[str]]]]:
     """pid -> the values each of `names` has in that process's environment (a name it lacks is left out), for the
     processes of `cmds` (pid -> its command as the table read it); None for one whose environment cannot be read.
 
-    Linux: /proc/<pid>/environ. macOS: one `ps -E` call, whose line is the command and then the environment as
-    words, so a value holding a space reads as more words and a name counts only at a word's start; a line that
-    does not start with the command the table read (a process that rewrote its arguments, a reused pid) cannot be
-    read. Apple's own programs hide their environment from ps, so theirs reads as empty. Elsewhere none can be read.
+    Linux: /proc/<pid>/environ, read only while /proc/<pid>/cmdline is the command the table read (tests point
+    `proc_root` at a fake /proc on any system). macOS: one `ps -E` call, whose line is the command and then the
+    environment as words, so a value holding a space reads as more words and a name counts only at a word's start;
+    a line that does not start with the command the table read (a process that rewrote its arguments, a reused pid)
+    cannot be read. Apple's own programs hide their environment from ps, so theirs reads as empty. Elsewhere none
+    can be read.
     """
     if not cmds:
         return {}
     if sys.platform.startswith("linux"):
-        return {pid: _proc_environ(pid, cmd, names) for pid, cmd in cmds.items()}
+        return {pid: _proc_environ(pid, cmd, names, proc_root) for pid, cmd in cmds.items()}
     if sys.platform != "darwin":
         return {pid: None for pid in cmds}
     try:
@@ -114,15 +116,17 @@ def environments(cmds: Mapping[int, str], names: Sequence[str] = LINK_NAMES
     return found
 
 
-def _proc_environ(pid: int, cmd: str, names: Sequence[str]) -> Optional[Dict[str, List[str]]]:
+def _proc_environ(pid: int, cmd: str, names: Sequence[str], proc_root: str = "/proc"
+                  ) -> Optional[Dict[str, List[str]]]:
     if not cmd:
         return None
+    root = Path(proc_root, str(pid))
     try:
-        raw_cmd = Path(f"/proc/{pid}/cmdline").read_bytes()
+        raw_cmd = (root / "cmdline").read_bytes()
         live_cmd = " ".join(part.decode("utf-8", "replace") for part in raw_cmd.split(b"\0") if part).strip()
         if live_cmd != cmd:
             return None
-        data = Path(f"/proc/{pid}/environ").read_bytes()
+        data = (root / "environ").read_bytes()
     except OSError:
         return None
     values: Dict[str, List[str]] = {}

@@ -44,6 +44,15 @@
 - One fix lane for the findings of several landed lanes names them: `lanefather start review-fixes-<n> --fix-of A,B,C
   --ticket <N> --claims '<paths>' --create`. Its land is exempt from review like a `review <id> --fix-lane` lane's;
   mark each parent's findings `fixed:review-fixes-<n>`.
+- Reviewer rules, from findings past reviews missed:
+  - At a JSON or other external boundary, check each value's type (`isinstance(x, str)`; an integer is
+    `isinstance(x, int) and not isinstance(x, bool)`) and refuse the wrong one; never coerce it with `str(x)` or
+    `int(x)`.
+  - A `git` call that prints paths reads them as they are: `-c core.quotePath=false` for `diff --name-only`,
+    `--name-status` and `ls-tree` (or `-z`; the `test hygiene` check enforces it), `--no-renames` when a rename must
+    count as both paths, `--literal-pathspecs` when a path argument comes from a user or a repository.
+  - OS-specific code (`ps`, `/proc`, `stat`, `lsof`, path rules) is read in both its macOS and Linux branches, and
+    each branch has a test that runs on macOS too (a fake `/proc`, a stubbed `ps`), since CI runs Linux only.
 
 ## Owner queue
 

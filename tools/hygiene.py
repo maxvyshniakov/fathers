@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Test hygiene (fathers#235): no fixed sleeps and no raw timing assertions in the repository's Python tests.
+"""Test hygiene (fathers#235): no fixed sleeps and no raw timing assertions in the repository's Python tests, and no
+Git path list that Git may quote in any of its Python.
 
-  python3 tools/hygiene.py     scan every test file Git knows in the repository it runs in (tracked or untracked, not
-                               ignored); exit 1 on a finding
+  python3 tools/hygiene.py     scan every Python file Git knows in the repository it runs in (tracked or untracked,
+                               not ignored); exit 1 on a finding
 
   fixed-sleep    sleep(<n>), time.sleep(<n>) or asyncio.sleep(<n>) with a literal n of at least 0.2 s, and Playwright's
                  wait_for_timeout(...). A line, or the comment lines right above it, carrying `sleep-ok: <reason>`
@@ -12,12 +13,19 @@
                  enforces only in the perf suite (perf/ and test_perf_*.py); a deadline that only bounds a wait passes
                  with a literal bound of at least 30 s, or with a `load-tolerant: <why, in three words or more>`
                  comment. A file outside the perf suite that calls perf_budget fails: its budgets never hold.
+  git-quoted-paths
+                 a call whose arguments (or a list or tuple among them) hold `--name-only` or `--name-status` but
+                 neither `core.quotePath=false` nor `-z`, in any Python file. Without either, Git prints a path with
+                 a non-ASCII or unusual byte quoted and escaped ("caf\\303\\251.txt"), and the caller reads a path
+                 that does not exist. Pass `-c core.quotePath=false` before the subcommand, or `-z` and split on NUL.
 
-The rules read lines with comments and string contents blanked, as Repo-Kit's `test-hygiene` did (this is its port,
-for Python tests); its baseline allowed no finding, so none is allowed here.
+The two test rules read lines with comments and string contents blanked, as Repo-Kit's `test-hygiene` did (this is
+its port, for Python tests); its baseline allowed no finding, so none is allowed here. git-quoted-paths reads the
+syntax tree, so a path list inside a string (a fixture script a test writes) is not a call.
 """
 from __future__ import annotations
 
+import ast
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -25,7 +33,7 @@ import re
 import subprocess
 import sys
 
-RULES = ("fixed-sleep", "timing-assert")
+RULES = ("fixed-sleep", "timing-assert", "git-quoted-paths")
 TESTS = ("test/**/*.py", "tests/**/*.py", "**/test_*.py", "**/*_test.py", "test-*.py", "{scripts,tools}/**/test-*.py")
 EXCLUDE = ("**/node_modules/**", "**/dist/**", "**/fixtures/**")
 PERF_SUITE = ("**/perf/**", "**/test_perf_*.py", "**/*.perf.test.*")
@@ -51,6 +59,9 @@ DEADLINE = re.compile(rf"(?:{CLOCK.pattern})\s*\+\s*(.+)")
 NAME = re.compile(r"^\s*(\w+)\b(?!\s*[(.\[])")
 LITERAL = re.compile(rf"^\s*{NUMBER}(?![\w.(])")
 BEFORE = re.compile(rf"(\w+|{NUMBER})\s*$")
+PATH_LISTS = ("--name-only", "--name-status")
+UNQUOTED = re.compile(r"^core\.quotepath=(?:false|no|off|0)$", re.IGNORECASE)
+PYTHON_SHEBANG = re.compile(r"^#!.*\bpython")
 
 
 @dataclass(frozen=True)
@@ -241,27 +252,80 @@ def timing_asserts(text: str) -> list[tuple[int, str]]:
     return found
 
 
+def arguments(call: ast.Call) -> list[str]:
+    """The string literals a call passes: its positional arguments and the items of lists and tuples among them."""
+    found: list[str] = []
+    pending: list[ast.expr] = list(call.args)
+    while pending:
+        node = pending.pop(0)
+        if isinstance(node, ast.Starred):
+            pending.insert(0, node.value)
+        elif isinstance(node, (ast.List, ast.Tuple)):
+            pending[:0] = node.elts
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+            found.append(node.value)
+    return found
+
+
+def quoted_paths(text: str, filename: str = "<unknown>") -> list[tuple[int, str]]:
+    """The calls that ask Git for a path list (--name-only, --name-status) it may print quoted."""
+    found: list[tuple[int, str]] = []
+    raw = text.split("\n")
+    for node in ast.walk(ast.parse(text, filename=filename)):
+        if not isinstance(node, ast.Call):
+            continue
+        passed = arguments(node)
+        listing = [flag for flag in PATH_LISTS if flag in passed]
+        if listing and "-z" not in passed and not any(UNQUOTED.match(value) for value in passed):
+            found.append((node.lineno, f"{listing[0]} without -c core.quotePath=false or -z: "
+                                       f"{raw[node.lineno - 1].strip()}"))
+    return sorted(found)
+
+
 def calls_perf_helper(text: str) -> bool:
     """Whether a file calls the perf helper (and not only defines it)."""
     return any(HELPER.search(code(line)) and not DEFINITION.search(line) for line in text.split("\n"))
 
 
-def test_files(root: Path) -> list[str]:
-    """The Python test files Git knows under `root`: tracked or untracked and not ignored, outside fixtures."""
+def python_files(root: Path) -> list[str]:
+    """The Python files Git knows under `root` (a .py file or a script with a python shebang): tracked or untracked
+    and not ignored, outside fixtures."""
     listed = subprocess.run(["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"], cwd=root,
                             capture_output=True, text=True, check=True).stdout
-    is_test, excluded = matcher(TESTS), matcher(EXCLUDE)
+    excluded = matcher(EXCLUDE)
     return [path for path in sorted({path for path in listed.split("\0") if path})
-            if path.endswith(".py") and is_test(path) and not excluded(path) and (root / path).is_file()]
+            if not excluded(path) and (root / path).is_file() and is_python(root / path)]
+
+
+def is_python(path: Path) -> bool:
+    if path.suffix == ".py":
+        return True
+    if path.suffix:
+        return False
+    with path.open("rb") as handle:
+        return bool(PYTHON_SHEBANG.match(handle.readline(200).decode("utf-8", "replace")))
+
+
+def test_files(root: Path) -> list[str]:
+    """The Python test files Git knows under `root`: tracked or untracked and not ignored, outside fixtures."""
+    is_test = matcher(TESTS)
+    return [path for path in python_files(root) if path.endswith(".py") and is_test(path)]
 
 
 def scan(root: Path, files: Iterable[str] | None = None) -> tuple[list[Finding], list[str], int]:
-    """Every finding, the files outside the perf suite that call perf_budget, and how many files were scanned."""
+    """Every finding, the files outside the perf suite that call perf_budget, and how many test files were scanned.
+    `files` names the test files to scan instead of every one; git-quoted-paths reads every Python file either way."""
     in_perf_suite = matcher(PERF_SUITE)
+    all_python = python_files(root)
     findings: list[Finding] = []
+    for file in all_python:
+        found = quoted_paths((root / file).read_text(encoding="utf-8"), filename=file)
+        findings += [Finding("git-quoted-paths", file, line, text) for line, text in found]
     unrun: list[str] = []
     scanned = 0
-    for file in test_files(root) if files is None else files:
+    is_test = matcher(TESTS)
+    targets = [p for p in all_python if p.endswith(".py") and is_test(p)] if files is None else files
+    for file in targets:
         text = (root / file).read_text(encoding="utf-8")
         scanned += 1
         findings += [Finding("fixed-sleep", file, line, found) for line, found in fixed_sleeps(text)]
@@ -288,6 +352,9 @@ def main(root: Path | None = None) -> int:
     if "timing-assert" in rules:
         print(f"Move a budget into the perf helper (perf_budget), give a functional deadline a bound of at least "
               f"{FLOOR_SECONDS} s, or a tighter one a `load-tolerant: <why>` comment.", file=sys.stderr)
+    if "git-quoted-paths" in rules:
+        print("Git quotes a path with an unusual byte in --name-only and --name-status output: pass "
+              "`-c core.quotePath=false` before the subcommand, or `-z` and split on NUL.", file=sys.stderr)
     if findings or unrun:
         return 1
     print(f"test-hygiene: ok ({', '.join(RULES)}; {scanned} test files)")
