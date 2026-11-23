@@ -91,6 +91,34 @@ beside running leases whose expected peak memory and a new request's exceed it, 
 `SLOTFATHER_LOADAVG` replaces the host's load averages for tests. A Slotfather before this rule grants regardless
 of the load, so until every client is updated an older client's look may start a request the newer ones hold back.
 
+### Core-weighted requests
+
+A slot is a share of the cores (`cores / slots`), and a request asks for the slots its work needs: a browser check
+that runs three engines uses 3–6 cores, which one slot of a 12-core, 8-slot machine (1.5 cores) does not hold, and
+eight such one-slot leases keep the load at three or four times the cores (fathers#148). Admission is unchanged:
+the load gate above still holds grants at the same multiple of the cores. What changes is the slot count a request
+asks for:
+
+- `run --cores C` takes the slots that hold *C* cores, `ceil(C / (cores / slots))`, at least one and at most the
+  capacity: `--cores 6` is 4 slots at 1.5 cores per slot, 2 at 3. It replaces `-n` (both together are refused);
+  `SLOTFATHER_SLOTS` and `SLOTFATHER_LEASE_CORES` follow the slots it took.
+- `run --cores auto` takes the slots that hold the median cores its label family's last 20 measured runs used
+  (CPU seconds over wall seconds, as the history records them; at least 5 runs, else one slot), and says so on
+  stderr: `slot: --cores auto: browser requests used a median 6.0 cores over their last 6 runs; asking 2 slot(s)`.
+- Whatever it asked for, `run` warns once it holds its slots when the family's median use was at least 1.5 times
+  the cores those slots hold and more slots would hold it: `slot: warning: browser requests used a median 6.0 cores
+  (p90 7.2) over their last 12 runs; 1 slot holds 3 cores, 2 would hold that use (-n 2, or --cores auto)`. The
+  opposite hint, for a request far above its use, is in [statistics](statistics.md) (asks against use).
+- `advise` reports the weighted slot count as `weight` (see [api](api.md), core weight), for `--cores C` or, by
+  default, the family's measured use; `jobs` is unchanged.
+- `status` tags a held lease whose holder last measured its tree at 1.5 times its slots' cores or more:
+  `over-cores=6.1/3` (cores used now / cores held). `history` marks such a finished lease `used 6.0 cores > 3 held`,
+  and `stats` lists such families under "asks far below use".
+
+An all-slot request and a session ask for the machine rather than for cores and are left out. A family is the label
+without its ticket or agent id, so `browser-17` and `browser-18` weigh together; the library's `acquire()` and
+`-n N` callers ask what they asked before.
+
 ### Idle leases
 
 A running lease is **idle** (#12) when its command's process tree has used less than `idle_cpu` cores (0.1 by default) for `idle_after` seconds (300) or more, with no process starting or ending in between: a build that spawns short compiler processes is never idle, and neither is a short pause for the network, a disk or a browser. The holder measures its own tree each time it samples it (the same samples as the history's usage), counting each process's own CPU and that of the children it reaped, so workers started and gone between two samples count, and records since when it has been low in `<entry>.idle` beside its queue entry, with an expiry by its own sampling interval; a lower `idle_cpu` than a run was built under starts that run again; every reader applies `idle_after` to that record, so the dashboard, `status` (`idle=23m`), `status --json` (`idle_since`) and the yield ask share one definition. A record past its expiry (three of its holder's longest sampling intervals, at least 30 s) says nothing, and older holders write none: their leases are never idle. While a request waits that the slots of an idle lease would start, a look asks that lease to yield through the same yield request as polite preemption, when it is `yieldable` and was asked fewer than YIELDS_MAX times; a lease that cannot yield is only marked. The scheduler never stops or kills an owner. Holders and readers decide idle by the saved settings alone, as every look decides yield requests, so that clients agree; `SLOTFATHER_IDLE_CPU` (lower) and `SLOTFATHER_IDLE_AFTER` (higher) only change what this client's `slotfather order` and Settings report as effective. Like the class knobs, they are written to `order.json` only when they differ from their defaults.

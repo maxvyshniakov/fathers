@@ -23,7 +23,11 @@ While leases run, holders also append a machine sample to `machine.jsonl` at mos
 slots that median use needs; families whose use is at most half of what they ask, in fewer slots, are printed under
 "asks far above use" (`--json`: `asks`, every family with `over_ask`). `run -n N` (N above 1, not `all`) prints a
 one-line hint when the family's last 20 measured runs (at least 5) used that little: `slot: hint: lane requests
-used a median 1.6 cores over their last 12 runs; 3 slots hold 9 cores, 1 would hold that use (-n 1)`. `--by family`
+used a median 1.6 cores over their last 12 runs; 3 slots hold 9 cores, 1 would hold that use (-n 1)`. The other
+way round, families whose median use is at least 1.5 times what they ask, in more slots, are printed under "asks far
+below use" with their p90 (`--json`: `under_ask` and `cores_p90` on every row), and `run` warns when its family's
+runs used that much more than its slots hold (see [core-weighted requests](scheduling.md#core-weighted-requests)).
+`--by family`
 groups the table by family, and `--by derived` by the label the project, command and lane give (`label_derived`,
 else the label), whatever `--label` said.
 

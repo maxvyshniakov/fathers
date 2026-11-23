@@ -30,6 +30,26 @@ def lease_cores(count: int, cores: int | None = None, total: int | None = None) 
     return max(1, math.floor(effective * max(1, machine) / max(1, capacity)))
 
 
+def cores_count(label: str, cores: float | str) -> int:
+    """`run --cores`' slot count: the slots that hold `cores` cores now, or for "auto" those that hold the median
+    use of `label`'s family (runtype.weight()), saying so on stderr; one slot when that is unknown."""
+    from . import runtype as _runtype
+    if cores != "auto":
+        width = _runtype.machine_width()
+        return 1 if width is None else _runtype.slots_for(float(cores), *width)
+    try:
+        found = _runtype.weight(_config.state_dir(), label)
+    except Exception:  # noqa: BLE001 - weighing must never cost the run: it asks one slot, as without --cores
+        return 1
+    if found["source"] == "history":
+        print(f"slot: --cores auto: {found['family']} requests used a median {found['cores_p50']:.1f} cores over "
+              f"their last {found['measured']} runs; asking {found['slots']} slot(s)", file=sys.stderr, flush=True)
+    else:
+        print(f"slot: --cores auto: too few measured {found['family']} runs; asking 1 slot", file=sys.stderr,
+              flush=True)
+    return int(found["slots"])
+
+
 def execute(argv: list[str], environment: dict[str, str], background: bool = False, marker: Path | None = None,
             directory: Path | None = None) -> tuple[int, dict[str, Any] | None]:
     """Runs argv with `environment` added and waits for it, forwarding SIGTERM and SIGHUP: (its exit status, 128 +
@@ -94,13 +114,16 @@ def execute(argv: list[str], environment: dict[str, str], background: bool = Fal
 
 def run(count: int | str, label: str, argv: list[str], wait: float | None = None, meta: dict[str, str] | None = None,
         yieldable: bool = False, *, priority: str | None = None, ticket: str | int | None = None,
-        labelled: bool = True, max_count: int | None = None) -> int:
+        labelled: bool = True, max_count: int | None = None, cores: float | str | None = None) -> int:
     """Run argv under a lease of `count` slots; the command's exit status. Without `labelled` (no --label), `label`
     (the directory's name) gives way to one derived from the project, the command and the metadata (labels.py); a
-    label that says little gets the derived parts appended, with a hint."""
+    label that says little gets the derived parts appended, with a hint. With `cores` (`run --cores`, fathers#148)
+    the lease takes the slots that hold that many cores instead of `count`: "auto" is the label family's median
+    measured use, one slot while it has too few measured runs."""
     meta = _entry.checked_meta(meta)
     naming: dict[str, Any] = {}
-    if _client.policy() != "bypass" and not _config.setting("LEASE"):  # a nested run takes no lease and names none
+    nested = _client.policy() == "bypass" or bool(_config.setting("LEASE"))
+    if not nested:  # a nested run takes no lease and names none
         try:
             cwd = os.getcwd()
         except OSError:
@@ -117,6 +140,8 @@ def run(count: int | str, label: str, argv: list[str], wait: float | None = None
             label = naming["label"] or label
             if naming.get("hint"):
                 print(f"slot: {naming['hint']}", file=sys.stderr, flush=True)
+    if cores is not None and not nested:
+        count = cores_count(label, cores)
     try:
         background = _client.policy() == "background"
         note = _config.BATCH_NOTE if priority == "batch" else _config.ALL_NOTE if count == "all" else ""

@@ -411,8 +411,9 @@ def entry_view(entry: dict[str, Any], known: dict[str, list[dict[str, Any]]], mo
 
 
 # Slots asked against cores used, per label family (fathers#97; was askuse.py, folded here by fathers#37 review so
-# that `run` loads no more modules): `stats` reports it and `run` hints when a request asks for far more than its
-# family's recent runs used.
+# that `run` loads no more modules): `stats` reports it, `run` hints when a request asks for far more than its
+# family's recent runs used and warns when it asks for far less (fathers#148), and `run --cores` / `advise` turn
+# cores into the slots that hold them.
 
 ASK_RECENT = 20  # a family's last runs that count for the hint
 ASK_LEAST = 5  # fewer measured runs than this give no hint
@@ -436,39 +437,65 @@ def per_slot(item: dict[str, Any], fallback: float) -> float:
     return fallback
 
 
+def slots_for(cores: float, width: float, total: int) -> int:
+    """The slots that hold `cores` cores at `width` cores per slot: at least one, at most the capacity `total`."""
+    if not width > 0 or not math.isfinite(cores):
+        return 1
+    limit = max(1, total)
+    if cores >= width * limit:
+        return limit
+    return max(1, min(limit, math.ceil(round(cores / width, 6))))
+
+
+def _finite_number(value: Any) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    number = float(value)
+    return number if math.isfinite(number) else None
+
+
 def used(item: dict[str, Any]) -> float | None:
     """Mean cores a released, measured request used while it held its slots: CPU over wall less yielded time. None
     for an all-slot request or a session, which ask for the machine to themselves rather than for cores."""
-    if item.get("outcome") != "released" or not isinstance(item.get("cpu"), (int, float)):
+    cpu = _finite_number(item.get("cpu"))
+    if item.get("outcome") != "released" or cpu is None:
         return None
-    capacity = item.get("capacity")
-    if item.get("session") or (isinstance(capacity, int) and isinstance(item.get("count"), int)
-                               and capacity > 1 and item["count"] >= capacity):
+    capacity, count = item.get("capacity"), item.get("count")
+    if item.get("session") or (isinstance(capacity, int) and not isinstance(capacity, bool)
+                               and isinstance(count, int) and not isinstance(count, bool)
+                               and capacity > 1 and count >= capacity):
         return None
-    wall = item.get("wall") if isinstance(item.get("wall"), (int, float)) else item.get("ran")
-    if not isinstance(wall, (int, float)):
+    wall = _finite_number(item.get("wall"))
+    if wall is None:
+        wall = _finite_number(item.get("ran"))
+    if wall is None:
         return None
-    away = item.get("yielded")
-    held = float(wall) - (float(away) if isinstance(away, (int, float)) else 0.0)
-    return float(item["cpu"]) / held if held > 0 else None
+    away = _finite_number(item.get("yielded")) or 0.0
+    held = wall - away
+    return cpu / held if held > 0 else None
 
 
 def family_row(name: str, items: list[dict[str, Any]], fallback: float) -> dict[str, Any]:
-    """One family's measured runs: median slots asked, median cores used, median cores asked (slots times the
-    cores per slot then), the slots that median use needs, and whether it is at most ASK_SHARE of the ask."""
+    """One family's measured runs: median slots asked, median and p90 cores used, median cores asked (slots times
+    the cores per slot then), the slots that median use needs, whether that use is at most ASK_SHARE of the ask
+    (`over_ask`), and whether it is at least CORES_OVER times the ask in more slots (`under_ask`, fathers#148)."""
     measured = [(item, use) for item in items for use in [used(item)]
                 if use is not None and isinstance(item.get("count"), int) and item["count"] >= 1]
     slots = ask_median([float(item["count"]) for item, _ in measured])
     cores = ask_median([use for _, use in measured])
+    high = percentile([use for _, use in measured], 90)
     asked = ask_median([item["count"] * per_slot(item, fallback) for item, _ in measured])
     width = ask_median([per_slot(item, fallback) for item, _ in measured])
     needed = None if cores is None or not width else max(1, math.ceil(round(cores / width, 6)))
-    over = bool(measured and asked and cores is not None and needed is not None and slots is not None
-                and needed < slots and cores <= ASK_SHARE * asked)
+    over = under = False
+    if measured and asked and cores is not None and needed is not None and slots is not None:
+        over = needed < slots and cores <= ASK_SHARE * asked
+        under = needed > slots and cores >= _config.CORES_OVER * asked
     return {"family": name, "measured": len(measured), "slots_p50": slots,
             "cores_p50": None if cores is None else round(cores, 2),
+            "cores_p90": None if high is None else round(high, 2),
             "cores_asked_p50": None if asked is None else round(asked, 2), "slots_needed": needed,
-            "over_ask": over}
+            "over_ask": over, "under_ask": under}
 
 
 def by_family(items: Iterable[dict[str, Any]], fallback: float) -> list[dict[str, Any]]:
@@ -476,29 +503,80 @@ def by_family(items: Iterable[dict[str, Any]], fallback: float) -> list[dict[str
     for item in items:
         groups.setdefault(family(item.get("label")), []).append(item)
     rows = [family_row(name, members, fallback) for name, members in groups.items()]
-    rows.sort(key=lambda r: (not r["over_ask"], -r["measured"], r["family"]))
+    rows.sort(key=lambda r: (not (r["over_ask"] or r["under_ask"]), -r["measured"], r["family"]))
     return rows
 
 
-def hint(directory: Path, label: str, count: int) -> str | None:
-    """One line for a request of `count` slots under `label` whose family's last ASK_RECENT measured runs (at least
-    ASK_LEAST) used a median of at most ASK_SHARE of the cores they asked, in fewer slots than `count`; else None."""
-    if count <= 1:
-        return None
-    name = family(label)
+def machine_width() -> tuple[float, int] | None:
+    """(cores per slot, slots) of this machine now, or None when the capacity cannot be read."""
     try:
-        fallback = _config.cores() / max(1, _settings.total())
+        total = max(1, _settings.total())
+        return _config.cores() / total, total
     except (_config.SlotError, OSError, ValueError):
         return None
-    lines = _state.tail_objects(directory / "history.jsonl", ASK_TAIL)
-    recent = [item for item in lines if family(item.get("label")) == name and used(item) is not None]
+
+
+def learned(directory: Path, label: str | None, width: float) -> dict[str, Any] | None:
+    """family_row() of the last ASK_RECENT measured runs of `label`'s family (`width`: cores per slot where a line
+    lacks its own), or None with fewer than ASK_LEAST."""
+    name = family(label)
+    try:
+        lines = _state.tail_objects(directory / "history.jsonl", ASK_TAIL)
+    except OSError:
+        return None
+    recent = [item for item in lines
+              if family(item.get("label")) == name and used(item) is not None
+              and isinstance(item.get("count"), int) and not isinstance(item.get("count"), bool)
+              and item["count"] >= 1]
     recent = recent[-ASK_RECENT:]
     if len(recent) < ASK_LEAST:
         return None
-    row = family_row(name, recent, fallback)
-    needed, cores = row["slots_needed"], row["cores_p50"]
-    asked = count * fallback
-    if needed is None or cores is None or needed >= count or cores > ASK_SHARE * asked:
+    return family_row(name, recent, width)
+
+
+def hint(directory: Path, label: str, count: int) -> str | None:
+    """One line for a request of `count` slots under `label` from its family's last ASK_RECENT measured runs (at
+    least ASK_LEAST): a hint when their median use was at most ASK_SHARE of the cores `count` slots hold, in fewer
+    slots; a warning when it was at least CORES_OVER times those cores, in more slots that the capacity has
+    (fathers#148); else None."""
+    found = machine_width()
+    if found is None:
         return None
-    return (f"hint: {name} requests used a median {cores:.1f} cores over their last {row['measured']} runs; "
-            f"{count} slots hold {asked:g} cores, {needed} would hold that use (-n {needed})")
+    width, total = found
+    row = learned(directory, label, width)
+    if row is None:
+        return None
+    name, needed, cores, high = row["family"], row["slots_needed"], row["cores_p50"], row["cores_p90"]
+    asked = count * width
+    if needed is None or cores is None:
+        return None
+    if count > 1 and needed < count and cores <= ASK_SHARE * asked:
+        return (f"hint: {name} requests used a median {cores:.1f} cores over their last {row['measured']} runs; "
+                f"{count} slots hold {asked:g} cores, {needed} would hold that use (-n {needed})")
+    weighted = slots_for(cores, width, total)
+    if count < total and weighted > count and cores >= _config.CORES_OVER * asked:
+        return (f"warning: {name} requests used a median {cores:.1f} cores (p90 {high:.1f}) over their last "
+                f"{row['measured']} runs; {count} slot{'s' if count > 1 else ''} hold{'' if count > 1 else 's'} "
+                f"{asked:g} cores, {weighted} would hold that use (-n {weighted}, or --cores auto)")
+    return None
+
+
+def weight(directory: Path, label: str | None, declared: float | None = None) -> dict[str, Any]:
+    """The slots a request under `label` should ask for by the cores it uses (fathers#148): for `declared` cores
+    when given (`source` "declared"), else for its family's median measured use ("history"), else one ("default").
+    With the family's measured runs, as family_row() gives them (`measured` 0 and nulls without)."""
+    found = machine_width()
+    width, total = found if found is not None else (float(_config.cores()), 1)
+    row = learned(directory, label, width)
+    if declared is not None:
+        cores, source = float(declared), "declared"
+    elif row is not None and row["cores_p50"] is not None:
+        cores, source = float(row["cores_p50"]), "history"
+    else:
+        cores, source = None, "default"
+    return {"slots": 1 if cores is None else slots_for(cores, width, total),
+            "cores": None if cores is None else round(cores, 2), "source": source,
+            "cores_per_slot": round(width, 2), "family": family(label),
+            "measured": row["measured"] if row else 0,
+            **{key: row[key] if row else None for key in ("slots_p50", "cores_p50", "cores_p90", "slots_needed")},
+            "over_ask": bool(row and row["over_ask"]), "under_ask": bool(row and row["under_ask"])}

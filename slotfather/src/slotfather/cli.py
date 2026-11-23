@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+import math
 import os
 import sys
 from typing import Any, Callable
@@ -76,10 +77,12 @@ def _order_options() -> tuple[OptionSpec, ...]:
 COMMANDS: tuple[CommandSpec, ...] = (
     CommandSpec(
         "run",
-        "run [-n N|all] [--label L] [--meta K=V]... [--priority P] [--ticket ID] [--yieldable] [--wait S] [--session NAME] [--] COMMAND...",
+        "run [-n N|all | --cores C|auto] [--label L] [--meta K=V]... [--priority P] [--ticket ID] [--yieldable] [--wait S] [--session NAME] [--] COMMAND...",
         "run COMMAND holding N slots (default 1)",
         options=(
             OptionSpec(("-n", "--slots"), metavar="N|all", help="number of slots to hold (or all)"),
+            OptionSpec(("--cores",), metavar="C|auto",
+                       help="hold the slots that C cores need (auto: the label family's measured use)"),
             OptionSpec(("-l", "--label"), metavar="L", help="request label"),
             OptionSpec(("--meta",), metavar="K=V", multi=True, help="request metadata key=value (repeatable)"),
             OptionSpec(("--priority",), metavar="P", help="request class: interactive, normal, or batch"),
@@ -236,10 +239,12 @@ COMMANDS: tuple[CommandSpec, ...] = (
     ),
     CommandSpec(
         "advise",
-        "advise [--max N] [--exclusive] [--label L] [--json] [-- COMMAND...]",
+        "advise [--max N] [--exclusive] [--label L] [--cores C|auto] [--json] [-- COMMAND...]",
         "a recommended worker budget, as JSON",
         options=(
             OptionSpec(("--max",), metavar="N", help="upper bound on recommended workers"),
+            OptionSpec(("--cores",), metavar="C|auto",
+                       help="cores the request uses, for its weight (default auto: its label family's measured use)"),
             OptionSpec(("--exclusive",), help="ignore held slots (for an all-slot request)"),
             OptionSpec(("-l", "--label"), metavar="L", help="request label for estimate lookup"),
             OptionSpec(("--json",), help="print advice as JSON"),
@@ -446,6 +451,19 @@ def parse_slots(value: str) -> tuple[int | str, int | None]:
     return int(value), None
 
 
+def parse_cores(value: str, command: str) -> float | str:
+    """Parse `--cores` (fathers#148): `auto` or a positive number of cores."""
+    if value == "auto":
+        return value
+    try:
+        found = float(value)
+    except ValueError:
+        found = 0.0
+    if not math.isfinite(found) or found <= 0:
+        raise UsageError(f"--cores takes a positive number of cores or auto, not {value!r}", command)
+    return found
+
+
 def run_command(values: dict[str, Any], positionals: list[str], after_dash: list[str]) -> int:
     from . import runner as _runner
     cmd = positionals or after_dash
@@ -456,6 +474,9 @@ def run_command(values: dict[str, Any], positionals: list[str], after_dash: list
     max_count: int | None = None
     if counted:
         count, max_count = parse_slots(str(values["--slots"]))
+    cores = parse_cores(str(values["--cores"]), "run") if "--cores" in values else None
+    if counted and cores is not None:
+        raise UsageError("run takes -n or --cores, not both", "run")
     labelled = "--label" in values
     label = str(values["--label"]) if labelled else os.path.basename(os.getcwd())
     pairs: list[str] = list(values.get("--meta") or [])
@@ -476,12 +497,12 @@ def run_command(values: dict[str, Any], positionals: list[str], after_dash: list
     session: str | None = str(values["--session"]) if "--session" in values else None
     from .entry import parse_meta
     if session is not None:
-        if counted or priority or ticket or yieldable or wait is not None:
+        if counted or cores is not None or priority or ticket or yieldable or wait is not None:
             raise UsageError("run --session takes only --label and --meta: the session's lease is already held", "run")
         from .session import run_inside
         return run_inside(session, cmd, label if labelled else None, parse_meta(pairs))
     return _runner.run(count, label, cmd, wait, parse_meta(pairs), yieldable, priority=priority, ticket=ticket,
-                       labelled=labelled, max_count=max_count)
+                       labelled=labelled, max_count=max_count, cores=cores)
 
 
 def yield_command(values: dict[str, Any], positionals: list[str], after_dash: list[str]) -> int:
@@ -762,7 +783,10 @@ def advise_command(values: dict[str, Any], positionals: list[str], after_dash: l
     from . import query as _query
     label, command = _resolve_request_label(values, after_dash)
     maximum = parse_count(str(values["--max"])) if "--max" in values else None
+    cores = parse_cores(str(values["--cores"]), "advise") if "--cores" in values else "auto"
     found = _query.advise(maximum, bool(values.get("--exclusive", False)), label=label, command=command)
+    from . import runtype as _runtype
+    found["weight"] = _runtype.weight(_config.state_dir(), label, None if cores == "auto" else float(cores))
     reply: dict[str, Any] = {"v": 1, **found} if "v" not in found else found
     print(json.dumps(reply, sort_keys=True))
     return 0

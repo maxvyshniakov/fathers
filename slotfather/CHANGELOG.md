@@ -6,6 +6,15 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 
 ### Added
 
+- Requests can ask for the cores they use instead of a slot count: `run --cores C` holds the slots that C cores
+  need (`--cores 6` is 4 slots on a 12-core, 8-slot machine), and `run --cores auto` the slots that its label
+  family's recent measured runs used, one slot until there are enough of them. `run` warns when its family's runs
+  used at least 1.5 times the cores its slots hold, with the `-n` that would hold them; `advise` adds `weight`, the
+  core-weighted slot count for `--cores C` or the measured use; `stats` lists such families under "asks far below
+  use" (`--json`: `under_ask`, `cores_p90`); `history` marks such a lease `> N held` and `status` tags a running one
+  `over-cores=USED/HELD`. The load admission threshold is unchanged, and `-n` and library callers ask what they
+  asked before (fathers#148).
+
 - Sustained CPU load holds further grants beside running leases: when `min(load1, load5)` less the held slots'
   share of the cores is at least the cores, or the load itself is at least 1.5 times the cores, a request waits
   until the load drops, while an idle machine still starts its first request. `slotfather order --load-gate X`

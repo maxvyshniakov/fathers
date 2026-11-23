@@ -35,6 +35,20 @@ Key fields on a `history.jsonl` record:
 - Both are top-level queue and history fields; inherited leases keep the outer request's fields.
 - Built-in fields cannot be passed through metadata: `--class`, `meta.class`, `meta.priority`, and `meta.ticket` are rejected.
 
+**Core weight.** `run --cores C|auto` asks for the slots that C cores need, or for the median measured use of
+its label family, instead of `-n` ([core-weighted requests](scheduling.md#core-weighted-requests)); the history
+line's `count` is the slots it took. `advise [--cores C|auto]` adds `weight`:
+
+- `slots`, `cores`, `source`: the slots that hold `cores` cores now, and where `cores` came from: `"declared"`
+  (`--cores C`), `"history"` (the family's median measured use) or `"default"` (too few measured runs: one slot,
+  `cores` `null`).
+- `cores_per_slot`, `family`, `measured`: this machine's cores per slot, the label family and its measured runs
+  counted (the last 20, at least 5; `0` otherwise).
+- `slots_p50`, `cores_p50`, `cores_p90`, `slots_needed`, `over_ask`, `under_ask`: as `stats --json`'s `asks` rows
+  give them for the family (`null` and `false` without measured runs).
+
+The dashboard block's `advice` has no `weight`.
+
 **Lease metadata.**
 
 - Set via repeatable `run --meta key=value` (library: `acquire(..., meta={...})`) for caller context (`lane`, `phase`, `model`, `session`, and custom tags).

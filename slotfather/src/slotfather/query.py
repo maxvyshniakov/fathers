@@ -189,6 +189,18 @@ def expected(directory: Path, entries: list[dict[str, Any]], slots: int, other: 
     return _queue.admission(directory, waiters, held, slots, other, moment=moment, settings=settings).forecast()
 
 
+def cores_tag(count: Any, recent_pct: Any, cores: int, slots: int) -> str:
+    """`status`' ` over-cores=USED/HELD` for a held lease whose holder last measured its tree at CORES_OVER times
+    the cores its slots hold or more (fathers#148), else "": none for an all-slot lease or without a fresh record."""
+    numbers = (int, float)
+    if not isinstance(count, int) or isinstance(count, bool) or count < 1 or slots < 1 or count >= slots > 1:
+        return ""
+    if not isinstance(recent_pct, numbers) or isinstance(recent_pct, bool) or not math.isfinite(recent_pct):
+        return ""
+    held, using = count * cores / slots, float(recent_pct) / 100
+    return f" over-cores={using:.1f}/{round(held, 1):g}" if using >= _config.CORES_OVER * held else ""
+
+
 def status_lines(directory: Path | None = None) -> list[str]:
     """`status`: one line per entry of one look(), the earlier queues' holders, unreadable and unknown entries, and
     the slots held."""
@@ -196,6 +208,7 @@ def status_lines(directory: Path | None = None) -> list[str]:
     directory, table, live, slots = found.directory, found.table, found.found, found.slots
     legacy = found.legacy
     expect = outlook(directory, [e for _, e in live], slots, found.other, settings=found.settings)
+    cores = _config.cores()
     lines: list[str] = []
     for (path, e), item in zip(live, found.live, strict=True):
         meta = _entry.meta_of(e)
@@ -203,6 +216,8 @@ def status_lines(directory: Path | None = None) -> list[str]:
         since = item.get("idle_since") if _entry.is_held(e) else None
         if since is not None:  # #12: below the idle threshold for at least the idle duration
             tags += f" idle={_config.duration(time.time() - since)}"
+        if _entry.is_held(e):
+            tags += cores_tag(e.get("count"), item.get("recent_cpu"), cores, slots)
         if e.get("yieldable"):
             request = found.asks.get(path.stem) if _entry.is_held(e) else None
             tags += " yieldable" + (f" asked-to-yield-for={request.get('label')}" if request else "") + \

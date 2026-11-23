@@ -68,10 +68,13 @@ the commands while keeping queue state.
 slotfather run -n 1 --label tests --priority interactive -- python3 -m unittest discover
 slotfather run -n 2 -- make build
 slotfather run -n all -- ./benchmark.sh
+slotfather run --cores 6 -- npx playwright test   # the slots six cores need
 ```
 
 A request waits until it can start, holds its slots while the command runs, then
-returns the command’s exit status. Nested calls reuse the ancestor’s lease.
+returns the command’s exit status. Nested calls reuse the ancestor’s lease. `--cores C` asks for the slots that C
+cores need instead of `-n`, and `--cores auto` for those its label family's measured runs used; `run` warns when that
+use is far above what its slots hold ([core-weighted requests](docs/scheduling.md#core-weighted-requests)).
 Use `--wait 60` to give up after a minute with exit code 75. A measurement series drains the queue once with a
 [session](docs/sessions.md): `slotfather session start --label perf`, then `slotfather run --session perf -- ...`.
 Without `--label` the request is named after its project, command and lane, such as `straylight · lane 743 ·

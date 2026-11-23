@@ -134,6 +134,11 @@ SHELLS = ("sh", "bash", "zsh", "dash", "fish")
 ESTIMATE_RUNS = 20  # recent runs of a kind its estimate takes the median of
 
 
+# A request "uses far more cores than it holds" (fathers#148) when its cores used are at least this multiple of the
+# cores its slots hold: a one-slot browser check running three engines on a machine of 1.5 cores per slot.
+CORES_OVER = 1.5
+
+
 ESTIMATE_BYTES = 1 << 20  # of the history's end (and of its rotated part) read for estimates
 
 

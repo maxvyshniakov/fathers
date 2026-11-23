@@ -432,6 +432,14 @@ def report(summary: dict[str, Any], top: int = 25) -> str:
             lines.append(f"  {row['family']}: {number(row['slots_p50'], 0)} slots, {number(row['cores_p50'])} of "
                          f"{number(row['cores_asked_p50'])} cores over {row['measured']} runs; -n "
                          f"{row['slots_needed']} would hold it")
+    under = [r for r in cast(list[dict[str, Any]], summary.get("asks") or []) if r.get("under_ask")]
+    if under:  # fathers#148: requests that run far more than their slots hold keep the load above the cores
+        lines.append("asks far below use (median slots asked, cores used (p90) of the cores asked, slots that use "
+                     "needs):")
+        for row in under[:top]:
+            lines.append(f"  {row['family']}: {number(row['slots_p50'], 0)} slots, {number(row['cores_p50'])} "
+                         f"({number(row['cores_p90'])}) of {number(row['cores_asked_p50'])} cores over "
+                         f"{row['measured']} runs; -n {row['slots_needed']} would hold it")
     w = cast(dict[str, Any], summary.get("sweeps") or {})
     if w.get("runs"):
         found = cast(dict[str, Any], w.get("last_found") or {})

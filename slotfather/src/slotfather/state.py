@@ -359,6 +359,21 @@ def history_items(directory: Path | None = None) -> list[dict[str, Any]]:
     return list(journal((directory or _config.state_dir()) / "history.jsonl"))
 
 
+def held_cores(item: dict[str, Any]) -> float | None:
+    """The cores a history line's slots held (its count times its cores over its capacity), or None for a line
+    without them, an all-slot request or a session: those ask for the machine, not for cores."""
+    found: list[int] = []
+    for key in ("count", "cores", "capacity"):
+        value = item.get(key)
+        if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+            return None
+        found.append(value)
+    count, cores, capacity = found
+    if item.get("session") or (capacity > 1 and count >= capacity):
+        return None
+    return round(count * cores / capacity, 2)
+
+
 def history_lines(limit: int, directory: Path | None = None) -> list[str]:
     """The last `limit` requests that left the queue (every one for 0), oldest first. The rotated part is read only
     when the current file holds fewer."""
@@ -380,6 +395,9 @@ def history_lines(limit: int, directory: Path | None = None) -> list[str]:
         if isinstance(item.get("cpu"), (int, float)):
             wall = item.get("wall") or item.get("ran")
             cores_used = f"{item['cpu'] / wall:.1f} cores" if wall else f"{item['cpu']:.0f} s CPU"
+            held = held_cores(item)
+            if wall and held is not None and item["cpu"] / wall >= _config.CORES_OVER * held:
+                cores_used += f" > {round(held, 1):g} held"  # fathers#148: far more than its slots hold
             used = f" used {cores_used}, {item.get('rss_peak_mb', 0):.0f} MB"
         meta = _entry.meta_of(item)
         tags = f" meta={_config.meta_text(meta)}" if meta else ""
