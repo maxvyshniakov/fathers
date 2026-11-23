@@ -81,7 +81,7 @@ class GcTests(GcCase):
         self.assertTrue(any(a["kind"] == "branch" for a in report["removed"]))
 
     def test_gc_keeps_dirty_young_unmerged_retained_owned_and_used_worktrees_of_every_family(self):
-        self.use_real_process_scan()
+        self.use_real_spawnfather()
         for kind in ("agent", "session"):
             with self.subTest(kind):
                 dirty, young, unmerged, retained, owned, used = (
@@ -122,7 +122,7 @@ class GcTests(GcCase):
         self.assertTrue(old.exists(), "a collector must not remove its own working directory")
 
     def test_gc_keeps_an_ancestor_using_the_candidate_even_when_the_child_runs_elsewhere(self):
-        self.use_real_process_scan()
+        self.use_real_spawnfather()
         old = self.candidate()
         script = ("import os,subprocess,sys; "
                   "raise SystemExit(subprocess.call([sys.executable,'-m','lanefather','gc','--json'], "
@@ -132,49 +132,33 @@ class GcTests(GcCase):
         self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
         self.assertTrue(old.exists(), "the querying tool's ancestor still uses this worktree")
 
-    def mutation_hook(self, old: Path, mutation: str) -> None:
-        marker = self.tmp / "stopped"
-        text = ("import os,pathlib,subprocess,time\n"
-                "class Item:\n    pid=1\n    def describe(self): return 'controlled stop adapter'\n"
-                f"ROOT={str(old.resolve())!r}\nMARK=pathlib.Path({str(marker)!r})\n"
-                "def sort_for_removal(root):\n    return ([Item()],[]) if root==ROOT and not MARK.exists() else ([],[])\n"
-                "def stop(processes,root):\n" + mutation + "\n    MARK.touch()\n    return []\n")
-        hook = self.write(self.repo, "gc-mutation.py", text)
-        cfg = self.integration / ".lanefather.toml"
-        cfg.write_text(cfg.read_text().replace('process_scan = "tools/process_scan.py"',
-                                               f'process_scan = "{hook}"'))
-
-    def test_gc_keeps_a_new_manual_lock_created_during_process_cleanup(self):
+    def test_gc_removes_through_spawnfather_with_its_targets_and_disposable_patterns(self):
+        # fathers#171: gc keeps its policy and asks Spawnfather for the one guarded removal.
         old = self.candidate()
-        self.git(self.repo, "worktree", "lock", "--reason", "claude agent test (pid 99999)", str(old))
-        self.mutation_hook(old, "    subprocess.run(['git','worktree','unlock',root],check=True)\n"
-                               "    subprocess.run(['git','worktree','lock','--reason','owner retention',root],check=True)")
         self.collect()
-        self.assertTrue(old.exists())
-        self.assertIn("owner retention", self.git(self.repo, "worktree", "list", "--porcelain"))
+        self.assertFalse(old.exists())
+        calls = [c for c in self.spawnfather_calls() if c[0] == "reap"]
+        self.assertEqual([c[c.index("--worktree") + 1] for c in calls], [str(old.resolve())])
+        self.assertIn("refs/heads/integrate/q", calls[0])
+        self.assertIn("node_modules", calls[0])
 
-    def test_gc_keeps_a_clean_unmerged_detached_head_created_during_process_cleanup(self):
-        old, unmerged = self.candidate(), self.candidate("unmerged-stop")
-        sha = self.commit(unmerged, {"lib/new.txt": "unmerged"})
-        mutation = (f"    subprocess.run(['git','-C',root,'checkout','--detach','-q',{sha!r}],check=True)\n"
-                    "    gitdir=subprocess.check_output(['git','-C',root,'rev-parse','--absolute-git-dir'],text=True).strip()\n"
-                    "    past=time.time()-3*3600\n"
-                    "    for path in [root,*[os.path.join(gitdir,n) for n in ['HEAD','index','logs/HEAD']]]:\n"
-                    "        os.utime(path,(past,past))")
-        self.mutation_hook(old, mutation)
-        self.collect()
-        self.assertTrue(old.exists())
-        self.assertEqual(self.git(old, "rev-parse", "HEAD"), sha)
-
-    def test_gc_refuses_when_process_source_is_missing(self):
+    def test_gc_removes_a_dead_agents_locked_worktree_through_spawnfather(self):
+        self.use_real_spawnfather()
         old = self.candidate()
-        (self.integration / "tools/process_scan.py").unlink()
+        self.git(self.repo, "worktree", "lock", "--reason", "claude agent test (pid 99999999)", str(old))
+        report = self.collect()
+        self.assertFalse(old.exists(), report)
+
+    def test_gc_keeps_everything_without_spawnfather(self):
+        old = self.candidate()
+        (self.tmp / "bin" / "spawnfather").unlink()
+        self.env["LANEFATHER_SPAWNFATHER"] = str(self.tmp / "bin" / "no-spawnfather")
         report = self.collect()
         self.assertTrue(old.exists())
-        self.assertTrue(any("process source" in a["reason"] for a in report["kept"]))
+        self.assertTrue(any("Spawnfather is not installed" in a["reason"] for a in report["kept"]))
 
     def test_gc_keeps_a_process_naming_a_worktree_outside_its_working_directory(self):
-        self.use_real_process_scan()
+        self.use_real_spawnfather()
         old = self.candidate()
         child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)", str(old.resolve())], cwd=self.repo)
         self.addCleanup(lambda: (child.kill(), child.wait()))

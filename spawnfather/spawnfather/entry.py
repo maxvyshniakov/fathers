@@ -246,6 +246,13 @@ def extended(store: Store, entry_id: str, ttl: float, now: Optional[float] = Non
     return _move(store, entry_id, _from(*OPEN), change)
 
 
+def no_ttl(store: Store, entry_id: str) -> Optional[Entry]:
+    """A running or starting entry now has no TTL (a lane owner's, once handed to one, fathers#171)."""
+    from .defaults import NO_TTL
+    return _move(store, entry_id, _from(*OPEN),
+                 lambda e: e.update({"no_ttl": True, "ttl": NO_TTL, "expires": float(e.get("created") or 0) + NO_TTL}))
+
+
 def due(entry: Entry, now: Optional[float] = None) -> bool:
     """Whether `entry` has a finite TTL whose deadline has passed."""
     at = time.time() if now is None else now

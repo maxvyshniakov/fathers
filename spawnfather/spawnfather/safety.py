@@ -19,6 +19,15 @@ CLAUDE = re.compile(r"(^|/)claude(\s|$)|/claude/versions/[^/\s]+(\s|$)|/claude\.
 CODEX = re.compile(r"(^|/)(codex|CodexCLI)(\s|$)|/codex-[\w-]+/vendor/[^\s]*/codex(\s|$)")
 
 
+AGENT_LOCK = re.compile(r"^claude agent\b.*\(pid (\d+)\)")
+
+
+def agent_lock_pid(lock: str) -> Optional[int]:
+    """The pid a Claude Code agent's worktree lock (`claude agent ... (pid N)`) names, or None."""
+    found = AGENT_LOCK.search(lock)
+    return int(found[1]) if found else None
+
+
 def claude(cmd: str) -> bool:
     """A Claude Code session's process, by its command."""
     return bool(CLAUDE.search(cmd))

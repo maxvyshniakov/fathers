@@ -98,7 +98,7 @@ class ConventionTests(Case):
         self.assertEqual((2, "spawnfather: unknown option --unknown\nTry 'spawnfather extend --help'.\n"),
                          (result.returncode, result.stderr))
         result = self.cli("reap")
-        self.assertEqual("spawnfather: reap takes one of --id, --owner, --lane or --pid\n"
+        self.assertEqual("spawnfather: reap takes one of --id, --owner, --lane, --pid or --worktree\n"
                          "Try 'spawnfather reap --help'.\n", result.stderr)
 
     def test_the_help_names_every_command_but_the_internal_ones(self):

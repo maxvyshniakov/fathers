@@ -160,7 +160,7 @@
    "reap"
   ],
   "code": 2,
-  "err": "spawnfather: reap takes one of --id, --owner, --lane or --pid\nTry 'spawnfather reap --help'.\n",
+  "err": "spawnfather: reap takes one of --id, --owner, --lane, --pid or --worktree\nTry 'spawnfather reap --help'.\n",
   "out": ""
  },
  {

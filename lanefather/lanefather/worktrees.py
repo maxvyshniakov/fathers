@@ -154,6 +154,9 @@ def size(path: str) -> int:
 
 
 def remove_tree(path: str, protected: list[str]) -> int:
+    """`rm -rf` of a shared cache partition (done, under its lock). A lane's own worktree, scratch and build
+    directories are Spawnfather's to remove (fathers#171); the shared partitions stay here, cache collection rather
+    than a lifetime (fathers#171, decision 3)."""
     path = os.path.realpath(path)
     if not os.path.exists(path):
         return 0

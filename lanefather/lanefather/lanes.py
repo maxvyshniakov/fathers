@@ -22,6 +22,7 @@ from . import (
     host,
     journal,
     lifecycle,
+    lifetimes,
     queue,
     receipts,
     review_record,
@@ -193,6 +194,9 @@ def register_admitted(store: state.Store, record: Record, decision: admission.De
                         "base_sha": record["base_sha"], "claims": lane_claims, "after": after,
                         "worktree": worktree, "cap": cap, "cap_source": source},
     )
+    # fathers#171: the lane owns its worktree, scratch and build directories through Spawnfather; a fix lane takes
+    # its parent's worktree by hand-over (hand_over_fix_lane).
+    lifetimes.register_quietly(store, store.load(lane_id), "start", skip=("worktree",) if parent is not None else ())
 
 
 def start(args: Any, store: state.Store) -> int:
@@ -250,6 +254,7 @@ def adopt_worktree(store: state.Store, record: Record, worktree: str, branch: st
         )
     record.clear()
     record.update(updated)
+    lifetimes.register_quietly(store, updated, "adopt")
     return updated
 
 
@@ -273,6 +278,7 @@ def hand_over_fix_lane(
         worktree=None,
         handed_over={"to": fix_id, "worktree": fix["worktree"], "at": journal.now()},
     )
+    lifetimes.hand_worktree(store, record, store.load(fix_id))
     return fix, updated_parent
 
 

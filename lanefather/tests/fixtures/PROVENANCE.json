@@ -2,15 +2,13 @@
   "repository": "https://github.com/maxvyshniakov/straylight",
   "commit": "79b2c0bb8437daff2350a64ae73113c4008cb8df",
   "files": {
-    "process_scan.py": "tools/agent-hooks/process_scan.py",
     "slotfather": "tools/fixtures/slotfather/slotfather",
     "verified-tree.sh": "tools/verified-tree.sh",
     "verified-tree-ledger.py": "tools/verified-tree-ledger.py",
     "reference-transaction": ".githooks/reference-transaction"
   },
   "refreshed": {
-    "process_scan.py": "d9a7a037 (#661 review fixes)",
     "slotfather": "d9a7a037 (#661 review fixes)"
   },
-  "note": "Project seam fixtures from Straylight (#648) that the command tests exercise: the verified-tree stamp, the reference-transaction hook that needs the landing token, the process scan behind [hooks] process_scan, and slotfather's stand-in."
+  "note": "Project seam fixtures from Straylight (#648) that the command tests exercise: the verified-tree stamp, the reference-transaction hook that needs the landing token, and slotfather's stand-in."
 }

@@ -1,5 +1,4 @@
-"""Contract gate for `tests/fixtures/slotfather`, `tests/fixtures/procs-slotfather`, and Lanefather's Slotfather
-adapters against the real `../slotfather/slotfather` CLI in an isolated `SLOTFATHER_DIR` (fathers#222).
+"""Contract gate for `tests/fixtures/slotfather` and Lanefather's Slotfather adapters against the real `../slotfather/slotfather` CLI in an isolated `SLOTFATHER_DIR` (fathers#222).
 
 Runs the sibling checkout's `../slotfather/slotfather` in the `fathers` repository (`SLOTFATHER_BIN` names another
 executable); skips gracefully outside the monorepo when no compatible `slotfather` is available. When the sibling
@@ -20,13 +19,12 @@ from unittest import mock
 
 from support import FIXTURES, ROOT, close_process
 
-from lanefather import admission, config, host, procs, slots
+from lanefather import admission, config, host, slots
 from lanefather.project import Project
 
 SIBLING = ROOT.parent / "slotfather" / "slotfather"
 EXECUTABLE = os.environ.get("SLOTFATHER_BIN") or (str(SIBLING) if SIBLING.is_file() else shutil.which("slotfather"))
 FIXTURE_SLOTFATHER = FIXTURES / "slotfather"
-FIXTURE_PROCS = FIXTURES / "procs-slotfather"
 
 
 def probe_capabilities(executable: str | None, environ: dict[str, str]) -> dict[str, Any] | None:
@@ -227,66 +225,6 @@ class SlotfatherFixtureContractTests(unittest.TestCase):
         self.assertFalse(marker.exists())
         holder.stdin.close()
         holder.wait(timeout=10)
-
-    def test_sweep_and_procs_stand_ins_match_real_slotfather(self) -> None:
-        my_pid = str(os.getpid())
-        real_sweep = self.json_cli(self.real_bin, self.real_env, "sweep", "--json", "--no-log", "--pid", my_pid)
-        fake_sweep = self.json_cli(self.fake_bin, self.fake_env, "sweep", "--json", "--no-log", "--pid", my_pid)
-        for key in ("v", "live", "only", "items", "live_refused", "failed"):
-            self.assertEqual(fake_sweep[key], real_sweep[key], key)
-
-        if not FIXTURE_PROCS.is_file():
-            return
-        procs_bin = str(FIXTURE_PROCS)
-        procs_env = {**self.real_env, "FIXTURE_PROCS_ROOT": my_pid}
-        procs_sweep = self.json_cli(procs_bin, procs_env, "sweep", "--json", "--no-log", "--pid", my_pid)
-        self.assertEqual((procs_sweep["v"], procs_sweep["items"]), (real_sweep["v"], real_sweep["items"]))
-
-        worktree = self.tmp / "worktree"
-        worktree.mkdir()
-        child = subprocess.Popen(
-            [sys.executable, "-c", "import sys; print('ready', flush=True); sys.stdin.read()"],
-            cwd=worktree, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-        )
-        self.addCleanup(close_process, child)
-        assert child.stdout is not None and child.stdin is not None
-        self.assertEqual(child.stdout.readline().strip(), "ready")
-
-        real_pid = self.json_cli(self.real_bin, procs_env, "procs", "--json", "--pid", str(child.pid))
-        fake_pid = self.json_cli(procs_bin, procs_env, "procs", "--json", "--pid", str(child.pid))
-        self.assertEqual((fake_pid["v"], fake_pid["cwd_unknown"], fake_pid["lease_unknown"]),
-                         (real_pid["v"], real_pid["cwd_unknown"], real_pid["lease_unknown"]))
-        self.assertEqual(len(real_pid["processes"]), 1)
-        self.assertEqual(len(fake_pid["processes"]), 1)
-        for field in ("pid", "ppid", "uid", "start"):
-            self.assertEqual(fake_pid["processes"][0][field], real_pid["processes"][0][field], field)
-
-        real_cwd = self.json_cli(self.real_bin, procs_env, "procs", "--json", "--cwd", str(worktree))
-        fake_cwd = self.json_cli(procs_bin, procs_env, "procs", "--json", "--cwd", str(worktree))
-        self.assertEqual(fake_cwd["v"], real_cwd["v"])
-        real_by_pid = {row["pid"]: row for row in real_cwd["processes"]}
-        fake_by_pid = {row["pid"]: row for row in fake_cwd["processes"]}
-        self.assertIn(child.pid, real_by_pid)
-        self.assertIn(child.pid, fake_by_pid)
-        for field in ("pid", "ppid", "uid", "start", "cwd"):
-            self.assertEqual(fake_by_pid[child.pid][field], real_by_pid[child.pid][field], field)
-
-        with mock.patch.dict(os.environ, procs_env, clear=True):
-            real_source = procs.SlotfatherSource(self.real_bin)
-            fake_source = procs.SlotfatherSource(procs_bin)
-            real_source.pause = 0
-            fake_source.pause = 0
-            self.assertTrue(real_source.supported())
-            self.assertTrue(fake_source.supported())
-            real_stop, real_held = real_source.sort_for_removal(str(worktree))
-            fake_stop, fake_held = fake_source.sort_for_removal(str(worktree))
-            self.assertEqual((real_stop, fake_stop), ([], []))
-            self.assertTrue(real_held and fake_held)
-
-            child.stdin.close()
-            child.wait(timeout=10)
-            self.assertEqual(real_source.sort_for_removal(str(worktree)), ([], []))
-            self.assertEqual(fake_source.sort_for_removal(str(worktree)), ([], []))
 
     def test_lane_admission_v1_contract_against_real_slotfather(self) -> None:
         cfg_path = self.tmp / ".lanefather.toml"

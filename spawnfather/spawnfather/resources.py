@@ -14,11 +14,17 @@ A resource entry is an ordinary entry (owner, TTL, keep, hand-over, `reap`, the 
   safari-tp        its main process, by pid and start time     osascript: tell application id ... to quit
   command          --alive ARGV (exit 0 alive, 1 gone)         --stop ARGV
   worktree         git worktree list (its repository's)        worktrees.plan: git worktree remove, then that tip's ref
+  dir              the folder exists (not a symbolic link)     dirs.plan: rm -rf, once no guard keeps it
 
 A tailscale-serve id is `PROTO:PORT` or `PROTO:PORT/PATH` (`https:6475`, `https:443/docs`, `tcp:5432`); stopping one
 removes that route only. An unowned resource is only reported (by the sweep), never stopped, with one exception: a
 `worktree` no entry owns that passes every guard and was idle for a day is removed by the sweep through the same
 guarded removal an owned one's stop uses (worktrees.plan; owner-approved, fathers#112).
+
+A reap of worktrees and dirs takes the requester's evidence (fathers#171): `--base` (refs its work may be merged
+into), `--disposable` (ignored-file patterns that may go), `--override REASON` (lifts the work guards and "still in
+use after stopping", never an integrity guard; evented with its reason) and `--stop-inside` (first stops the
+unowned processes working inside, see `stop_inside`).
 """
 from __future__ import annotations
 
@@ -31,7 +37,7 @@ import shutil
 import subprocess
 import sys
 import time
-from typing import Any, Callable, Dict, List, Mapping, Optional, TextIO, Tuple
+from typing import Any, Callable, Dict, List, Mapping, Optional, TextIO, Tuple, cast
 
 from . import entry as _entry
 from . import events as _events
@@ -39,7 +45,7 @@ from . import procs as _procs
 from . import reap as _reap
 from . import safety as _safety
 from . import errors as _errors
-from .defaults import CREATE_TIMEOUT, RESOURCE_TIMEOUT, SETTLE, STOP_TIMEOUT
+from .defaults import CREATE_TIMEOUT, NO_TTL, RESOURCE_TIMEOUT, SETTLE, STOP_TIMEOUT
 from .entry import Entry
 from .state import Store, as_dict, as_list
 from .text import duration
@@ -402,12 +408,14 @@ class Worktree(Kind):
 
     def stop(self, resource: Mapping[str, Any], grace: float) -> List[List[str]]:
         from . import worktrees
-        return worktrees.plan(resource, exclude=as_list(resource.get("_exclude")))
+        return worktrees.plan(resource, exclude=as_list(resource.get("_exclude")),
+                              evidence=worktrees.Evidence.of(resource.get("_evidence")))
 
     def check(self, resource: Mapping[str, Any]) -> Optional[str]:
         from . import worktrees
         try:
-            worktrees.plan(resource, exclude=as_list(resource.get("_exclude")))
+            worktrees.plan(resource, exclude=as_list(resource.get("_exclude")),
+                           evidence=worktrees.Evidence.of(resource.get("_evidence")))
         except Refused as error:
             return str(error)
         return None
@@ -440,6 +448,46 @@ class Worktree(Kind):
         return [os.path.realpath(os.path.join(base, os.path.expanduser(rest[index])))]
 
 
+class Dir(Kind):
+    """A folder a requester owns (a lane's scratch or build directory, fathers#171), by its real path. It runs while
+    the folder exists; its stop is dirs.plan, which refuses `/`, the home folder, Spawnfather's state, a symbolic
+    link, anything holding a Git repository or worktree, and any folder a process works in, then `rm -rf`."""
+    name = "dir"
+    reports = False
+    lists = False
+
+    def alive(self, resource: Mapping[str, Any], listed: Listing, table: Optional[_procs.Table]) -> Optional[bool]:
+        path = str(resource.get("id"))
+        if not os.path.lexists(path):
+            return False
+        return True if os.path.isdir(path) and not os.path.islink(path) else None
+
+    def resolve(self, given: str, listed: Listing) -> Dict[str, Any]:
+        from . import dirs
+        absolute = os.path.abspath(os.path.expanduser(given))
+        if os.path.islink(absolute):
+            raise _errors.Refused(f"{absolute} is a symbolic link", _errors.REFUSED)
+        path = os.path.realpath(absolute)
+        if not os.path.lexists(path):
+            raise _errors.Refused(f"no folder {path}", _errors.NOT_FOUND)
+        why = dirs.integrity_refusal(path)
+        if why:
+            raise _errors.Refused(f"{path}: {why}", _errors.REFUSED)
+        return {"kind": self.name, "id": path}
+
+    def stop(self, resource: Mapping[str, Any], grace: float) -> List[List[str]]:
+        from . import dirs
+        return dirs.plan(resource, exclude=as_list(resource.get("_exclude")),
+                         evidence=dirs.Evidence.of(resource.get("_evidence")))
+
+    def check(self, resource: Mapping[str, Any]) -> Optional[str]:
+        try:
+            self.stop(resource, 0.0)
+        except Refused as error:
+            return str(error)
+        return None
+
+
 def _worktrees_where(argv: List[str]) -> Optional[str]:
     """The folder a `git -C DIR ...` command runs in, or None (the current one)."""
     words = argv[1:] if argv and os.path.basename(argv[0]) == "git" else []
@@ -453,7 +501,8 @@ def _worktrees_where(argv: List[str]) -> Optional[str]:
 
 
 KINDS: Dict[str, Kind] = {k.name: k for k in (Simulator(), Docker(), TailscaleServe(), SafariTP(), Command(),
-                                               Worktree())}
+                                               Worktree(), Dir())}
+FOLDERS = ("worktree", "dir")  # the kinds a reap takes the requester's evidence for (fathers#171)
 WRAPPABLE = ("simulator", "docker", "tailscale-serve", "safari-tp", "worktree")
 
 
@@ -509,14 +558,20 @@ def owned_keys(store: Store) -> Dict[str, str]:
 # Owning
 
 def record(store: Store, resource: Dict[str, Any], argv: List[str], ttl: float, keep: str, label: Optional[str],
-           owner: Dict[str, Any], cwd: str) -> Tuple[Optional[Entry], str]:
-    """A running resource entry, or None and why not: one entry per resource."""
-    entry, holder = _entry.resource_owned(store, _entry.new(store, argv, ttl, keep, label, owner, "resource", cwd),
-                                          resource, lambda e: key(e.get("resource") or {}) == key(resource))
+           owner: Dict[str, Any], cwd: str, extra: Optional[Dict[str, Any]] = None) -> Tuple[Optional[Entry], str]:
+    """A running resource entry, or None and why not: one entry per resource. `extra`: keys the new entry also
+    gets (`no_ttl` for a lane owner's)."""
+    fresh = _entry.new(store, argv, ttl, keep, label, owner, "resource", cwd)
+    fresh.update(cast(Entry, extra or {}))
+    entry, holder = _entry.resource_owned(store, fresh, resource,
+                                          lambda e: key(e.get("resource") or {}) == key(resource))
     if entry is None:
         return None, f"already owned by {holder}"
+    from .owner import lane_key
+    lane = lane_key(owner)
     _events.write(store.root, "resource.owned", subject(entry), _events.actor_of(entry.get("owner")),
-                  {"resource": resource, "argv": argv, "cwd": cwd, "ttl": ttl, "keep": keep})
+                  {"resource": resource, "argv": argv, "cwd": cwd, "ttl": ttl, "keep": keep,
+                   **({"owner": lane, "no_ttl": True} if lane else {})})
     return entry, ""
 
 
@@ -532,9 +587,10 @@ def announce(entry: Entry, out: Optional[TextIO] = None) -> None:
 
 def own_resource(store: Store, kind: str, given: str, ttl: float, keep: str, label: Optional[str],
                  owner: Dict[str, Any], alive: Optional[List[str]] = None, stop: Optional[List[str]] = None,
-                 remove: bool = False) -> int:
+                 remove: bool = False, as_json: bool = False) -> int:
     """`own-resource`: record a resource that runs now. cli.py refuses safari-tp and a command kind without --alive
-    and --stop before this runs."""
+    and --stop before this runs. A lane owner's resource has no TTL, and owning one the same lane holds already
+    succeeds ("already"), so a requester may register again whenever it is unsure (fathers#171)."""
     found = KINDS[kind]
     if kind == "command":
         resource: Optional[Dict[str, Any]] = {"kind": kind, "id": given, "alive": alive, "stop": stop}
@@ -553,11 +609,31 @@ def own_resource(store: Store, kind: str, given: str, ttl: float, keep: str, lab
             raise _errors.Refused(f"refusing {given}: {error}", error.code) from None
     if remove:
         resource["remove"] = True
-    entry, why = record(store, resource, [], ttl, keep, label, owner, os.getcwd())
+    lane = owner.get("kind") == "lane"
+    entry, why = record(store, resource, [], NO_TTL if lane else ttl, "owner" if lane else keep, label, owner,
+                        os.getcwd(), extra={"no_ttl": True} if lane else None)
+    already = False
     if entry is None:
-        raise _errors.Refused(f"refusing {describe(resource)}: {why}", _errors.REFUSED)
-    announce(entry)
+        from . import owner as _owner
+        holder = holder_of(store, resource)
+        if not (lane and holder is not None and _owner.same_lane(holder.get("owner") or {}, owner)):
+            raise _errors.Refused(f"refusing {describe(resource)}: {why}", _errors.REFUSED)
+        entry, already = holder, True
+    if as_json:
+        print(json.dumps({"v": 1, "id": entry["id"], "already": already, "resource": entry.get("resource"),
+                          "owner": entry.get("owner")}, sort_keys=True))
+    elif already:
+        print(f"spawnfather: {entry['id']} owns {describe(resource)} for that lane already")
+    else:
+        announce(entry)
     return 0
+
+
+def holder_of(store: Store, resource: Mapping[str, Any]) -> Optional[Entry]:
+    """The live entry that holds this resource, or None."""
+    wanted = key(resource)
+    return next((e for e in store.entries() if e.get("state") in _entry.LIVE
+                 and key(as_dict(e.get("resource"))) == wanted), None)
 
 
 def own_wrapped(store: Store, kind: str, argv: List[str], ttl: float, keep: str, label: Optional[str],
@@ -676,8 +752,11 @@ def stop(resource: Mapping[str, Any], grace: float, alive: Callable[[], Optional
             if alive() is False:
                 return {"result": "stopped", "steps": steps}
             return {"result": "failed", "steps": steps, "error": ran.why()}
-    deadline = clock() + max(grace, 5.0)
     state = alive()
+    failing = next((step["error"] for step in steps if step.get("error")), None)
+    if failing and state is True:  # a later step failed and it still runs: no point waiting for it to go
+        return {"result": "failed", "steps": steps, "error": failing}
+    deadline = clock() + max(grace, 5.0)
     while state is not False and clock() < deadline:
         pause(0.5)
         state = alive()
@@ -702,58 +781,231 @@ def ending_owner(entry: Entry, lifecycle: Optional[_reap.Lifecycle], table: Opti
 
 
 def stopped_event(store: Store, subject: Dict[str, Any], actor: Optional[Dict[str, Any]], reason: str,
-                  resource: Mapping[str, Any], outcome: Mapping[str, Any], done: bool) -> None:
+                  resource: Mapping[str, Any], outcome: Mapping[str, Any], done: bool,
+                  owner: Optional[Mapping[str, Any]] = None) -> None:
     """resource.stopped or resource.stop_failed for one stop's outcome (an entry's reap and the sweep's removal of an
-    unowned worktree)."""
+    unowned worktree). A lane owner's entry names it (`owner`); a stop an override let through names the override's
+    reason and the guards it lifted (`override`), and the processes --stop-inside stopped first (`stopped`)."""
+    from .owner import lane_key
+    lane = lane_key(owner or {})
+    evidence = resource.get("_evidence")
+    lifted = list(getattr(evidence, "lifted", []) or [])
+    override = getattr(evidence, "override", None)
     _events.write(store.root, "resource.stopped" if done else "resource.stop_failed", subject,
                   actor or _events.caller(), {"reason": reason, "result": outcome["result"],
                                               "resource": {k: v for k, v in resource.items() if not k.startswith("_")},
                                               "steps": [step_text(step) for step in outcome["steps"]],
+                                              **({"owner": lane} if lane else {}),
+                                              **({"override": {"reason": override, "lifted": lifted}}
+                                                 if override and lifted else {}),
+                                              **({"stopped": outcome["stopped"]} if outcome.get("stopped") else {}),
                                               **({"error": outcome["error"]} if outcome.get("error") else {}),
                                               **({"warning": outcome["warning"]} if outcome.get("warning") else {})},
-                  ("warn" if outcome.get("warning") else None) if done else "error")
+                  ("warn" if outcome.get("warning") or (override and lifted) else None) if done else "error")
+
+
+def inside_stoppable(store: Store, path: str, table: Optional[_procs.Table], cwds: Optional[Mapping[int, str]]
+                     ) -> Optional[List[_procs.Proc]]:
+    """What `--stop-inside` stops before removing `path`: the processes working in it (or naming it in their
+    command) that no active entry holds, that are this user's and signallable (safety.signallable: no terminal, no
+    agent session, nothing above one of those), and that run below no live agent session. None when that cannot
+    be told (an unreadable table or working-directory listing): nothing is stopped then."""
+    if table is None or cwds is None:
+        return None
+    from . import sweep as _sweep
+    prefix = path.rstrip("/") + "/"
+    owned: set[int] = set()
+    for other in store.entries():
+        if other.get("state") in _entry.ACTIVE and other.get("mode") != "resource":
+            owned |= {p.pid for p in _reap.members(other, table)[0]}
+    sessions = _sweep.agent_sessions(table)
+    found: List[_procs.Proc] = []
+    for proc in table.procs.values():
+        cwd = cwds.get(proc.pid)
+        named = any(word == path or word.startswith(prefix) for word in proc.cmd.split())
+        if not (named or (cwd is not None and (cwd == path or cwd.startswith(prefix)))):
+            continue
+        if proc.pid in owned or _safety.below_session(proc.pid, table, sessions) \
+                or _safety.untouchable_tree(proc.pid, table):
+            continue
+        found.append(proc)
+    return _safety.signallable(found, table)
+
+
+def stop_inside(store: Store, path: str, grace: float, actor: Optional[Dict[str, Any]], reason: str
+                ) -> Dict[str, Any]:
+    """Stop what `inside_stoppable` finds in `path` (pid, start time and command checked before each signal, reap.stop),
+    each with an unowned.reaped event. {"stopped": [descriptions], "error": why} (error only when a stop failed or
+    the processes cannot be told)."""
+    table = _table()
+    found = inside_stoppable(store, path, table, _procs.working_dirs_or_none(os.getuid()))
+    if found is None:
+        return {"stopped": [], "error": "which processes work inside it cannot be told; nothing was stopped"}
+    stopped: List[str] = []
+    for proc in found:
+        outcome = _reap.stop([proc], grace)
+        done = outcome["result"] in _reap.STOPPED
+        _events.write(store.root, "unowned.reaped", {"type": "process", "id": str(proc.pid), "pid": proc.pid},
+                      actor or _events.caller(), {"cmd": proc.cmd, "start": proc.start,
+                                                  "reason": f"{reason}; working inside {path}",
+                                                  "result": outcome["result"], "pids": [proc.pid]},
+                      None if done else "error")
+        if not done:
+            return {"stopped": stopped, "error": f"pid {proc.pid} ({proc.cmd[:80]}) could not be stopped: "
+                                                 f"{outcome.get('error') or outcome['result']}"}
+        stopped.append(f"pid {proc.pid} ({proc.cmd[:80]})")
+    return {"stopped": stopped}
 
 
 def reap_target(store: Store, entry: Entry, reason: str, grace: float, actor: Optional[Dict[str, Any]],
-                table: Optional[_procs.Table], *, lifecycle: Optional[_reap.Lifecycle] = None) -> _reap.Target:
-    """Target adapter for a resource entry (`reap.reap` drives dry-run, claim, teardown, end_reap and events)."""
+                table: Optional[_procs.Table], *, lifecycle: Optional[_reap.Lifecycle] = None,
+                evidence: Optional[Mapping[str, Any]] = None, stopping: bool = False) -> _reap.Target:
+    """Target adapter for a resource entry (`reap.reap` drives dry-run, claim, teardown, end_reap and events).
+    `evidence` ({bases, disposable, override}) and `stopping` (--stop-inside) apply to worktrees and dirs."""
     recorded = entry.get("resource") or {}
     entry_id = str(entry["id"])
     resource: Dict[str, Any] = {**recorded, "_exclude": ending_owner(entry, lifecycle, table)}
+    folder = str(resource.get("kind")) in FOLDERS
+    if folder and evidence is not None:
+        from .worktrees import Evidence
+        resource["_evidence"] = Evidence.of(evidence)
     kind = KINDS.get(str(resource.get("kind")))
     how = describe(resource)
+    path = str(resource.get("id"))
+    stops = folder and stopping
 
     def alive() -> Optional[bool]:
         return Snapshot(_table()).alive(resource)
 
+    def row(result: str, why: str, **more: Any) -> Dict[str, Any]:
+        return {"id": entry_id, "result": result, "reason": why, "pids": [], "how": how,
+                "resource": {"kind": resource.get("kind"), "id": resource.get("id")}, **more}
+
     def preview() -> Dict[str, Any]:
         state = alive()
         if state is False:
-            return {"id": entry_id, "result": "gone", "reason": reason, "pids": [], "how": how}
+            return row("gone", reason)
         if state is None:
-            return {"id": entry_id, "result": "would-fail",
-                    "reason": f"{reason}; whether it runs cannot be told", "pids": [], "how": how}
-        refused = kind.check(resource) if kind is not None else None
-        return {"id": entry_id, "result": "would-fail" if refused else "would-stop",
-                "reason": f"{reason}; {refused}" if refused else reason, "pids": [], "how": how}
+            return row("would-fail", f"{reason}; whether it runs cannot be told")
+        would: List[_procs.Proc] = []
+        checked = resource
+        if stops:
+            current = _table()
+            found = inside_stoppable(store, path, current, _procs.working_dirs_or_none(os.getuid()))
+            if found is None:
+                return row("would-fail", f"{reason}; which processes work inside it cannot be told")
+            would = found
+            checked = {**resource, "_exclude": [*as_list(resource.get("_exclude")), *(p.pid for p in found)]}
+        refused = kind.check(checked) if kind is not None else None
+        stopping_too = {"stops": [f"pid {p.pid} ({p.cmd[:80]})" for p in would]} if would else {}
+        return row("would-fail" if refused else "would-stop", f"{reason}; {refused}" if refused else reason,
+                   **stopping_too)
 
     def teardown(current: Entry) -> _reap.ReapOutcome:
-        outcome = stop(resource, grace, alive)
+        first: Dict[str, Any] = {"stopped": []}
+        pre_error: Optional[str] = None
+        if stops and alive() is True:
+            current_table = _table()
+            found = inside_stoppable(store, path, current_table, _procs.working_dirs_or_none(os.getuid()))
+            if found is None:
+                pre_error = "which processes work inside it cannot be told"
+            else:
+                checked = {**resource, "_exclude": [*as_list(resource.get("_exclude")), *(p.pid for p in found)]}
+                pre_error = kind.check(checked) if kind is not None else None
+            if pre_error is None:
+                first = stop_inside(store, path, grace, actor, reason)
+        if pre_error is not None:
+            outcome: Dict[str, Any] = {"result": "failed", "steps": [], "error": pre_error}
+        elif first.get("error"):
+            outcome = {"result": "failed", "steps": [], "error": first["error"]}
+        else:
+            outcome = stop(resource, grace, alive)
+        if first.get("stopped"):
+            outcome["stopped"] = first["stopped"]
         result = outcome["result"]
         done = result in _reap.STOPPED
 
         def emit(finished: bool) -> None:
-            stopped_event(store, subject(current), actor, reason, resource, outcome, finished)
+            stopped_event(store, subject(current), actor, reason, resource, outcome, finished, current.get("owner"))
 
+        evidence_now = resource.get("_evidence")
+        lifted = list(getattr(evidence_now, "lifted", []) or [])
         return _reap.ReapOutcome(
             result=result, how=how, pids=[],
-            end={"reason": reason, "result": result, "how": how, "pids": [], "steps": outcome["steps"]},
+            end={"reason": reason, "result": result, "how": how, "pids": [], "steps": outcome["steps"],
+                 **({"stopped": outcome["stopped"]} if outcome.get("stopped") else {}),
+                 **({"lifted": lifted} if lifted else {})},
             error={"reason": reason, "left": [], "error": outcome.get("error"), "steps": outcome["steps"]},
             reason=reason if done else f"{reason}; {outcome.get('error')}",
             emit=emit,
+            extra={"resource": {"kind": resource.get("kind"), "id": resource.get("id")},
+                   **({"stopped": outcome["stopped"]} if outcome.get("stopped") else {}),
+                   **({"lifted": lifted} if lifted else {})},
         )
 
     return _reap.Target(how=how, dry_run=preview, teardown=teardown)
+
+
+def reap_worktree(store: Store, given: str, reason: str, grace: float, evidence: Mapping[str, Any],
+                  stopping: bool, dry_run: bool, actor: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """`reap --worktree PATH`: a requester's one-shot removal of a worktree no entry owns (Lanefather's gc), through
+    the same guarded removal an owned one's stop uses, with the requester's evidence. The one result row; Refused
+    when it is no linked worktree (6) or an entry owns it (3: reap that entry by its owner)."""
+    from . import worktrees
+    found = KINDS["worktree"].resolve(given, None)
+    holder = holder_of(store, found)
+    if holder is not None:
+        from .owner import describe as who
+        raise _errors.Refused(f"refusing {describe(found)}: entry {holder['id']} owns it for "
+                              f"{who(holder.get('owner') or {})}; reap it through that owner", _errors.REFUSED)
+    resource: Dict[str, Any] = {**found, "_evidence": worktrees.Evidence.of(evidence)}
+    path = str(found["id"])
+    how = describe(found)
+    row: Dict[str, Any] = {"id": key(found), "result": "", "reason": reason, "pids": [], "how": how,
+                           "resource": {"kind": "worktree", "id": path}}
+    if dry_run:
+        checked = resource
+        would: List[_procs.Proc] = []
+        if stopping:
+            current = _table()
+            listed = inside_stoppable(store, path, current, _procs.working_dirs_or_none(os.getuid()))
+            if listed is None:
+                return {**row, "result": "would-fail", "reason": f"{reason}; which processes work inside it cannot "
+                                                                    "be told"}
+            would = listed
+            checked = {**resource, "_exclude": [p.pid for p in listed]}
+        refused = KINDS["worktree"].check(checked)
+        return {**row, "result": "would-fail" if refused else "would-stop",
+                "reason": f"{reason}; {refused}" if refused else reason,
+                **({"stops": [f"pid {p.pid} ({p.cmd[:80]})" for p in would]} if would else {})}
+    first: Dict[str, Any] = {"stopped": []}
+    pre_error: Optional[str] = None
+    if stopping:
+        current = _table()
+        listed = inside_stoppable(store, path, current, _procs.working_dirs_or_none(os.getuid()))
+        if listed is None:
+            pre_error = "which processes work inside it cannot be told"
+        else:
+            checked = {**resource, "_exclude": [p.pid for p in listed]}
+            pre_error = KINDS["worktree"].check(checked)
+        if pre_error is None:
+            first = stop_inside(store, path, grace, actor, reason)
+    if pre_error is not None:
+        outcome: Dict[str, Any] = {"result": "failed", "steps": [], "error": pre_error}
+    elif first.get("error"):
+        outcome = {"result": "failed", "steps": [], "error": first["error"]}
+    else:
+        outcome = stop(resource, grace, Snapshot(None).bound(resource))
+    if first.get("stopped"):
+        outcome["stopped"] = first["stopped"]
+    done = outcome["result"] in _reap.STOPPED
+    subject = {"type": "resource", "id": key(found), "kind": "worktree",
+               **({"label": str(found["branch"])} if found.get("branch") else {})}
+    stopped_event(store, subject, actor, reason, resource, outcome, done)
+    lifted = list(resource["_evidence"].lifted)
+    return {**row, "result": outcome["result"], "reason": reason if done else f"{reason}; {outcome.get('error')}",
+            **({"stopped": outcome["stopped"]} if outcome.get("stopped") else {}),
+            **({"lifted": lifted} if lifted else {})}
 
 
 def step_text(step: Mapping[str, Any]) -> str:

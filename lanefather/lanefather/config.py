@@ -110,6 +110,9 @@ class Config:
     # [done] auto (fathers#157): a lane that becomes finished runs done by itself, and start below the disk floor
     # runs done on the machine's finished lanes; false leaves both to `done`.
     done_auto: bool = True
+    # [done] stop_inside (fathers#171): done, drop and gc have Spawnfather stop the unowned processes the lane left
+    # in what they remove; unset, a project that names the deprecated [hooks] process_scan gets it.
+    done_stop_inside: bool | None = None
     # [slots.priority]: a phase's (or `default`) Slotfather priority, below the environment's (lanefather#24).
     slot_priority: tuple[tuple[str, str], ...] = ()
     cache_name: str = "lanefather"
@@ -279,7 +282,7 @@ TABLE_KEYS = {
     "tickets": ("integrated_label", "land_comment", "fixes_trailer", "release_comment", "preview", "repo"),
     "slots": ("priority",),
     "review": ("blocks", "panel", "panel_required"),
-    "done": ("auto",),
+    "done": ("auto", "stop_inside"),
 }
 
 
@@ -404,6 +407,9 @@ def parse(data: dict[str, Any], path: Path | None = None) -> Config:
     done_auto = finish.get("auto", default.done_auto)
     if type(done_auto) is not bool:
         raise LaneError(f"{CONFIG_NAME}: [done] auto must be a boolean")
+    done_stop_inside = finish.get("stop_inside", default.done_stop_inside)
+    if done_stop_inside is not None and type(done_stop_inside) is not bool:
+        raise LaneError(f"{CONFIG_NAME}: [done] stop_inside must be a boolean")
     lane_cap = admission.get("cap")
     if lane_cap is not None and (type(lane_cap) is not int or lane_cap < 1):
         raise LaneError(f"{CONFIG_NAME}: [admission] cap must be a positive whole number")
@@ -435,6 +441,7 @@ def parse(data: dict[str, Any], path: Path | None = None) -> Config:
         review_panel=_panel(review),
         review_panel_required=panel_required,
         done_auto=done_auto,
+        done_stop_inside=done_stop_inside,
         slot_priority=_slot_priority(slot_table),
         cache_name=_string(lane, "cache_name", default.cache_name),
         worktrees_root=_nonempty(lane, "worktrees_root", default.worktrees_root, "lane"),

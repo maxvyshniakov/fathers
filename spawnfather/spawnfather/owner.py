@@ -11,6 +11,10 @@ process that ran spawnfather (a terminal's shell, a script).
   codex    CODEX_THREAD_ID (or CODEX_SESSION_ID); the session's process is the nearest `codex` ancestor.
   shell    the nearest ancestor with a terminal (a person's shell); none outside a terminal (a script, cron), and
            then only the TTL ends the entry.
+  lane     `--owner lane:<project>/<id>` (fathers#171): a Lanefather lane, which has no process. Its entries have no
+           TTL and never end because the owner is gone (alive is always unknown): only a reap that names the lane,
+           a person's reap, or the resource disappearing ends them. The project is everything before the last `/`
+           (Lanefather names the main checkout's path), so two projects with the same lane id never cross.
 
 The subagent comes from a claim: the PreToolUse hook writes the session, agent id and command of every Bash call
 that names spawnfather or legacy junkfather (hook.py); `own` takes the newest claim of its session whose command
@@ -38,6 +42,41 @@ Owner = Dict[str, Any]
 
 
 TOOL_NAMES = ("spawnfather", "junkfather")
+
+
+LANE_PREFIX = "lane:"
+LANE_ID = re.compile(r"\A[A-Za-z0-9_.-]{1,128}\Z")
+
+
+def lane_owner(text: str) -> Owner:
+    """The owner `lane:<project>/<id>` names: the project is everything before the last `/`, which may hold `/`
+    itself (a path). ValueError when the text is not that form."""
+    if not text.startswith(LANE_PREFIX):
+        raise ValueError(f"not a lane owner: {text!r} (lane:<project>/<id>)")
+    project, slash, lane = text[len(LANE_PREFIX):].rpartition("/")
+    if not slash or not project.strip("/") or not LANE_ID.match(lane) or lane in (".", ".."):
+        raise ValueError(f"not a lane owner: {text!r} (lane:<project>/<id>, the id letters, digits, '.', '_', '-')")
+    if len(project) > 1024 or any(not c.isprintable() for c in project):
+        raise ValueError(f"not a lane owner: {text!r} (the project must be printable text)")
+    return {"kind": "lane", "session": None, "agent": None, "agent_type": None, "pid": None, "pid_start": None,
+            "lane": lane, "lane_project": project}
+
+
+def is_lane_owner(text: Optional[str]) -> bool:
+    return bool(text) and str(text).startswith(LANE_PREFIX)
+
+
+def lane_key(owner: Mapping[str, Any]) -> Optional[str]:
+    """`lane:<project>/<id>` of a lane owner, None for any other owner."""
+    if owner.get("kind") != "lane" or not owner.get("lane") or not owner.get("lane_project"):
+        return None
+    return f"{LANE_PREFIX}{owner['lane_project']}/{owner['lane']}"
+
+
+def same_lane(owner: Mapping[str, Any], lane: Mapping[str, Any]) -> bool:
+    """Whether `owner` is the lane owner `lane` (both its project and its id)."""
+    return owner.get("kind") == "lane" and owner.get("lane") == lane.get("lane") \
+        and owner.get("lane_project") == lane.get("lane_project")
 
 
 def registry_dir() -> Path:
@@ -178,6 +217,8 @@ def from_env(env: Mapping[str, str], parent: Optional[int] = None) -> Owner:
 
 
 def describe(owner: Owner) -> str:
+    if owner.get("kind") == "lane":
+        return f"lane {owner.get('lane_project')}/{owner.get('lane')}"
     if owner.get("kind") == "shell":
         text = f"shell pid {owner.get('pid')}"
     else:
@@ -222,8 +263,9 @@ def registered_alive(record: Dict[str, Any], table: _procs.Table) -> bool:
 
 def alive(owner: Owner, table: Optional[_procs.Table],
           sessions: Optional[List[Dict[str, Any]]] = None) -> Optional[bool]:
-    """True: the owner runs; False: it is gone; None: unknown (never a reason to reap)."""
-    if table is None:
+    """True: the owner runs; False: it is gone; None: unknown (never a reason to reap). A lane owner is always
+    unknown: only a reap that names it ends its entries."""
+    if table is None or owner.get("kind") == "lane":
         return None
     if owner.get("pid") and table.alive(owner.get("pid"), owner.get("pid_start")):
         return True

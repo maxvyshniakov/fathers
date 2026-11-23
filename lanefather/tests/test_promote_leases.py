@@ -79,8 +79,8 @@ if args[:1] != ["--changed"]:
             for name in ("install", "check-installed", "link-package", "deploy"))
         config_path = self.integration / ".lanefather.toml"
         original = config_path.read_text()
-        start, end = original.index("[[promote.install]]"), original.index("[hooks]")
-        config_path.write_text(original[:start] + self.steps_config + "\n" + original[end:])
+        start = original.index("[[promote.install]]")  # the promote steps are the fixture's last tables
+        config_path.write_text(original[:start] + self.steps_config + "\n")
         self.commit(self.integration, {}, "promotion execution fixture")
         self.git(self.repo, "branch", "dev")
         self.remote = self.tmp / "remote.git"

@@ -49,8 +49,8 @@ characters. An event follows the change it describes; one that cannot be written
 | `entry.handed` | entry | `from`, `to` (kind, session, agent, lane) |
 | `entry.reaped` | entry | `reason`, `result`, `how`, `signals` (`TERM`, `KILL`), `pids` |
 | `entry.reap_failed` (error) | entry | processes outlived SIGKILL; the entry keeps running; `left` |
-| `resource.owned` | resource | `own --kind` or `own-resource`; `resource`, `argv`, `cwd`, `ttl`, `keep` |
-| `resource.stopped` | resource | its stop ran and it is gone (or was gone already); `reason`, `result`, `resource`, `steps`; also the sweep's removal of an unowned worktree (no `entry` in the subject) |
+| `resource.owned` | resource | `own --kind` or `own-resource`; `resource`, `argv`, `cwd`, `ttl`, `keep`; a lane owner's also `owner` (`lane:<project>/<id>`) and `no_ttl` |
+| `resource.stopped` | resource | its stop ran and it is gone (or was gone already); `reason`, `result`, `resource`, `steps`; a lane owner's `owner`; `override: {reason, lifted}` when an override lifted a guard; `stopped` when --stop-inside stopped processes first; also the sweep's and `reap --worktree`'s removal of an unowned worktree (no `entry` in the subject) |
 | `resource.stop_failed` (error) | resource | a stop command failed or timed out, or it still runs; the entry keeps running; `error`, `steps` |
 | `unowned.reported` (warn) | process or resource | a sweep listed it for the first time; a process: `cmd`, `cwd`, `root`, `why`, `start`, `age`; a resource: `kind`, `id`, `name`, `why` |
 | `unowned.reaped` | process | `reap --pid --force`; `cmd`, `start`, `result`, `pids` |
@@ -171,7 +171,8 @@ stops it with argv run without a shell, with a timeout (`STOP_TIMEOUT`, 120 s, p
 | `tailscale-serve` | `PROTO:PORT[/PATH]` (`https:6475`, `https:443/docs`, `tcp:5432`) | `tailscale serve status --json` has that route | `tailscale serve --PROTO=PORT [--set-path=PATH] off --yes`: that route only |
 | `safari-tp` | its main process's pid | that pid runs with its recorded start time | `osascript`: `tell application id "com.apple.SafariTechnologyPreview" to quit`, only while it is the only instance |
 | `command` | a name | `--alive` exits 0 (1: gone; anything else: unknown) | `--stop` |
-| `worktree` | the linked worktree's real path (`resource` also records `repo`, its main checkout, `common`, its repository's common git dir, and `branch`) | the path exists and that repository's `git worktree list --porcelain` lists it (another repository at that path: gone) | `git worktree remove PATH` (never `--force` or `rm -rf`), then `git update-ref -d refs/heads/BRANCH SHA` for the tip that was checked; refused while a guard keeps it |
+| `worktree` | the linked worktree's real path (`resource` also records `repo`, its main checkout, `common`, its repository's common git dir, and `branch`) | the path exists and that repository's `git worktree list --porcelain` lists it (another repository at that path: gone) | `git worktree remove PATH` (never `rm -rf`; `--force` only when an `--override` lifted a dirty tree or a lock), then `git update-ref -d refs/heads/BRANCH SHA` for the tip that was checked; refused while a guard keeps it |
+| `dir` | a folder's real path; only a lane owner owns one (`own-resource --owner lane:... --kind dir`) | the folder exists and is no symbolic link | `rm -rf -- PATH`; refused while a guard keeps it |
 
 After the stop the resource must be seen gone within the grace (at least 5 s); otherwise, or when a stop command
 fails or times out, the result is `failed`, the entry keeps running with `last_error`, and `resource.stop_failed` is
@@ -179,18 +180,48 @@ written; a later step that fails (`docker rm` after a stop) makes `resource.stop
 reap runs no stop command while whether the resource runs cannot be told: the result is `failed`, and the sweep or
 the next reap tries again.
 
-A worktree's stop is `worktrees.plan`, the one guarded removal the sweep uses too; it reads everything again right
-before (the git listing, the repository's common git dir, the process table, the working directories) and runs only
-when every guard passes (`spawnfather/worktrees.py`; the same observations as Lanefather's gc, copied because
-common/ is not installed with a command, fathers#117): listed by the recorded repository, not the main worktree,
-not locked, not a symbolic link as git lists it, no `.keep` of any kind, not dev, main, master or integrate/*
-checked out, no uncommitted or untracked change, no ignored file outside disposable build output (node_modules,
-.venv, dist, ...), HEAD merged into the base (an ancestor of it; or, for a squash or rebase, no merge commit beyond
-the base and every patch in it by `git cherry`, which passes over a merge's own conflict resolution; the base is
-origin's default branch when there is an origin, else the local main or master), no Git repository or other worktree
-inside, no process working in it or naming it and none of this user's still running whose working directory cannot
-be read, and spawnfather not running inside it. Not seen: a process that started inside and then changed directory,
-or one that only holds files open there. The branch goes after it only at the tip that was checked: a branch that
+A worktree's stop is `worktrees.plan`, the one guarded removal (fathers#171: Lanefather's done, drop and gc ask for
+it too); it reads everything again right before (the git listing, the repository's common git dir, the process
+table, the working directories) and runs only when every guard passes (`spawnfather/worktrees.py`). Integrity
+guards, which nothing lifts: listed by the recorded repository, not the main worktree, not a symbolic link as git
+lists it, spawnfather not running inside it, not dev, main, master or integrate/* checked out, no Git repository or
+other worktree inside, no submodule in its index (`git worktree remove` refuses one, and forcing it would lose its
+checkout), and every process's working directory readable (none of this user's still running whose working directory
+cannot be read). Work guards, where the requester's evidence counts: not locked (a `claude agent ... (pid N)` lock
+whose process is gone is unlocked first), no `.keep` of any kind, no uncommitted or untracked change, no ignored file
+outside disposable build output (node_modules, .venv, dist, ..., and the requester's `--disposable` patterns; git's
+`--ignored=matching` names them), HEAD merged into a base (an ancestor of it; or, for a squash or rebase, no merge
+commit beyond the base and every patch in it by `git cherry`, which passes over a merge's own conflict resolution;
+the bases are origin's default branch when there is an origin, else the local main or master, and the requester's
+`--base` refs or commits), and no process working in it or naming it. `--override REASON` lifts every work guard,
+never an integrity one; `resource.stopped` then names the reason and what it lifted (`override: {reason, lifted}`,
+level `warn`). Not seen: a process that started inside and then changed directory, or one that only holds files open
+there.
+
+A `dir`'s stop is `dirs.plan`: integrity guards (not `/`, the home folder or a parent of it, not Spawnfather's state
+folder, not a symbolic link, spawnfather not inside it, no Git repository or worktree in it, the folder itself
+included, every working directory readable) and one work guard (no process working in it or naming it), which
+`--override` lifts.
+
+**Lane owners** (fathers#171). `own-resource --owner lane:<project>/<id> --kind worktree|dir --id PATH [--json]`
+owns a worktree or folder for a lane: the project is everything before the last `/` (Lanefather names the main
+checkout's path), so two projects with the same lane id never cross. Its entry has no TTL (`no_ttl`), its owner has
+no process (`owner: {kind: "lane", lane, lane_project}`, liveness always unknown), so neither the TTL, the sweep nor
+an owner's end ever reaps it, and `extend` refuses it; owning a resource the same lane holds already succeeds
+(`already: true`), one another owner holds is refused (3), a path that does not exist is not found (6).
+`reap --owner lane:<project>/<id>` takes the lane's entries and the agents' and shells' entries tagged with that
+lane (`lane` with the same `lane_project`, or none and started inside one of the lane's worktrees), in this order:
+processes, other resources, worktrees, folders, the deepest path of each first; the first one that fails stops the
+reap. `reap --lane ID` (a bare id) never takes a lane owner's entries. With `--base`, `--disposable`, `--override`
+and `--stop-inside` it takes the requester's evidence for its worktrees and folders: `--stop-inside` first stops the
+processes working inside that no active entry holds, that are this user's and no terminal's or agent session's (nor
+above one), and that run below no live agent session (pid, start time and command checked before each signal;
+`unowned.reaped` with `working inside PATH`); a dry run lists them as `stops`. `reap --worktree PATH` is a
+requester's one-shot removal of a worktree no entry owns (one an entry owns is refused, 3), through the same guards.
+`hand --owner lane:... [--kind KIND] --to lane:...` moves a lane's entries to another lane (a fix lane taking its
+parent's worktree). `capabilities --json` names the contract: `lifetimes: {v: 1, owners: ["lane"], kinds:
+["worktree", "dir"], reap: [...], hand: [...]}`. The sweep still leaves alone a worktree Lanefather's lane records
+name for one release (lanes started before Lanefather registered them); a registered one is an owned entry. The branch goes after it only at the tip that was checked: a branch that
 moved meanwhile stays, and the stop is a warning. A refused stop is `resource.stop_failed` with `error: "kept: WHY"`,
 and the entry keeps running. At its owner's end the ending session's own process (and at SessionEnd everything
 below it) does not count as using it, and the hook's detached reaper runs in `/`, so a clean merged worktree is
@@ -400,7 +431,7 @@ Slotfather or Lanefather yet.
 | --- | --- |
 | Ownership of agent-started long-lived processes: who started it, until when | Slotfather sweep's `removed`, `orphan` and `dev-server` classes, as the net for processes started without spawnfather |
 | Ending them at session end or TTL, and ending explicit `keep: owner` entries at subagent turn end | Slotfather's lease guard, `procs`, containers, memory report and self-matching waits |
-| Orphan detection by owner session (registry, recorded process) instead of by process kind and age | Lanefather `done`/`gc` asking `slotfather sweep --pid` (via the project's `process_scan`) before removing a worktree |
+| Orphan detection by owner session (registry, recorded process) instead of by process kind and age | Lanefather `done`/`drop`/`gc` removing worktrees itself (fathers#171: it asks `spawnfather reap --owner lane:...` and `reap --worktree`) |
 | Reporting unowned scratchpad and worktree processes (the Firefox case, which no Slotfather class matched) | Straylight's janitor (scratchpads, disk, Docker listing) and lane-stop hook |
 
 Later, once agents launch through spawnfather (tracked in a Slotfather issue): Slotfather can drop its `dev-server`

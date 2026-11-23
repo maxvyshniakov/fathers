@@ -6,6 +6,20 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 
 ### Added
 
+- A lane can own its worktree and folders (fathers#171). `spawnfather own-resource --owner lane:PROJECT/ID --kind
+  worktree|dir --id PATH` owns a lane's worktree, scratch or build directory with no TTL: neither the sweep nor an
+  owner's end removes it, only `spawnfather reap --owner lane:PROJECT/ID`, a person's reap, or the folder going away.
+  Owning it again for the same lane succeeds; two projects with the same lane id never cross. The new `dir` kind
+  refuses `/`, the home folder, Spawnfather's state, symbolic links and any folder holding a Git repository or
+  worktree.
+- `reap` takes the requester's evidence for worktrees and folders: `--base REF` (work merged into a branch that is
+  not promoted yet), `--disposable PATTERN` (ignored files that may go), `--override REASON` (lifts the guards about
+  the work, never the ones that protect other work or Spawnfather itself; the stop event records the reason and what
+  it lifted) and `--stop-inside` (first stops the leftover processes working inside, never a terminal's, an agent
+  session's or anything below a live session). `reap --worktree PATH` removes a worktree no one owns through the
+  same guards. `hand --owner lane:A --kind worktree --to lane:B` hands a lane's worktree to its fix lane.
+  `capabilities --json` names this contract as `lifetimes`.
+
 - A subagent's background Bash commands are owned on their own (fathers#166). `install.py --mastack` registers,
   through Mastack's lifecycle rewriters, `junkfather hook` for `run_in_background` Bash calls, with the permission
   rule `Bash(<bin>/junkfather background:*)` for the one line it puts before the agent's command; that line adopts
@@ -93,6 +107,11 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
   checkout.
 
 ### Fixed
+
+- A worktree whose disposable build output sat in an otherwise empty folder (`desktop/node_modules/`) was kept as
+  holding ignored files; only the ignored paths themselves count now.
+- A worktree with submodules is refused with a clear reason instead of a failed `git worktree remove`, and a dead
+  agent's worktree lock no longer keeps a worktree.
 
 - Processes belonging to an entry currently being reaped are now treated as owned during `junkfather sweep` and
   skipped as already reaping by `junkfather reap --pid` instead of being reported as unowned; `junkfather reap

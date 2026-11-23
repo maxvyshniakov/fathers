@@ -173,6 +173,17 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
 
 ### Changed
 
+- Spawnfather now removes what a lane owns (fathers#171). `start`, `adopt` and the fix-lane hand-over register the
+  lane's worktree, scratch and build directories with Spawnfather; `done`, `drop` and `gc` ask it to stop what was
+  left running there and remove them, and register a lane started before the upgrade on the spot. Lanefather's
+  refusals stay as they were. A landed lane is removed although its integration branch is not promoted yet; an
+  ignored file outside `[gc] disposable` (an `.env`) now keeps the worktree until `--force-reason`.
+- Without Spawnfather (or with one too old) `done`, interactive too, and `drop` refuse with exit 3 and say how to
+  install it, and `gc` keeps every worktree; no override lifts that.
+- `[done] stop_inside = true` has Spawnfather stop the processes a lane left behind before the removal. `[hooks]
+  process_scan` is deprecated: it is no longer loaded, and while it is set without `[done] stop_inside` it turns
+  stopping on with a warning.
+
 - `land` holds for unmarked P1/P2 findings from other finished reviews in this repository. It prints each
   finding's mark commands and the fix-round path, reports P3 findings as warnings and logs `--force-reason`
   overrides. A fix lane can pass its own valid parents. `list` ends with the pending review summary (fathers#177).

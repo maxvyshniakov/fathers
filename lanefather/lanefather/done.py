@@ -1,5 +1,8 @@
-"""Finishing a landed lane: stop what it left running in its worktree (#661), then remove the worktree, its branches,
-its build directories, its scratch and the shared cache partitions built from it.
+"""Finishing a landed lane: Spawnfather stops what it left running in its worktree (#661) and removes the worktree,
+its build directories and its scratch (fathers#171: the lane owns them through Spawnfather, lifetimes.py); done
+then removes its branches and the shared cache partitions built from it. Lanefather keeps its refusals (not landed,
+commits not in the integration branch, a fix lane sharing the worktree, the agent's lock, kept lanes); without
+Spawnfather nothing is removed and done refuses (exit 3).
 
 A lane whose agent still locks its worktree is released instead. It no longer counts toward the lane cap or holds
 claims; done finishes it once the agent exits.
@@ -26,15 +29,15 @@ from . import (
     host,
     journal,
     lifecycle,
+    lifetimes,
     postmerge,
-    procs,
     registry,
     review_record,
     state,
     tickets,
     worktrees,
 )
-from .errors import LaneError
+from .errors import LaneError, LaneRefused
 from .gitops import dirty, git, git_ok, main_checkout, worktree_lock
 from .state import Record
 
@@ -380,86 +383,107 @@ def removal_paths(record: Record) -> list[str]:
             if p and os.path.exists(p)]
 
 
-def holders(record: Record, store: state.Store, scanner: Any, main: str, *, unattended: bool, verb: str = "done",
-            ) -> tuple[list[str], list[Any], str | None]:
-    """What keeps done or drop from removing the lane: another lane in its worktree (a fix lane), no process source
-    while unattended, an agent's lock, and processes the source does not take for left behind in the worktree, the
-    build directories or the scratch. The refusals, what the source would stop in the worktree, and the lock."""
+def evidence(store: state.Store, bases: list[str], override: str | None) -> lifetimes.Evidence:
+    """What done and drop vouch for to Spawnfather: the commits the lane's work is in (`bases`: the integration tip
+    for done, the base for drop), the ignored files that may go (`[gc] disposable`), a --force-reason, and whether
+    to stop what still works inside (`[done] stop_inside`)."""
+    return lifetimes.Evidence(bases=tuple(b for b in bases if b), disposable=store.project.gc_disposable,
+                              override=override, stop_inside=lifetimes.stop_inside(store.project))
+
+
+def on_demand(spawnfather: lifetimes.Spawnfather, record: Record, *, clean_stale_base: bool = True) -> list[str]:
+    """Register what the lane record names before a removal (a lane from before the upgrade, a registration that
+    failed): a fix lane first takes its parent's worktree over. One line per path Spawnfather refused."""
+    if clean_stale_base:
+        parent = state.hand_over_parent(record)
+        if parent is not None:
+            spawnfather.hand(lifetimes.owner({**record, "id": parent}), lifetimes.owner(record), "worktree")
+        # The base checkouts a killed red check left in the scratch (#568) are Lanefather's own throwaway worktrees:
+        # they go through git first, as base_checkout removes them (a folder holding a worktree is never Spawnfather's).
+        scratch = [str(p) for p in record.get("scratch", []) if p]
+        common = record.get("common_dir")
+        if scratch and os.path.isdir(scratch[0]) and isinstance(common, str) and os.path.isdir(common):
+            for stale in sorted(Path(scratch[0]).glob("base-*")):
+                worktrees.remove_checkout(main_checkout(common), stale)
+    return lifetimes.register(spawnfather, record)
+
+
+def holders(record: Record, store: state.Store, spawnfather: lifetimes.Spawnfather, main: str,
+            proof: lifetimes.Evidence, *, verb: str = "done",
+            clean_stale_base: bool = True) -> tuple[list[str], list[str], str | None]:
+    """What keeps done or drop from removing the lane: another lane in its worktree (a fix lane), an agent's lock,
+    and whatever Spawnfather would keep (a process it does not stop, ignored files, work not in the bases), asked
+    as a dry run after registering what the record names. Returns (overridable_refusals, hard_refusals, lock)."""
     lane_id, prog = record["id"], store.project.command
     worktree = record.get("worktree")
     refusals: list[str] = []
+    hard_refusals: list[str] = []
     # A fix lane works in its parent's worktree (review --fix-lane): it keeps the worktree while not done.
     sharing = [r["id"] for r in store.lanes() if r["id"] != lane_id and not lifecycle.finished(r)
                and worktree and r.get("worktree") == worktree]
     if sharing:
         refusals.append(f"lane {', '.join(sharing)} works in {worktree} too")
-    if unattended and isinstance(scanner, procs.NoSource):
-        refusals.append("no process source answers (slotfather procs is missing or too old, and no [hooks] "
-                        f"process_scan): unattended done needs one; {prog} done {lane_id} removes it as before")
     lock: str | None = None
-    leftover: list[Any] = []
     if worktree and os.path.isdir(worktree):
         lock = worktree_lock(main, worktree)
         if lock is not None:
             refusals.append(f"an agent still holds {worktree} (locked: {lock}); run {prog} {verb} {lane_id} "
                             "once it exits")
-        # #661: what the process source takes for left behind there stops first; any other process, or no
-        # answer, holds the worktree.
-        leftover, held = scanner.sort_for_removal(worktree)
-        refusals += [f"{reason}; it works in {worktree}" for reason in held]
-    # The build directories and scratch go too: whatever works there holds them (fathers#157 review).
-    for path in removal_paths(record):
-        if path == worktree:
-            continue
-        stopping, held = scanner.sort_for_removal(path)
-        refusals += [f"{reason}; it works in {path}" for reason in held]
-        refusals += [f"{process.describe()} works in {path}" for process in stopping]
-    return refusals, leftover, lock
+    unowned = [f"Spawnfather does not own {problem}"
+               for problem in on_demand(spawnfather, record, clean_stale_base=clean_stale_base)]
+    hard_refusals += unowned
+    planned = spawnfather.reap(lifetimes.owner(record), proof, dry_run=True, reason=f"lanefather {verb} {lane_id}")
+    kept = [f"Spawnfather keeps {k}" for k in planned.kept
+            if not (lock is not None and f"locked: {lock}" in k)]
+    # When proof already carries an override, anything Spawnfather still keeps is an un-overridable integrity guard.
+    if proof.override:
+        hard_refusals += kept
+    else:
+        refusals += kept
+    return refusals, hard_refusals, lock
 
 
-def remove(record: Record, store: state.Store, scanner: Any, main: str, leftover: list[Any], lock: str | None, *,
-           verb: str, holding: str | None, overridden: bool = False) -> tuple[int, list[str]]:
-    """Stop what the lane left behind, then remove its worktree, branches, build directories, scratch and the shared
-    cache partitions built from it: the bytes freed and what went. The agent's harness branch goes only when
-    `holding` (the integration tip for done, the base for drop) holds it. `overridden`: a --force-reason took
-    the lane, so a process still in the worktree does not keep it."""
+def remove(record: Record, store: state.Store, spawnfather: lifetimes.Spawnfather, main: str, proof: lifetimes.Evidence,
+           *, verb: str, holding: str | None) -> tuple[int, list[str]]:
+    """Have Spawnfather stop what the lane left behind and remove its worktree, build directories and scratch, then
+    remove its branches and the shared cache partitions built from it: the bytes freed and what went. The agent's
+    harness branch goes only when `holding` (the integration tip for done, the base for drop) holds it. A reap
+    Spawnfather refuses leaves the lane as it was (done again retries: what went stays gone)."""
     lane_id, project = record["id"], store.project
     worktree = record.get("worktree")
     freed, removed = 0, list[str]()
-    if leftover and worktree:
-        # The source stops only what it took for left behind, then reads the worktree again: whatever still works
-        # there keeps the worktree, as tools/lane done and the janitor do since #661's review (fail closed).
-        left = scanner.stop(leftover, worktree)
-        for process in leftover:
-            journal.ledger(f"{verb} {lane_id}: {procs.source_name(scanner)} stopped {process.describe()} in "
-                           f"{worktree}", kind="process.stopped", lane=record,
-                           details={"source": procs.source_name(scanner), "process": process.describe(),
-                                    "worktree": worktree}, directory=store.directory, project=project)
-            removed.append(f"stopped {process.describe()}")
-        if left and not overridden:
-            raise LaneError(f"{verb} refused: {procs.source_name(scanner)} stopped what it took for left behind in "
-                            f"{worktree}, but it is still in use:\n- " + "\n- ".join(p.describe() for p in left))
-    if worktree and os.path.isdir(worktree):
-        freed += worktrees.size(worktree)
-        # A second --force removes a locked worktree, which only an override reaches.
-        git(main, "worktree", "remove", "--force", *(["--force"] if lock is not None else []), worktree)
-        removed.append(worktree)
-    git(main, "worktree", "prune")
+    scratch = [str(p) for p in record.get("scratch", []) if p]
     harness = f"worktree-{os.path.basename(worktree)}" if worktree else None
-    for branch in (record["branch"], harness):
-        if not branch or not git_ok(main, "rev-parse", "--verify", "--quiet", "refs/heads/" + branch):
+    branches = [b for b in (record["branch"], harness)
+                if b and git_ok(main, "rev-parse", "--verify", "--quiet", "refs/heads/" + b)]
+    unowned = on_demand(spawnfather, record, clean_stale_base=True)
+    if unowned:
+        raise LaneError(f"{verb} refused: Spawnfather does not own what the lane holds:\n- "
+                        + "\n- ".join(unowned))
+    sizes = {path: worktrees.size(path) for _, path in lifetimes.lane_paths(record)}
+    reaped = spawnfather.reap(lifetimes.owner(record), proof, dry_run=False, reason=f"lanefather {verb} {lane_id}")
+    for process in reaped.stopped:
+        journal.ledger(f"{verb} {lane_id}: Spawnfather stopped {process} in {worktree}", kind="process.stopped",
+                       lane=record, details={"source": "spawnfather", "process": process, "worktree": worktree},
+                       directory=store.directory, project=project)
+        removed.append(f"stopped {process}")
+    if reaped.kept:
+        raise LaneError(f"{verb} refused: Spawnfather kept what the lane holds:\n- " + "\n- ".join(reaped.kept))
+    for path in reaped.removed:
+        freed += sizes.get(path, 0)
+        removed.append(path)
+    git(main, "worktree", "prune")
+    for branch in branches:
+        if not git_ok(main, "rev-parse", "--verify", "--quiet", "refs/heads/" + branch):
+            removed.append(f"branch {branch}")  # Spawnfather took it with its worktree: merged
             continue
         if branch == harness and (not holding or not git_ok(main, "merge-base", "--is-ancestor", branch, holding)):
             continue
         git(main, "branch", "-D", branch)
         removed.append(f"branch {branch}")
     protected = [main, str(Path.home()), str(store.directory.resolve())]
-    for path in [*record.get("cargo_targets", []), *record.get("scratch", [])]:
-        if os.path.exists(path):
-            freed += worktrees.remove_tree(path, protected)
-            removed.append(path)
     # The lane's worktree, and the base checkouts a red check classified in, under its scratch (#568).
-    checkouts = [path for path in (worktree, *record.get("scratch", [])[:1]) if path]
+    checkouts = [path for path in (worktree, *scratch[:1]) if path]
     for partition in worktrees.shared_partitions(*checkouts, project=project) if checkouts else []:
         with open(str(partition) + ".lock", "a") as handle:
             try:
@@ -482,8 +506,8 @@ class FinishPlan:
 
     record: Record
     main: str
-    scanner: Any
-    leftover: list[Any]
+    spawnfather: lifetimes.Spawnfather
+    proof: lifetimes.Evidence
     lock: str | None
     integration: str | None
     cleared: dict[str, Any] | None
@@ -496,7 +520,8 @@ def finish_refusals(
     """Check status, smoke, review, integration and holders under the `state` lock.
 
     Returns None when `unattended` sees the lane is already done; raises `LaneError` on refusals unless
-    `force_reason` overrides them; otherwise returns a `FinishPlan` for `cleanup` to execute outside the lock.
+    `force_reason` overrides them, and `LaneRefused` (exit 3, no override) without Spawnfather; otherwise returns a
+    `FinishPlan` for `cleanup` to execute outside the lock.
     """
     project = store.project
     prog = project.command
@@ -535,19 +560,28 @@ def finish_refusals(
         if (integration and tip and lifecycle.awaiting_done(record)
                 and not git_ok(integration, "merge-base", "--is-ancestor", tip, "HEAD")):
             refusals.append(f"{record['branch']} has commits that are not in {integration}")
-        scanner = procs.source(project)
+        spawnfather = lifetimes.client()
+        if spawnfather is None:
+            raise LaneRefused(f"done {lane_id} refused: {lifetimes.INSTALL_HINT}; nothing was removed")
         if worktree and os.path.isdir(worktree):
             if dirty(worktree):
                 refusals.append(f"{worktree} has uncommitted changes")
             head = git(worktree, "rev-parse", "--verify", "--quiet", "HEAD", check=False)
             if integration and head and not git_ok(integration, "merge-base", "--is-ancestor", head, "HEAD"):
                 refusals.append(f"{worktree} is at {head[:10]}, with commits that are not in {integration}")
-        held, leftover, lock = holders(record, store, scanner, main, unattended=unattended)
+        holding = git(integration, "rev-parse", "HEAD", check=False) if integration else None
+        proof = evidence(store, [holding] if holding else [], force_reason)
+        held, hard_refusals, lock = holders(
+            record, store, spawnfather, main, proof, clean_stale_base=not refusals or bool(force_reason)
+        )
         refusals += held
+        if hard_refusals:
+            raise LaneError("done refused (not landed or not safe to remove):\n- "
+                            + "\n- ".join(refusals + hard_refusals))
         if refusals and not force_reason:
             raise LaneError("done refused (not landed or not safe to remove):\n- " + "\n- ".join(refusals))
         return FinishPlan(
-            record=record, main=main, scanner=scanner, leftover=leftover,
+            record=record, main=main, spawnfather=spawnfather, proof=proof,
             lock=lock, integration=integration, cleared=cleared, refusals=refusals,
         )
 
@@ -569,8 +603,7 @@ def cleanup(plan: FinishPlan, force_reason: str | None, store: state.Store) -> t
                        details={"command": "done", "reason": force_reason, "refusals": refusals},
                        directory=store.directory, project=store.project)
     holding = git(plan.integration, "rev-parse", "HEAD") if plan.integration else None
-    return remove(record, store, plan.scanner, plan.main, plan.leftover, plan.lock, verb="done", holding=holding,
-                  overridden=bool(force_reason))
+    return remove(record, store, plan.spawnfather, plan.main, plan.proof, verb="done", holding=holding)
 
 
 def finish(lane_id: str, force_reason: str | None, store: state.Store, *,
@@ -621,7 +654,7 @@ def drop(args: Any, store: state.Store) -> int:
     """`drop ID` (fathers#167): remove a planned or active lane that adds nothing to its base, with done's cleanup
     and refusals for what still works there. Nothing it removes can be lost, so it takes no --force-reason: a
     lane with commits beyond its base, a worktree HEAD that has some, or uncommitted or untracked changes refuse."""
-    project, prog, lane_id = store.project, store.prog, args.id
+    prog, lane_id = store.prog, args.id
     with store.locked("state"):
         record = store.load(lane_id)
         if lifecycle.awaiting_done(record):
@@ -638,13 +671,21 @@ def drop(args: Any, store: state.Store) -> int:
             bases.append((f"its start {str(record['base_sha'])[:10]}", str(record["base_sha"])))
         if not bases:
             raise LaneError(f"drop refused: lane {lane_id}'s base {record.get('base')} is not in {main}")
+        spawnfather = lifetimes.client()
+        if spawnfather is None:
+            raise LaneRefused(f"drop {lane_id} refused: {lifetimes.INSTALL_HINT}; nothing was removed")
         refusals: list[str] = []
         whys: list[str] = []
+        # What Spawnfather may take as merged: the base, and a commit that adds nothing to it (a revert, an empty
+        # tree change), which drop vouches for.
+        vouched = [base for _, base in bases]
         worktree = record.get("worktree")
         tip = git(main, "rev-parse", "--verify", "--quiet", "refs/heads/" + record["branch"], check=False)
         if tip:
             empty, why = nothing_added(main, tip, bases)
             (whys if empty else refusals).append(why if empty else f"{record['branch']} {why}")
+            if empty:
+                vouched.append(tip)
         if worktree and os.path.isdir(worktree):
             changes = git(worktree, "status", "--porcelain", "--untracked-files=all").splitlines()
             if changes:
@@ -656,15 +697,19 @@ def drop(args: Any, store: state.Store) -> int:
                 empty, why = nothing_added(main, head, bases)
                 if not empty:
                     refusals.append(f"{worktree} is at {head[:10]}, which {why}")
-        scanner = procs.source(project)
-        held, leftover, lock = holders(record, store, scanner, main, unattended=False, verb="drop")
-        refusals += held
+                else:
+                    vouched.append(head)
+        proof = evidence(store, vouched, None)
+        held, hard_refusals, _ = holders(
+            record, store, spawnfather, main, proof, verb="drop", clean_stale_base=not refusals
+        )
+        refusals += held + hard_refusals
         if refusals:
             raise LaneError("drop refused (the lane holds work, or something still uses it):\n- "
                             + "\n- ".join(refusals) + f"\nLand it with {prog} land {lane_id}, or revert its "
                             "commits on the lane first; drop removes only a lane that adds nothing")
         why = whys[0] if whys else "no branch and no commits"
-        freed, removed = remove(record, store, scanner, main, leftover, lock, verb="drop", holding=bases[0][1])
+        freed, removed = remove(record, store, spawnfather, main, proof, verb="drop", holding=bases[0][1])
         now = journal.now()
         lifecycle.transition(
             store, lane_id, "drop",

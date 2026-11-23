@@ -182,8 +182,12 @@ def capabilities(store: Store) -> Dict[str, Any]:
     changelog = _release.changelog_path()
     if os.path.isfile(changelog):
         dashboard["changelog"] = changelog
+    # What a requester that owns lifetimes through Spawnfather negotiates (Lanefather, fathers#171).
+    lifetimes = {"v": 1, "owners": ["lane"], "kinds": ["worktree", "dir"],
+                 "reap": ["owner", "worktree", "base", "disposable", "override", "stop-inside"],
+                 "hand": ["owner", "kind"]}
     return {"v": 1, "tool": "spawnfather", "version": __version__, "commit": _release.commit().strip(" ()"),
-            "dashboard": dashboard}
+            "dashboard": dashboard, "lifetimes": lifetimes}
 
 
 # For people (without --json)

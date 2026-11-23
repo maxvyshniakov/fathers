@@ -469,4 +469,4 @@ def main(argv: list[str] | None = None) -> int:
         return args.run(args, state.Store(loaded_cfg))
     except LaneError as error:
         print(f"lane: {error}", file=sys.stderr)
-        return 1
+        return error.code

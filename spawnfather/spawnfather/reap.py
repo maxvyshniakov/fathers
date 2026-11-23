@@ -33,6 +33,7 @@ from typing import Any, Callable, Dict, List, NamedTuple, Optional, Set, Tuple
 from . import browser as _browser
 from . import entry as _entry
 from . import events as _events
+from . import owner as _owner
 from . import procs as _procs
 from . import safety as _safety
 from . import settings as _settings
@@ -246,7 +247,8 @@ Stopper = Callable[[List[_procs.Proc], float], Dict[str, Any]]  # stop(), or a t
 
 
 class ReapOutcome(NamedTuple):
-    """What one target's teardown produced, for `_claim_and_finish` to record and emit."""
+    """What one target's teardown produced, for `_claim_and_finish` to record and emit; `extra` joins its result
+    row (a resource's {kind, id}, what --stop-inside stopped)."""
     result: str
     how: str
     pids: List[int]
@@ -254,6 +256,7 @@ class ReapOutcome(NamedTuple):
     error: Dict[str, Any]
     reason: str
     emit: Callable[[bool], None]
+    extra: Dict[str, Any] = {}
 
 
 class Target(NamedTuple):
@@ -269,14 +272,27 @@ def require_owner(owner: str, agent: Optional[str] = None, *, lifecycle: Optiona
 
 
 def require_lane(lane: str) -> _entry.Guard:
-    """A `begin_reap` guard requiring `entry` to still belong to `lane`."""
-    return lambda e: None if (e.get("owner") or {}).get("lane") == lane else "owner changed"
+    """A `begin_reap` guard requiring `entry` to still belong to `lane` (tagged, not a lane-owned entry)."""
+    return lambda e: None if (
+        (e.get("owner") or {}).get("lane") == lane and (e.get("owner") or {}).get("kind") != "lane"
+    ) else "owner changed"
+
+
+def require_lane_owner(lane: Dict[str, Any], held: Optional[List[str]] = None) -> _entry.Guard:
+    """A `begin_reap` guard requiring `entry` to still be the lane owner's, or tagged with that lane
+    (`matches_lane_owner`; `held`: the lane's worktrees as selected)."""
+    return lambda e: None if matches_lane_owner(e, lane, held or []) else "owner changed"
 
 
 def selector_guard(*, owner: Optional[str] = None, agent: Optional[str] = None, lane: Optional[str] = None,
                    lifecycle: Optional[Lifecycle] = None, expired: bool = False, now: _entry.Clock = None,
-                   allowed: Optional[_entry.Guard] = None) -> Optional[_entry.Guard]:
-    """The lock-time guard for a reap selector: owner, lane, expiry, and any extra `allowed` guard."""
+                   allowed: Optional[_entry.Guard] = None, held: Optional[List[str]] = None
+                   ) -> Optional[_entry.Guard]:
+    """The lock-time guard for a reap selector: owner, lane, expiry, and any extra `allowed` guard. `held`: with a
+    lane owner, the lane's worktrees as selected (`lane_worktrees`)."""
+    if owner and _owner.is_lane_owner(owner):
+        return _entry.all_of(require_lane_owner(_owner.lane_owner(owner), held),
+                             _entry.require_due(now) if expired else None, allowed)
     return _entry.all_of(
         require_owner(owner, agent, lifecycle=lifecycle) if owner else None,
         require_lane(lane) if lane else None,
@@ -359,7 +375,7 @@ def _claim_and_finish(store: Store, entry: Entry, reason: str, table: Optional[_
     if done or report_failure:
         outcome.emit(done)
     return {"id": entry_id, "result": outcome.result, "reason": outcome.reason,
-            "pids": outcome.pids, "how": outcome.how}
+            "pids": outcome.pids, "how": outcome.how, **outcome.extra}
 
 
 def reap(store: Store, entry_id: str, reason: str, grace: Optional[float] = None, dry_run: bool = False,
@@ -367,14 +383,16 @@ def reap(store: Store, entry_id: str, reason: str, grace: Optional[float] = None
          actor: Optional[Dict[str, Any]] = None, reader: Optional[Callable[[], _procs.Table]] = None,
          report_failure: bool = True, *, lifecycle: Optional[Lifecycle] = None,
          owner: Optional[str] = None, agent: Optional[str] = None,
-         allowed: Optional[_entry.Guard] = None) -> Dict[str, Any]:
+         allowed: Optional[_entry.Guard] = None, evidence: Optional[Dict[str, Any]] = None,
+         stopping: bool = False) -> Dict[str, Any]:
     """End one running entry. Returns {"id", "result", "reason", "pids", "how"}; result "skipped" when the entry
     is not running (someone else reaped it, it exited, it is still starting) or the guard no longer holds,
     "would-stop" in a dry run. `table` serves the first read only; every later round reads the machine again
     (`reader`). `report_failure` False: a failure is recorded on the entry (`last_error`) but writes no
     `entry.reap_failed` / `resource.stop_failed` event (a retry in a streak). When `owner` (with optional `agent`
     and `lifecycle`) is given, `selector_guard` composes it with `allowed` under the store lock so a concurrent
-    handoff skips the reap (fathers#189, fathers#217)."""
+    handoff skips the reap (fathers#189, fathers#217). `evidence` ({bases, disposable, override}) and `stopping`
+    (--stop-inside) go to a worktree or dir resource's removal (fathers#171)."""
     reader = reader or _procs.Table.read
     grace = _settings.value("reap.grace", store.root) if grace is None else grace
     stopper = stopper or stop
@@ -395,7 +413,8 @@ def reap(store: Store, entry_id: str, reason: str, grace: Optional[float] = None
             except _procs.ProcError:
                 table = _procs.Table({})
         from . import resources
-        target = resources.reap_target(store, entry, reason, grace, actor, table, lifecycle=lifecycle)
+        target = resources.reap_target(store, entry, reason, grace, actor, table, lifecycle=lifecycle,
+                                       evidence=evidence, stopping=stopping)
     else:
         try:
             table = table or reader()
@@ -473,10 +492,15 @@ def select(store: Store, ids: List[str], owner: Optional[str], agent: Optional[s
                             "reason": f"already {entry.get('state')}" if entry else "no such entry", "pids": [],
                             "how": ""})
         return [e for e in running if e["id"] in ids], missing
+    if owner and _owner.is_lane_owner(owner):
+        wanted = _owner.lane_owner(owner)
+        held = lane_worktrees(running, wanted)
+        return sorted([e for e in running if matches_lane_owner(e, wanted, held)], key=removal_order), missing
     if owner:
         return [e for e in running if matches_owner(e, owner, agent, lifecycle=lifecycle)], missing
-    if lane:
-        return [e for e in running if (e.get("owner") or {}).get("lane") == lane], missing
+    if lane:  # a bare lane id: never a lane owner's entries, which only their project and id name
+        return [e for e in running if (e.get("owner") or {}).get("lane") == lane
+                and (e.get("owner") or {}).get("kind") != "lane"], missing
     assert table is not None
     selected = [e for e in running if e.get("mode") != "resource" and pid in {p.pid for p in members(e, table)[0]}]
     for entry in entries:
@@ -485,6 +509,37 @@ def select(store: Store, ids: List[str], owner: Optional[str], agent: Optional[s
             missing.append({"id": entry["id"], "result": "skipped", "reason": f"already {_entry.REAPING}",
                             "pids": [], "how": ""})
     return selected, missing
+
+
+def matches_lane_owner(entry: Entry, lane: Dict[str, Any], held: List[str]) -> bool:
+    """`reap --owner lane:<project>/<id>`: the lane owner's own entries (project and id both), and an agent's or a
+    shell's entries tagged with that lane: of the same project, or of none and started inside one of the lane's
+    worktrees (`held`). A bare lane id never selects another project's lane (fathers#171)."""
+    who = entry.get("owner") or {}
+    if who.get("kind") == "lane":
+        return _owner.same_lane(who, lane)
+    if who.get("lane") != lane.get("lane"):
+        return False
+    if who.get("lane_project"):
+        return who.get("lane_project") == lane.get("lane_project")
+    cwd = os.path.realpath(str(entry.get("cwd") or "/"))
+    return any(cwd == path or cwd.startswith(path.rstrip("/") + "/") for path in held)
+
+
+def lane_worktrees(entries: List[Entry], lane: Dict[str, Any]) -> List[str]:
+    """The worktrees the lane owner holds."""
+    return [str((e.get("resource") or {}).get("id")) for e in entries if e.get("mode") == "resource"
+            and (e.get("resource") or {}).get("kind") == "worktree" and _owner.same_lane(e.get("owner") or {}, lane)]
+
+
+def removal_order(entry: Entry) -> Tuple[int, int, str]:
+    """A lane's reap ends its processes first, then other resources, then its worktrees, then its folders, the
+    deepest path of each first (a scratch folder may hold a worktree's build output, never the reverse)."""
+    resource = entry.get("resource") or {}
+    kind = resource.get("kind") if entry.get("mode") == "resource" else None
+    rank = {None: 0, "worktree": 2, "dir": 3}.get(kind, 1)
+    path = str(resource.get("id") or "")
+    return rank, -path.count("/"), path
 
 
 def results_text(results: List[Dict[str, Any]]) -> str:

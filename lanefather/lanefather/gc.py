@@ -9,9 +9,11 @@ branch, clean, idle and unused is enough. Any other candidate is a session workt
 it is kept unless its HEAD reached origin/dev or origin/main, it has a commit of its own, and it holds no ignored
 file outside [gc] disposable. No candidate that holds another worktree or Git repository is removed.
 
-One Project value owns the configuration, state snapshot and process source for this pass. Git and slotfather's
-project adapter supply observations; cleanup policy lives here, rather than in a project's janitor. Project build
-caches and scratchpads are outside this module: [gc] after_remove runs only after a worktree was actually removed.
+One Project value owns the configuration and state snapshot for this pass. The policy lives here; the removal is
+Spawnfather's (fathers#171): `spawnfather reap --worktree PATH`, with the merge targets as --base and [gc]
+disposable as --disposable, checks its own guards (processes inside, a lock, ignored files, work not merged) again
+and removes the worktree, unlocking a dead agent's lock first. Without Spawnfather every candidate is kept. Project
+build caches and scratchpads are outside this module: [gc] after_remove runs only after a worktree was removed.
 """
 from __future__ import annotations
 
@@ -26,7 +28,7 @@ import subprocess
 import time
 from typing import Any, cast
 
-from . import config, lifecycle, procs, state, worktrees
+from . import config, lifecycle, lifetimes, state, worktrees
 from .errors import LaneError
 from .gitops import common_dir, git, git_ok, main_checkout, worktree_list
 
@@ -36,6 +38,10 @@ AGENT_DIRS = ("agent-*", "lane-*")
 AGENT_BRANCHES = ("worktree-agent-*", "lane/*")
 # A HEAD reflog entry that records work done in the worktree, not a checkout or reset.
 OWN_WORK = ("commit", "merge", "cherry-pick", "rebase", "pull", "revert", "am")
+
+
+class Kept(Exception):
+    """Spawnfather keeps a candidate: its guard's reason."""
 
 
 @dataclass
@@ -57,7 +63,8 @@ class Project:
         self._invoked_from = os.path.realpath(os.getcwd())
         self._settings = settings
         self._store = state.Store(settings)
-        self._processes = procs.source(settings)
+        self._spawnfather = lifetimes.client()
+        self._proof: lifetimes.Evidence | None = None
 
     def run(self, dry_run: bool = False) -> Result:
         result = Result()
@@ -68,6 +75,8 @@ class Project:
             if not targets:
                 result.kept.append({"path": self._root, "reason": "no merge target refs"})
                 return result
+            self._proof = lifetimes.Evidence(bases=tuple(targets), disposable=self._settings.gc_disposable,
+                                             stop_inside=lifetimes.stop_inside(self._settings))
             records = [r for r in self._store.lanes(strict=True) if not lifecycle.finished(r)]
             entries = worktree_list(self._root)
             removed: set[str] = set()
@@ -89,6 +98,9 @@ class Project:
                 assert current is not None
                 try:
                     self._remove(current, targets, dry_run, result)
+                except Kept as kept:
+                    result.kept.append({"path": path, "reason": f"Spawnfather keeps it: {kept}"})
+                    continue
                 except (LaneError, OSError) as error:
                     result.errors.append(f"{path}: {error}")
                     continue
@@ -156,14 +168,13 @@ class Project:
         nested = _nested_repository(path)
         if nested:
             return f"it holds a Git repository at {nested}"
-        if isinstance(self._processes, procs.NoSource):
-            return "no process source; worktree use is unknown"
-        _, held = self._processes.sort_for_removal(path)
-        return "in use by " + "; ".join(held[:3]) if held else None
+        if self._spawnfather is None:
+            return f"{lifetimes.INSTALL_HINT}; worktree use is unknown"
+        return None
 
     def _ignored(self, path: str) -> list[str]:
         """The ignored paths in the worktree that no [gc] disposable pattern names a component of."""
-        found = git(path, "--no-optional-locks", "status", "--porcelain", "--ignored")
+        found = git(path, "--no-optional-locks", "status", "--porcelain", "--ignored=matching")
         return [line[3:] for line in found.splitlines() if line.startswith("!! ")
                 and not any(fnmatch.fnmatchcase(part, p) for part in line[3:].rstrip("/").split("/")
                             for p in self._settings.gc_disposable)]
@@ -183,35 +194,18 @@ class Project:
         return any(fnmatch.fnmatchcase(branch, p) for p in self._settings.gc_branches)
 
     def _remove(self, entry: dict[str, str], targets: list[str], dry_run: bool, result: Result) -> None:
+        """Spawnfather's guarded removal (or its dry run) of one candidate _keep let through; what it keeps is kept,
+        with its reason."""
+        del targets
         path = entry["path"]
-        left, held = self._processes.sort_for_removal(path)
-        if held:
-            raise LaneError("in use by " + "; ".join(held))
+        assert self._spawnfather is not None and self._proof is not None
         size = worktrees.size(path)
-        if not dry_run:
-            if left:
-                remaining = self._processes.stop(left, path)
-                if remaining:
-                    raise LaneError("still in use after process cleanup: "
-                                    + "; ".join(p.describe() for p in remaining))
-            # Termination handlers can change HEAD, ownership or the retention lock. Re-run the entire policy
-            # after stopping, rather than duplicating selected predicates from _keep.
-            current = next((w for w in worktree_list(self._root) if w["path"] == path), None)
-            records = [r for r in self._store.lanes(strict=True) if not lifecycle.finished(r)]
-            reason = self._keep(current, targets, records) if current else "worktree disappeared"
-            if reason:
-                raise LaneError(f"retained after process cleanup: {reason}")
-            further, held = self._processes.sort_for_removal(path)
-            if further or held:
-                raise LaneError("still in use after process cleanup: "
-                                + "; ".join([p.describe() for p in further] + held))
-            assert current is not None
-            entry = current
-            if entry.get("locked") is not None:
-                git(self._root, "worktree", "unlock", path)
-            git(self._root, "worktree", "remove", path)
+        reaped = self._spawnfather.remove_worktree(path, self._proof, dry_run=dry_run, reason="lanefather gc")
+        if reaped.kept:
+            raise Kept("; ".join(k.removeprefix(f"{path}: ").removeprefix("kept: ") for k in reaped.kept))
+        left = reaped.stopped
         result.removed.append({"kind": "worktree", "path": path, "branch": entry.get("branch"), "bytes": size,
-                               "stopped": [p.describe() for p in left]})
+                               "stopped": left})
         result.freed += size
         hook = self._settings.gc_after_remove
         if not dry_run and hook:

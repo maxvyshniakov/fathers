@@ -116,13 +116,26 @@ setting](#machine-settings) `host.min_disk_gb` sets the floor instead (fathers#1
 warns and the setting or the derived floor applies. A refusal names what set the floor, for example `the floor of 150
 GB (10^9; lanefather settings host.min_disk_gb)`.
 
-None of these skips a refusal of `done`: an uncommitted change, an agent's lock, a process the source does not take
-for left behind or cannot see in the worktree, the build directories or the scratch, a branch or a worktree HEAD
-with commits not in the integration branch, a missing integration worktree, another lane that is not done working in
-the same worktree (a fix lane), or a missing ticket comment leaves the lane where it is. Unattended (auto-done,
-`done --finished`, the repair), `done` also refuses without a process source that answers (a Slotfather with
-`procs`, or `[hooks] process_scan`) and re-reads `keep` under the state lock; `done ID` without a source removes the
-lane as before. A lane or project that cannot be read or finished is reported as refused, and the others go on.
+None of these skips a refusal of `done`: an uncommitted change, an agent's lock, whatever Spawnfather keeps in the
+worktree, the build directories or the scratch (a process working there, ignored files outside `[gc] disposable`),
+a branch or a worktree HEAD with commits not in the integration branch, a missing integration worktree, another lane
+that is not done working in the same worktree (a fix lane), or a missing ticket comment leaves the lane where it is.
+Unattended (auto-done, `done --finished`, the repair), `done` also re-reads `keep` under the state lock. A lane or
+project that cannot be read or finished is reported as refused, and the others go on.
+
+### Spawnfather removes what a lane owns
+
+A lane owns its worktree, its scratch and its build directories through Spawnfather (fathers#171), as the owner
+`lane:<main checkout>/<id>`: `start`, `adopt` and the fix-lane hand-over register them (`spawnfather own-resource`;
+a failure is a warning and a `lane.unregistered` ledger entry), and `done`, `drop` and `gc` register what the lane
+record names again before they ask for a removal, so a lane started before the upgrade is covered. `done` and `drop`
+ask `spawnfather reap --owner lane:...` with the integration tip (done) or the base (drop) as `--base`, `[gc]
+disposable` as `--disposable`, a `--force-reason` as `--override`, and `--stop-inside` when `[done] stop_inside` is
+true: first as a dry run under the state lock, whose refusals join done's, then for real outside it. A reap
+Spawnfather refuses leaves the lane landed; done again retries. `gc` asks `spawnfather reap --worktree PATH` for each
+candidate its policy lets through. Without a Spawnfather that offers lifetimes v1, `done` (interactive too), `drop`
+refuse with exit 3 and `gc` keeps every candidate; no override lifts that. The lane's own throwaway checkouts (a red
+check's base checkout, a review's, the smoke's and the gate's) and the shared cache partitions stay Lanefather's.
 
 ### Routine cleanups without --force-reason
 
@@ -180,8 +193,9 @@ self-contained configuration in the README for a Repo-Kit consumer.
 | `[admission]` `provider` | `legacy` by default; explicit `slotfather` uses the versioned lifetime-admission query, separately from execution jobs. See [rollout contract](../docs/admission.md). |
 | `[admission]` `cap` | this repository's lane cap (fathers#149), a positive whole number. First set wins: `LANEFATHER_CAP`, then `[admission] cap`, then the cap derived from the machine; an invalid `LANEFATHER_CAP` warns and falls back to the next. An exported `LANEFATHER_CAP` overrides every project's cap. The cap counts the planned and active lanes of this repository only; `LANEFATHER_GLOBAL_CAP`, when set, is a ceiling over every project's lanes in the state directory together. A fix lane (`review --fix-lane`) registers outside both (fathers#45); after that it counts like any other lane. |
 | `[done]` `auto` | `true` by default: a lane that becomes finished runs `done` by itself, and start below the disk minimum runs it on finished lanes ([Finishing lanes](#finishing-lanes)) |
+| `[done]` `stop_inside` | `done`, `drop` and `gc` have Spawnfather stop the processes left working in what they remove (no terminal's or agent session's); unset, it follows `[hooks] process_scan` |
 | `[tickets]` | the ticket lifecycle below; every rule is off without it |
-| `[hooks]` `process_scan` | legacy process adapter for live lanes; without it `procs` supplies read-only inspection |
+| `[hooks]` `process_scan` | deprecated (fathers#171): no longer loaded; when set and `[done] stop_inside` is not, it turns `stop_inside` on with a warning |
 | `[hooks.project]` | named project policy scripts run by `project-hook NAME -- ARGS` in the installed interpreter |
 
 ### Slot priorities
@@ -404,7 +418,7 @@ disable external review. Set `LANEFATHER_REVIEW_START=manual` during setup to de
 | `journal`, `events` | the ledger, the machine-wide event log mirroring it, and run logs |
 | `claims`, `queue` | path claims and rule snippets; the ranked queue |
 | `gitops`, `worktrees`, `landing` | git calls; smoke, gate, base and review checkouts; the landing lock |
-| `host`, `slots`, `procs` | the lane cap and load; the slotfather client; the process source |
+| `host`, `slots`, `lifetimes` | the lane cap and load; the slotfather client; the spawnfather client, which owns and removes what a lane holds |
 | `plan`, `checks` | the check contract; verify runs, receipts and red-check classification |
 | `gc` | generic worktree/branch retention and collection, with explicit project/state values |
 | `reviewer` | the reviewer choice (conditions, role, ordered fallback), the single review and the panel as one pipeline, real CLI adapters and interpreted answers |
@@ -500,7 +514,7 @@ absolute path as `dashboard.events.path`. One `journal.ledger` call writes both,
   red post-merge smoke, recheck, gate or perf run and a failed promote step.
 
 Kinds: `lane.started`, `lane.adopted`, `claims.added`, `lane.checked`, `landing.reviewed`, `lane.conflict`,
-`lane.landed`, `lane.post_merge`, `lane.released`, `lane.done_refused`, `lane.done`, `lane.dropped`,
+`lane.landed`, `lane.post_merge`, `lane.released`, `lane.done_refused`, `lane.unregistered`, `lane.done`, `lane.dropped`,
 `lane.rechecked`, `lane.kept`, `process.stopped`,
 `review.started`, `review.kept`, `review.exempted`, `review.finished`, `finding.marked`, `review.marked`,
 `review.handed_over`, `review.ticket_filed`, `gate.finished`, `perf.finished`, `promote.step`, `promote.finished`,

@@ -1,0 +1,162 @@
+#!/usr/bin/env python3
+"""A stand-in for the installed `spawnfather` command (fathers#171), first on PATH in Lanefather's tests, so that no
+test reads the machine's process table or reaches the machine's Spawnfather state. It answers the lifetimes v1
+contract Lanefather uses (lifetimes.py); tests/test_spawnfather_contract.py runs the same flows against the real
+spawnfather of this repository.
+
+  capabilities --json                                    lifetimes v1 (none with FAKE_SPAWNFATHER_OLD set)
+  own-resource --owner lane:P/ID --kind worktree|dir --id PATH [--json]
+                                                         owns PATH for the lane: exit 6 when it does not exist, 3
+                                                         when another owner holds it, 0 when this one does already
+  reap --owner lane:P/ID | --worktree PATH  [--base R]... [--disposable P]... [--override R] [--stop-inside]
+       [--reason TEXT] [--dry-run] --json                the lane's worktrees (deepest first), then its folders:
+                                                         `git worktree remove --force` (twice when locked) and
+                                                         rmtree; a path FAKE_SPAWNFATHER_KEEP matches is kept
+                                                         unless --override; the first one kept stops the reap
+  hand --owner lane:P/A [--kind K] --to lane:P/B [--json]
+
+FAKE_SPAWNFATHER_STATE  the JSON file of owned resources (default: spawnfather.json beside the log)
+FAKE_SPAWNFATHER_LOG    file that gets one JSON line per call: {"args"}
+FAKE_SPAWNFATHER_KEEP   a regular expression on a path: Spawnfather keeps it ("kept: in use by pid 4242 (fake)")
+FAKE_SPAWNFATHER_OLD    set: an older Spawnfather, without lifetimes
+"""
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+
+
+def state_path():
+    if os.environ.get("FAKE_SPAWNFATHER_STATE"):
+        return os.environ["FAKE_SPAWNFATHER_STATE"]
+    log = os.environ.get("FAKE_SPAWNFATHER_LOG") or os.path.join(os.getcwd(), "spawnfather.log")
+    return os.path.join(os.path.dirname(log), "spawnfather.json")
+
+
+def load():
+    try:
+        with open(state_path()) as handle:
+            return json.load(handle)
+    except (OSError, ValueError):
+        return {"entries": []}
+
+
+def save(data):
+    with open(state_path(), "w") as handle:
+        json.dump(data, handle)
+
+
+def option(args, name, many=False):
+    found = [args[i + 1] for i, word in enumerate(args[:-1]) if word == name]
+    return found if many else (found[-1] if found else None)
+
+
+def git(*args):
+    return subprocess.run(["git", *args], capture_output=True, text=True)
+
+
+def remove(entry, override):
+    path = entry["id"]
+    if not os.path.lexists(path):
+        return "gone", ""
+    keep = os.environ.get("FAKE_SPAWNFATHER_KEEP")
+    if keep and re.search(keep, path) and not override:
+        return "failed", "kept: in use by pid 4242 (fake)"
+    if entry["kind"] == "worktree":
+        listed = git("-C", path, "worktree", "list", "--porcelain").stdout
+        main = listed.split("\n", 1)[0].removeprefix("worktree ")
+        block = next((b for b in listed.split("\n\n") if b.startswith(f"worktree {path}\n")), "")
+        force = ["--force", "--force"] if "\nlocked" in block else ["--force"]
+        ran = git("-C", main, "worktree", "remove", *force, path)
+        if ran.returncode:
+            return "failed", ran.stderr.strip()
+    else:
+        shutil.rmtree(path)
+    return "stopped", ""
+
+
+def row(entry, result, reason):
+    return {"id": entry.get("entry", "x"), "result": result, "reason": reason, "pids": [],
+            "how": f"{entry['kind']} {entry['id']}", "resource": {"kind": entry["kind"], "id": entry["id"]}}
+
+
+def main(args):
+    log = os.environ.get("FAKE_SPAWNFATHER_LOG")
+    if log:
+        with open(log, "a") as handle:
+            handle.write(json.dumps({"args": args}) + "\n")
+    command = args[0] if args else ""
+    if command == "capabilities":
+        found = {"v": 1, "tool": "spawnfather", "version": "fake"}
+        if not os.environ.get("FAKE_SPAWNFATHER_OLD"):
+            found["lifetimes"] = {"v": 1, "owners": ["lane"], "kinds": ["worktree", "dir"]}
+        print(json.dumps(found))
+        return 0
+    data = load()
+    if command == "own-resource":
+        owner, kind, given = option(args, "--owner"), option(args, "--kind"), option(args, "--id")
+        if not (owner or "").startswith("lane:") or kind not in ("worktree", "dir") or not given:
+            print("spawnfather: own-resource: usage", file=sys.stderr)
+            return 2
+        path = os.path.realpath(given)
+        if not os.path.isdir(path):
+            print(f"spawnfather: refusing {given}: no folder {path}", file=sys.stderr)
+            return 6
+        held = next((e for e in data["entries"] if e["id"] == path and e["kind"] == kind), None)
+        already = held is not None
+        if held is not None and held["owner"] != owner:
+            print(f"spawnfather: refusing {kind} {path}: already owned by {held['entry']}", file=sys.stderr)
+            return 3
+        if held is None:
+            held = {"entry": f"j{len(data['entries']):06x}", "owner": owner, "kind": kind, "id": path}
+            data["entries"].append(held)
+            save(data)
+        print(json.dumps({"v": 1, "id": held["entry"], "already": already}))
+        return 0
+    if command == "hand":
+        source, target, kind = option(args, "--owner"), option(args, "--to"), option(args, "--kind")
+        handed = []
+        for entry in data["entries"]:
+            if entry["owner"] == source and (not kind or entry["kind"] == kind):
+                entry["owner"] = target
+                handed.append(entry["entry"])
+        save(data)
+        print(json.dumps({"v": 1, "handed": handed}))
+        return 0
+    if command == "reap":
+        dry, override = "--dry-run" in args, option(args, "--override")
+        if option(args, "--worktree"):
+            path = os.path.realpath(option(args, "--worktree"))
+            chosen = [{"entry": "worktree", "kind": "worktree", "id": path}]
+        else:
+            owner = option(args, "--owner")
+            chosen = sorted((e for e in data["entries"] if e["owner"] == owner),
+                            key=lambda e: (e["kind"] != "worktree", -e["id"].count("/")))
+        results = []
+        for entry in chosen:
+            if dry:
+                keep = os.environ.get("FAKE_SPAWNFATHER_KEEP")
+                if not os.path.lexists(entry["id"]):
+                    results.append(row(entry, "gone", "reap"))
+                elif keep and re.search(keep, entry["id"]) and not override:
+                    results.append(row(entry, "would-fail", "reap; kept: in use by pid 4242 (fake)"))
+                else:
+                    results.append(row(entry, "would-stop", "reap"))
+                continue
+            result, why = remove(entry, override)
+            results.append(row(entry, result, f"reap; {why}" if why else "reap"))
+            if result == "failed":
+                break
+            data["entries"] = [e for e in data["entries"] if e is not entry]
+        if not dry:
+            save(data)
+        print(json.dumps({"v": 1, "results": results}))
+        return 1 if any(r["result"] == "failed" for r in results) else 0
+    print(f"spawnfather: unknown command {command!r}", file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

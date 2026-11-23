@@ -18,6 +18,7 @@ import contextlib
 import json
 import os
 import pathlib
+import shlex
 import shutil
 import subprocess
 import sys
@@ -32,6 +33,7 @@ import unittest.mock
 # The repository root: lanefather's package is importable from it.
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 FIXTURES = ROOT / "tests" / "fixtures"
+SPAWNFATHER = ROOT.parent / "spawnfather"  # this repository's, for the tests that run the real one (fathers#171)
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
@@ -92,9 +94,6 @@ FIXTURE_CONFIG = textwrap.dedent("""\
     name = "deploy"
     argv = ["tools/straylight-link/deploy.sh", "{host}"]
     env = { STRAYLIGHT_LINK_PACKAGE = "{package}" }
-
-    [hooks]
-    process_scan = "tools/process_scan.py"
     """)
 
 FAKE_VERIFY = r'''#!/usr/bin/env python3
@@ -585,62 +584,6 @@ def project(repo: pathlib.Path) -> Iterator[Any]:
 _TEMPLATE: list[pathlib.Path] = []
 
 
-FAKE_PROCESS_SCAN = f'''"""Test stand-in for tools/process_scan.py (fathers#209).
-
-Returns an empty process table by default so unit tests do not run host-wide lsof + ps on every
-worktree candidate. Set FIXTURE_REAL_PROCESS_SCAN=1 (LaneCase.use_real_process_scan) to delegate
-to the frozen real scanner in tests/fixtures/process_scan.py.
-"""
-import importlib.machinery
-import importlib.util
-import os
-
-_REAL_PATH = {str(FIXTURES / "process_scan.py")!r}
-_REAL = None
-
-
-def _real():
-    global _REAL
-    if _REAL is None:
-        loader = importlib.machinery.SourceFileLoader("lanefather_fixture_real_process_scan", _REAL_PATH)
-        spec = importlib.util.spec_from_loader(loader.name, loader)
-        assert spec is not None
-        module = importlib.util.module_from_spec(spec)
-        loader.exec_module(module)
-        _REAL = module
-    return _REAL
-
-
-ScanError = _real().ScanError
-
-
-def table(deadline=None):
-    if os.environ.get("FIXTURE_REAL_PROCESS_SCAN") == "1":
-        return _real().table(deadline)
-    return {{}}
-
-
-def in_worktree(root, processes):
-    return _real().in_worktree(root, processes)
-
-
-def inside(path, root):
-    return _real().inside(path, root)
-
-
-def sort_for_removal(root, processes=None):
-    if processes is None and os.environ.get("FIXTURE_REAL_PROCESS_SCAN") != "1":
-        return [], []
-    return _real().sort_for_removal(root, processes)
-
-
-def stop(items, root=None):
-    if not items:
-        return []
-    return _real().stop(items, root)
-'''
-
-
 def template_repository() -> pathlib.Path:
     """The fixture repository with its base commit, built once per test process; each test copies it (fathers#95)."""
     if _TEMPLATE:
@@ -664,9 +607,6 @@ def template_repository() -> pathlib.Path:
         path.write_text(text)
     (repo / "verify.sh").write_text(FAKE_VERIFY)
     (repo / "verify.sh").chmod(0o755)
-    # Fast stand-in for tools/process_scan.py (fathers#209): skips host-wide lsof + ps unless a test opts in
-    # with LaneCase.use_real_process_scan() (FIXTURE_REAL_PROCESS_SCAN=1), which delegates to fixtures/process_scan.py.
-    (repo / "tools" / "process_scan.py").write_text(FAKE_PROCESS_SCAN)
     # The real stamp tooling, which verify.py runs after a green full gate.
     for name in ("tools/verified-tree.sh", "tools/verified-tree-ledger.py"):
         shutil.copy2(FIXTURES / pathlib.Path(name).name, repo / name)
@@ -777,10 +717,11 @@ class ScratchCase(unittest.TestCase):
         self.events = self.tmp / "machine" / "events.jsonl"
         (self.tmp / "bin").mkdir()
         shutil.copy2(FIXTURES / "slotfather", self.tmp / "bin" / "slotfather")
+        shutil.copy2(FIXTURES / "spawnfather", self.tmp / "bin" / "spawnfather")
         self.env: dict[str, str] = {
             k: v for k, v in os.environ.items()
             if not k.startswith(("STRAYLIGHT_", "LANEFATHER_", "SLOTFATHER_", "GIT_", "FIXTURE_",
-                                 "ANTIGRAVITY_", "AGY_", "T3_", "CLAUDE_", "CODEX_"))
+                                 "ANTIGRAVITY_", "AGY_", "T3_", "CLAUDE_", "CODEX_", "SPAWNFATHER_", "FAKE_"))
             and k not in ("CODEX_CLI_PATH", "PYTHONPATH", "ANTHROPIC_MODEL", "AGENT_TRANSCRIPT_PATH",
                           "THOUGHT_LEVEL")
             and not k.startswith("MASTACK_")
@@ -799,6 +740,7 @@ class ScratchCase(unittest.TestCase):
             LANEFATHER_MEMORY_GB="20",
             SLOTFATHER_LOADAVG="0.1",
             FAKE_SLOTFATHER_LOG=str(self.tmp / "slotfather.log"),
+            FAKE_SPAWNFATHER_LOG=str(self.tmp / "spawnfather.log"),
         )
 
     def write(self, base: Any, name: str, text: str) -> pathlib.Path:
@@ -844,14 +786,18 @@ class LaneCase(unittest.TestCase):
             stub = self.tmp / "bin" / name
             stub.write_text(text)
             stub.chmod(0o755)
-        # The stand-in slotfather (#619): no test reaches the machine's queue; it reports 4 free slots.
+        # The stand-in slotfather (#619): no test reaches the machine's queue; it reports 4 free slots. The stand-in
+        # spawnfather (fathers#171) owns and removes the lanes' worktrees and folders without reading the process
+        # table; test_spawnfather_contract.py runs the real one.
         shutil.copy2(FIXTURES / "slotfather", self.tmp / "bin" / "slotfather")
+        shutil.copy2(FIXTURES / "spawnfather", self.tmp / "bin" / "spawnfather")
         (self.tmp / "codex-home").mkdir()
         self.review_text = self.tmp / "review.md"
         self.review_text.write_text(NO_FINDINGS)
         self.env = {k: v for k, v in os.environ.items()
                     if not k.startswith(("STRAYLIGHT_", "LANEFATHER_", "SLOTFATHER_", "GIT_", "FIXTURE_",
-                                         "ANTIGRAVITY_", "AGY_", "T3_", "CLAUDE_", "CODEX_"))
+                                         "ANTIGRAVITY_", "AGY_", "T3_", "CLAUDE_", "CODEX_", "SPAWNFATHER_",
+                                         "FAKE_"))
                     and k not in ("CODEX_CLI_PATH", "PYTHONPATH", "ANTHROPIC_MODEL", "AGENT_TRANSCRIPT_PATH",
                                   "THOUGHT_LEVEL")
                     and not k.startswith("MASTACK_")}
@@ -873,7 +819,8 @@ class LaneCase(unittest.TestCase):
                         LANEFATHER_GH=str(gh), LANEFATHER_BUILD_CACHE=str(self.cache),
                         FIXTURE_VERIFY_LOG=str(self.verify_log), FAKE_GH_COMMENTS=str(self.comments),
                         FAKE_GH_LOG=str(self.tmp / "gh.log"), SLOTFATHER_LOADAVG="0.1",
-                        FAKE_SLOTFATHER_LOG=str(self.tmp / "slotfather.log"))
+                        FAKE_SLOTFATHER_LOG=str(self.tmp / "slotfather.log"),
+                        FAKE_SPAWNFATHER_LOG=str(self.tmp / "spawnfather.log"))
         # The base repository is built once per test process and copied for each test (fathers#95): a copy is a
         # fraction of git init, the fixture files and a commit.
         shutil.copytree(template_repository(), self.repo, symlinks=True)
@@ -882,9 +829,23 @@ class LaneCase(unittest.TestCase):
 
     # Helpers
 
-    def use_real_process_scan(self) -> None:
-        """Opt this test into the real lsof + ps process_scan fixture (fathers#209)."""
-        self.env["FIXTURE_REAL_PROCESS_SCAN"] = "1"
+    def use_real_spawnfather(self) -> pathlib.Path:
+        """Put this repository's own spawnfather first on PATH in place of the stand-in (fathers#171), with its state
+        in scratch and no repositories to sweep; returns its state directory."""
+        state_dir = self.tmp / "spawnfather-state"
+        program = self.tmp / "bin" / "spawnfather"
+        program.unlink(missing_ok=True)
+        program.write_text(f"#!/bin/sh\nPYTHONPATH={shlex.quote(str(SPAWNFATHER))} exec "
+                           f"{shlex.quote(sys.executable)} -m spawnfather \"$@\"\n")
+        program.chmod(0o755)
+        self.env.update(SPAWNFATHER_STATE=str(state_dir), SPAWNFATHER_REPOS="",
+                        SPAWNFATHER_CLAUDE_SESSIONS=str(self.tmp / "no-claude-sessions"))
+        return state_dir
+
+    def spawnfather_calls(self) -> list[list[str]]:
+        """The stand-in spawnfather's calls (their arguments), oldest first."""
+        log = self.tmp / "spawnfather.log"
+        return [json.loads(line)["args"] for line in log.read_text().splitlines()] if log.exists() else []
 
     def git(self, cwd: Any, *args: str) -> str:
         return subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True).stdout.strip()

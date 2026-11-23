@@ -6,13 +6,11 @@ import json
 import os
 import pathlib
 import shutil
-import subprocess
-import sys
 from typing import Any
 import unittest
 import unittest.mock
 
-from support import TWO_FINDINGS, LaneCase, ScratchCase, close_process, project, template_repository
+from support import TWO_FINDINGS, LaneCase, ScratchCase, project, run_in_process, template_repository
 
 
 class DiskFloorUnitTests(ScratchCase):
@@ -211,17 +209,20 @@ class FinishedLaneTests(LaneCase):
 
     # Review of fathers#157 (P1): fail closed.
 
-    def test_unattended_done_needs_a_process_source_while_done_id_keeps_todays_behaviour(self):
-        configured = self.repo / "no-hook.toml"
-        configured.write_text((self.integration / ".lanefather.toml").read_text()
-                              .replace('process_scan = "tools/process_scan.py"', ""))
-        self.env["LANEFATHER_CONFIG"] = str(configured)
+    def test_unattended_and_interactive_done_both_need_spawnfather(self):
+        # fathers#171, decision 1: without Spawnfather nothing removes the lane, so every done refuses (exit 3).
+        stand_in = self.tmp / "bin" / "spawnfather"
+        stand_in.rename(self.tmp / "spawnfather.off")
         worktree = self.agent_lane("a", "lib/a.txt")
         self.lane("land", "a")
-        self.assertIn("no process source answers", self.lane("review", "a"))
+        self.assertIn("python3 install.py spawnfather", self.lane("review", "a"))
         self.assertTrue(worktree.exists())
         self.assertIn("1 refused", self.lane("done", "--finished"))
         self.assertTrue(worktree.exists())
+        code, output = run_in_process(["done", "a"], self.integration, self.env)
+        self.assertEqual((3, True), (code, "Spawnfather is not installed" in output), output)
+        self.assertTrue(worktree.exists())
+        (self.tmp / "spawnfather.off").rename(stand_in)
         self.lane("done", "a")
         self.assert_removed("a", worktree)
 
@@ -262,20 +263,14 @@ class FinishedLaneTests(LaneCase):
         self.assert_removed("a", worktree)
         self.assertEqual(self.record("n")["status"], "planned")
 
-    def test_a_process_in_the_scratch_or_build_directory_holds_the_lane(self):
-        self.use_real_process_scan()
+    def test_what_spawnfather_keeps_in_the_scratch_holds_the_lane(self):
+        # A process in the scratch or a build directory holds it too (fathers#157 review); Spawnfather decides
+        # (test_spawnfather_contract.py runs a real one).
         worktree = self.landed_unfinished("a", "lib/a.txt")
         scratch = pathlib.Path(self.record("a")["scratch"][0])
-        child = subprocess.Popen([sys.executable, "-c", "import time; print('ready', flush=True); time.sleep(300)",
-                                  "scratch-holder"], cwd=scratch, stdout=subprocess.PIPE, text=True,
-                                 start_new_session=True)
-
-        self.addCleanup(close_process, child)
-        assert child.stdout is not None
-        self.assertEqual(child.stdout.readline().strip(), "ready")
+        self.env["FAKE_SPAWNFATHER_KEEP"] = r"a\.scratch$"
         output = self.lane("done", "a", ok=False)
-        self.assertIn(f"pid {child.pid}", output)
-        self.assertIn(f"it works in {scratch}", output)
+        self.assertIn(f"Spawnfather keeps {scratch.resolve()}: kept: in use by pid 4242", output)
         self.assertTrue(worktree.exists())
         self.assertTrue(scratch.exists())
 

@@ -55,6 +55,28 @@
      "tag": "spwn",
      "v": 1
     },
+    "lifetimes": {
+     "hand": [
+      "owner",
+      "kind"
+     ],
+     "kinds": [
+      "worktree",
+      "dir"
+     ],
+     "owners": [
+      "lane"
+     ],
+     "reap": [
+      "owner",
+      "worktree",
+      "base",
+      "disposable",
+      "override",
+      "stop-inside"
+     ],
+     "v": 1
+    },
     "tool": "spawnfather",
     "v": 1,
     "version": "0.1.0"

@@ -1,5 +1,5 @@
 """Tests of a project's seams (lanefather.config) and the seams to other tools: slotfather (lanefather.slots), the
-process source (lanefather.procs) and the review role of models.toml (lanefather.review)."""
+[done] stop_inside (lanefather.lifetimes) and the review role of models.toml (lanefather.review)."""
 from __future__ import annotations
 
 import ast
@@ -14,7 +14,7 @@ import unittest.mock
 
 from support import FIXTURE_CONFIG, ROOT
 
-from lanefather import config, procs, promote, reviewer, slots, state, verify
+from lanefather import config, lifetimes, promote, reviewer, slots, state, verify
 from lanefather.errors import LaneError
 
 
@@ -317,21 +317,16 @@ class SeamTests(ConfigCase):
             with self.assertRaisesRegex(ValueError, "request field"):
                 slots.clean_meta({key: "normal"})
 
-    def test_without_a_process_source_nothing_is_scanned(self):
-        # With neither a project hook nor the machine-wide CLI, legacy done keeps its original behavior.
-        cfg = self.use("")
-        with unittest.mock.patch.object(slots, "command", return_value=None):
-            source = procs.source(cfg)
-        self.assertIsInstance(source, procs.NoSource)
-        self.assertEqual(source.sort_for_removal(str(self.tmp)), ([], []))
-
-    def test_the_process_source_is_the_projects_hook(self):
-        (self.tmp / "tools").mkdir()
-        (self.tmp / "tools" / "scan.py").write_text(
-            "def sort_for_removal(root):\n    return [], ['held by the hook']\n\n"
-            "def stop(processes, root):\n    return []\n")
-        cfg = self.use('[hooks]\nprocess_scan = "tools/scan.py"\n')
-        self.assertEqual(procs.source(cfg).sort_for_removal("/x"), ([], ["held by the hook"]))
+    def test_done_stop_inside_is_a_boolean_and_the_old_process_scan_hook_asks_for_it(self):
+        # fathers#171: Spawnfather stops what a lane left; [hooks] process_scan, which did, is deprecated.
+        self.assertFalse(lifetimes.stop_inside(self.use("")))
+        self.assertTrue(lifetimes.stop_inside(self.use("[done]\nstop_inside = true\n")))
+        self.assertFalse(lifetimes.stop_inside(self.use('[done]\nstop_inside = false\n[hooks]\nprocess_scan = "x.py"\n')))
+        with unittest.mock.patch("sys.stderr") as stderr:
+            self.assertTrue(lifetimes.stop_inside(self.use('[hooks]\nprocess_scan = "tools/scan.py"\n')))
+        self.assertIn("[hooks] process_scan is deprecated", "".join(c.args[0] for c in stderr.write.call_args_list))
+        with self.assertRaisesRegex(LaneError, r"\[done\] stop_inside must be a boolean"):
+            self.use('[done]\nstop_inside = "yes"\n')
 
     def test_the_review_models_come_from_the_review_role_of_models_toml(self):
         cfg = self.use("")

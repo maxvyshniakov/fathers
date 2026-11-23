@@ -50,6 +50,8 @@ KINDS: dict[str, str] = {
     "lane.post_merge": "the post-merge smoke finished (error when red)",
     "lane.released": "a green smoke freed the lane while its agent still holds the worktree",
     "lane.done_refused": "done did not run by itself on a finished lane (warn)",
+    "lane.unregistered": "start, adopt or a fix lane's hand-over could not register the lane's paths with Spawnfather "
+                         "(warn)",
     "lane.kept": "keep, or keep --off, changed whether auto-done leaves the lane",
     "lane.done": "done removed the lane's worktree, branches and scratch",
     "lane.dropped": "drop removed a lane that added nothing to its base",

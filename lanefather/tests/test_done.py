@@ -3,14 +3,10 @@ from __future__ import annotations
 
 import json
 import pathlib
-import signal
-import subprocess
-import sys
-import time
-from typing import Any
+import shutil
 import unittest
 
-from support import TWO_FINDINGS, LaneCase
+from support import FIXTURES, TWO_FINDINGS, LaneCase, run_in_process
 
 
 class DoneTests(LaneCase):
@@ -57,64 +53,72 @@ class DoneTests(LaneCase):
         self.assertIn("issue view 404", (self.tmp / "gh.log").read_text())
         self.start("next", "lib/**")
 
-    def process_in(self, cwd: Any, name: str, ignore_term: bool = False) -> subprocess.Popen[bytes]:
-        """A process of this test's own whose command line shows `name`; it runs until stopped."""
-        handler = "import signal; signal.signal(signal.SIGTERM, signal.SIG_IGN); " if ignore_term else ""
-        child = subprocess.Popen([sys.executable, "-c", handler + "import time; time.sleep(300)", name], cwd=cwd,
-                                 start_new_session=True)
-        self.addCleanup(lambda: (child.kill(), child.wait()))
-        deadline = time.monotonic() + 30
-        while name not in subprocess.run(["ps", "-o", "command=", "-p", str(child.pid)], capture_output=True,
-                                         text=True).stdout:
-            self.assertLess(time.monotonic(), deadline, "the process did not start")
-            time.sleep(0.05)
-        return child
-
-    def test_done_stops_through_slotfather_sweep_what_the_lane_left_in_its_worktree(self):
-        # #661: a verify outlived the lane that started it, holding memory for a day.
-        self.use_real_process_scan()
-        worktree, *_ = self.landed_agent_lane()
-        left = self.process_in(worktree / "desktop", "orphan-661")
-        self.env["FAKE_SLOTFATHER_SWEEP_STOP"] = "orphan-661"
-        output = self.lane("done", "d")
-        self.assertIn(f"stopped pid {left.pid} ", output)
-        self.assertEqual(left.wait(timeout=10), -signal.SIGTERM)
+    def test_done_asks_spawnfather_to_reap_what_the_lane_owns_with_its_evidence(self):
+        # fathers#171: the lane's worktree, build directory and scratch are Spawnfather's to remove, owner
+        # lane:<main checkout>/<id>; done vouches for the integration tip and the disposable build output.
+        worktree, record, cargo, *_ = self.landed_agent_lane()
+        self.lane("done", "d")
+        owner = f"lane:{self.repo.resolve()}/d"
+        calls = self.spawnfather_calls()
+        owned = {(c[c.index("--kind") + 1], c[c.index("--id") + 1]) for c in calls if c[0] == "own-resource"}
+        self.assertIn(("worktree", str(worktree.resolve())), owned)
+        self.assertIn(("dir", str(cargo.resolve())), owned)
+        self.assertIn(("dir", str(pathlib.Path(record["scratch"][0]).resolve())), owned)
+        self.assertTrue(all(c[c.index("--owner") + 1] == owner for c in calls if c[0] == "own-resource"))
+        reaps = [c for c in calls if c[0] == "reap"]
+        self.assertEqual(["--dry-run" in c for c in reaps], [True, False])
+        tip = self.tip()
+        for call in reaps:
+            self.assertEqual(call[call.index("--owner") + 1], owner)
+            self.assertEqual(call[call.index("--base") + 1], tip)
+            self.assertIn("node_modules", call)
+            self.assertNotIn("--override", call)
+            self.assertNotIn("--stop-inside", call)
         self.assertFalse(worktree.exists())
-        self.assertIn(f"slotfather sweep stopped pid {left.pid}", (self.state / "ledger.log").read_text())
-        sweeps = [json.loads(line) for line in (self.tmp / "slotfather.log").read_text().splitlines()]
-        self.assertIn(["--json", "--live", "--pid", str(left.pid)],
-                      [call["args"] for call in sweeps if call["command"] == "sweep"])
+        self.assertFalse(cargo.exists())
 
-    def test_done_refuses_while_a_process_slotfather_sweep_does_not_stop_works_in_the_worktree(self):
-        # Review of #661: a session, a terminal, a lease or a process of no known kind holds the worktree.
-        self.use_real_process_scan()
+    def test_done_refuses_what_spawnfather_keeps_and_an_override_passes_its_reason(self):
         worktree, *_ = self.landed_agent_lane()
-        held = self.process_in(worktree, "held-661")
-        self.env["FAKE_SLOTFATHER_SWEEP_SPARE"] = "held-661"
+        self.env["FAKE_SPAWNFATHER_KEEP"] = "agent-d1$"
         output = self.lane("done", "d", ok=False)
-        self.assertIn(f"pid {held.pid}", output)
-        self.assertIn("inside the live lease lane-641-other", output)
-        del self.env["FAKE_SLOTFATHER_SWEEP_SPARE"]
-        self.assertIn("slotfather sweep does not take it for left behind", self.lane("done", "d", ok=False))
+        self.assertIn("Spawnfather keeps", output)
+        self.assertIn("in use by pid 4242", output)
         self.assertTrue(worktree.exists())
-        self.assertIsNone(held.poll())
         self.assertEqual(self.record("d")["status"], "landed")
+        self.lane("done", "d", "--force-reason", "the fake holder is a test")
+        reaps = [c for c in self.spawnfather_calls() if c[0] == "reap"]
+        self.assertEqual(reaps[-1][reaps[-1].index("--override") + 1], "the fake holder is a test")
+        self.assertFalse(worktree.exists())
+        self.assertEqual(self.record("d")["status"], "done")
 
-    def test_done_refuses_without_a_verdict_or_when_the_stop_fails(self):
-        # Review of #661: a sweep that fails, or a stop it cannot confirm, keeps the worktree.
-        self.use_real_process_scan()
+    def test_done_without_spawnfather_refuses_with_exit_3_and_the_install_hint(self):
+        # Decision 1 of fathers#171: interactive done fails closed as unattended done does.
         worktree, *_ = self.landed_agent_lane()
-        stubborn = self.process_in(worktree, "orphan-661", ignore_term=True)
-        self.env.update(FAKE_SLOTFATHER_SWEEP_STOP="orphan-661", FAKE_SLOTFATHER_SWEEP_FAIL="queue unreadable")
-        self.assertIn("may be stopped is unknown", self.lane("done", "d", ok=False))
-        del self.env["FAKE_SLOTFATHER_SWEEP_FAIL"]
-        output = self.lane("done", "d", ok=False)
-        self.assertIn("it is still in use", output)
-        self.assertIn(f"pid {stubborn.pid} (", output)
-        self.assertIn("; sweep: failed)", output)
+        (self.tmp / "bin" / "spawnfather").unlink()
+        self.env["LANEFATHER_SPAWNFATHER"] = str(self.tmp / "bin" / "no-spawnfather")
+        for words in (("done", "d"), ("done", "d", "--force-reason", "no override lifts this")):
+            code, output = run_in_process(list(words), self.integration, self.env)
+            self.assertEqual(3, code, output)
+            self.assertIn("python3 install.py spawnfather", output)
         self.assertTrue(worktree.exists())
-        self.assertIsNone(stubborn.poll())
         self.assertEqual(self.record("d")["status"], "landed")
+        shutil.copy2(FIXTURES / "spawnfather", self.tmp / "bin" / "spawnfather")
+        del self.env["LANEFATHER_SPAWNFATHER"]
+        self.env["FAKE_SPAWNFATHER_OLD"] = "1"
+        code, output = run_in_process(["done", "d"], self.integration, self.env)
+        self.assertEqual(3, code, output)
+        self.assertIn("needs lifetimes v1", output)
+
+    def test_done_stops_what_is_left_inside_when_the_project_asks(self):
+        # Decision 2 of fathers#171: [done] stop_inside, and the deprecated [hooks] process_scan, ask Spawnfather to
+        # stop the unowned processes the lane left before it removes anything.
+        worktree, *_ = self.landed_agent_lane()
+        config = self.integration / ".lanefather.toml"
+        config.write_text(config.read_text() + '\n[hooks]\nprocess_scan = "tools/process_scan.py"\n')
+        output = self.lane("done", "d")
+        self.assertIn("[hooks] process_scan is deprecated", output)
+        self.assertTrue(all("--stop-inside" in c for c in self.spawnfather_calls() if c[0] == "reap"))
+        self.assertFalse(worktree.exists())
 
     def test_done_without_a_ticket_comment_is_refused_and_keeps_everything(self):
         worktree, *_ = self.landed_agent_lane()

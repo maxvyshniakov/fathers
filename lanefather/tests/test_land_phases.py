@@ -96,8 +96,8 @@ class LandPhasesTests(LaneCase):
         self.assertEqual(rec["status"], "landed")
         self.assertEqual(rec["landed"]["merge"], merge_sha)
 
-    def test_done_releases_state_lock_across_gh_du_and_rmtree(self) -> None:
-        from lanefather import config, done, state, worktrees
+    def test_done_releases_state_lock_across_gh_du_and_the_removal(self) -> None:
+        from lanefather import config, done, lifetimes, state, worktrees
 
         self.start("d", "lib/**", "--ticket", "404")
         worktree = self.repo / ".claude" / "worktrees" / "agent-d1"
@@ -133,17 +133,19 @@ class LandPhasesTests(LaneCase):
             return None
 
         real_size = worktrees.size
-        real_remove_tree = worktrees.remove_tree
+        real_reap = lifetimes.Spawnfather.reap
 
         def checked_size(path: str) -> int:
             nonlocal size_lock_free
             size_lock_free = can_acquire_state_lock_now()
             return real_size(path)
 
-        def checked_remove_tree(path: str, protected: list[str]) -> int:
+        def checked_reap(spawnfather: lifetimes.Spawnfather, lane: str, proof: lifetimes.Evidence, *, dry_run: bool,
+                         reason: str) -> lifetimes.Reaped:
             nonlocal rmtree_lock_free
-            rmtree_lock_free = can_acquire_state_lock_now()
-            return real_remove_tree(path, protected)
+            if not dry_run:  # the dry run answers done's refusals under the lock; the removal runs outside it
+                rmtree_lock_free = can_acquire_state_lock_now()
+            return real_reap(spawnfather, lane, proof, dry_run=dry_run, reason=reason)
 
         def run_done() -> None:
             try:
@@ -163,7 +165,7 @@ class LandPhasesTests(LaneCase):
 
         with (mock.patch.object(done, "ticket_commented", side_effect=slow_ticket_commented),
               mock.patch.object(worktrees, "size", side_effect=checked_size),
-              mock.patch.object(worktrees, "remove_tree", side_effect=checked_remove_tree)):
+              mock.patch.object(lifetimes.Spawnfather, "reap", autospec=True, side_effect=checked_reap)):
             t_done = threading.Thread(target=run_done)
             t_other = threading.Thread(target=run_other_lane_command)
             t_done.start()
@@ -175,11 +177,11 @@ class LandPhasesTests(LaneCase):
         self.assertEqual(other_errors, [])
         self.assertTrue(other_took_lock.is_set())
         self.assertTrue(size_lock_free, "worktrees.size (du) ran while state lock was held")
-        self.assertTrue(rmtree_lock_free, "worktrees.remove_tree (rmtree) ran while state lock was held")
+        self.assertTrue(rmtree_lock_free, "Spawnfather's reap (the removal) ran while state lock was held")
         self.assertEqual(self.record("d")["status"], "done")
 
     def test_done_crash_during_cleanup_resumes_on_rerun(self) -> None:
-        from lanefather import done, worktrees
+        from lanefather import done, lifetimes
 
         worktree = self.created("d", "lib/**")
         self.commit(worktree, {"lib/api.txt": "foo\ncrash\n"})
@@ -187,7 +189,15 @@ class LandPhasesTests(LaneCase):
         self.lane("land", "d", "--keep")
         store = self._in_process_store()
 
-        with (mock.patch.object(worktrees, "remove_tree", side_effect=RuntimeError("simulated crash during rmtree")),
+        real_reap = lifetimes.Spawnfather.reap
+
+        def crashing_reap(spawnfather: lifetimes.Spawnfather, lane: str, proof: lifetimes.Evidence, *, dry_run: bool,
+                          reason: str) -> lifetimes.Reaped:
+            if not dry_run:
+                raise RuntimeError("simulated crash during the removal")
+            return real_reap(spawnfather, lane, proof, dry_run=dry_run, reason=reason)
+
+        with (mock.patch.object(lifetimes.Spawnfather, "reap", autospec=True, side_effect=crashing_reap),
               self.assertRaises(RuntimeError)):
             done.finish("d", None, store)
 
