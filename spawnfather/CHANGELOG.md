@@ -6,6 +6,15 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 
 ### Added
 
+- The sweep stops what a Claude Code session that has ended left behind (fathers#168). A process in a scratchpad or
+  worktree that no entry owns, which launchd adopted after its shell exited, is stopped with its tree once two things
+  are certain: its environment names the session it came from (`CLAUDE_CODE_SESSION_ID`, read with `ps -E` on macOS
+  and from `/proc` on Linux), and that session is gone (its `SessionEnd` was recorded, or its own process is gone by
+  pid and start time, and Claude Code's session registry names it with no running process). Anything less stays
+  report-only, and the report says why. Nothing inside a Slotfather lease or held by an active entry is ever
+  stopped, nor anything while Slotfather's leases cannot be read, nor an agent-browser daemon. `sweep --json` lists
+  the stops in `stopped_unowned`, each with an `unowned.reaped` event; `sweep --dry-run` shows them as `would-stop`.
+  The `SessionEnd` hook now also records the session's end.
 - A lane can own its worktree and folders (fathers#171). `spawnfather own-resource --owner lane:PROJECT/ID --kind
   worktree|dir --id PATH` owns a lane's worktree, scratch or build directory with no TTL: neither the sweep nor an
   owner's end removes it, only `spawnfather reap --owner lane:PROJECT/ID`, a person's reap, or the folder going away.

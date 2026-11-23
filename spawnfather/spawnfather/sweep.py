@@ -1,5 +1,5 @@
-"""The periodic pass: end owned entries whose TTL passed or whose owner is gone, and report (never stop) unowned
-processes that live in an agent's scratchpad or worktree.
+"""The periodic pass: end owned entries whose TTL passed or whose owner is gone, and report unowned processes that
+live in an agent's scratchpad or worktree, stopping only those of a Claude Code session that is certainly gone.
 
 Owned entries:
 - `expired`  its TTL passed: reaped.
@@ -14,6 +14,8 @@ a terminal, spawnfather and its ancestors, anything below a live agent session (
 at work) and any process whose tree holds a terminal's process or an agent session (a tmux server and its panes).
 A browser or server left behind has been adopted by launchd, so it is reported. Each is reported once per tree, with
 the commands to own or end it; the list goes to unowned.json, which `spawnfather reap --pid PID --force` checks.
+One whose environment ties it to a Claude Code session that is gone, and that no entry or Slotfather lease holds, is
+stopped instead (leftovers.py, fathers#168); anything uncertain stays in the report with the reason.
 
 Resource entries (resources.py) are marked gone when their kind says so, reaped past their TTL or when their owner
 is gone, and left alone while whether they run cannot be told. Booted simulators, running containers and serve
@@ -33,6 +35,7 @@ from . import browser as _browser
 from . import cpu as _cpu
 from . import entry as _entry
 from . import events as _events
+from . import leftovers as _leftovers
 from . import owner as _owner
 from . import procs as _procs
 from . import reap as _reap
@@ -122,13 +125,17 @@ Leases = Callable[[], Tuple[Optional[List[Dict[str, Any]]], str]]
 
 def sweep(store: Store, dry_run: bool = False, table: Optional[_procs.Table] = None,
           cwds: Optional[Dict[int, str]] = None, sessions: Optional[List[Dict[str, Any]]] = None,
-          now: Optional[float] = None, grace: Optional[float] = None, leases: Optional[Leases] = None
+          now: Optional[float] = None, grace: Optional[float] = None, leases: Optional[Leases] = None,
+          environ: Optional[_leftovers.Environments] = None, stopper: Optional[_reap.Stopper] = None
           ) -> Dict[str, Any]:
-    """One pass. `leases` reads Slotfather's queue (cpu.leases, `slotfather status --json`)."""
+    """One pass. `leases` reads Slotfather's queue (cpu.leases, `slotfather status --json`); `environ` reads the
+    unowned processes' session variables (procs.environments) and `stopper` stops those whose session is gone
+    (reap.stop; leftovers.py)."""
     now = time.time() if now is None else now
     grace = _settings.value("reap.grace", store.root) if grace is None else grace
     report: Dict[str, Any] = {"v": VERSION, "at": now, "dry_run": dry_run, "reaped": [], "gone": [], "pruned": 0,
-                              "running": 0, "unowned": [], "unowned_resources": [], "notes": [], "errors": []}
+                              "running": 0, "unowned": [], "stopped_unowned": [], "unowned_resources": [],
+                              "notes": [], "errors": []}
     members_of: Dict[str, Tuple[Optional[str], Sequence[_procs.Proc]]] = {}
     try:
         table = table or _procs.Table.read()
@@ -206,8 +213,17 @@ def sweep(store: Store, dry_run: bool = False, table: Optional[_procs.Table] = N
         cwds = _procs.working_dirs(os.getuid())
         if not cwds:
             report["errors"].append("lsof listed no working directory; paths in commands only")
-    report["unowned"] = unowned(table, cwds, owned, scratch_roots(), agent_sessions(table))
-    report["cpu"], lease_rule = cpu_report(table, cwds, members_of, sessions, leases or _cpu.leases, survey)
+    found_unowned = unowned(table, cwds, owned, scratch_roots(), agent_sessions(table))
+    queue, queue_why = (leases or _cpu.leases)()
+    report["cpu"], lease_rule = cpu_report(table, cwds, members_of, sessions, (queue, queue_why), survey)
+    entry_pids, entry_groups = _leftovers.entry_holds(store, table)
+    holders = _leftovers.Holders(
+        entry_pids | owned, entry_groups,
+        None if queue is None else _leftovers.lease_holds(queue, table, [*lease_rule.claims,
+                                                                         *survey.rule(lease_rule).claims]),
+        queue_why)
+    report["unowned"], report["stopped_unowned"] = _leftovers.stop_gone(
+        store, found_unowned, table, sessions, holders, grace, dry_run, now, environ=environ, stopper=stopper)
     report["agent_browser"] = {"leftovers": _browser.clean(survey, now, dry_run),
                                "idle": survey.idle(owned, lease_rule, now)}
     found, unknown = _resources.unowned(snapshot, _resources.owned_keys(store))
@@ -295,13 +311,14 @@ def sweep_worktrees(store: Store, table: _procs.Table, cwds: Optional[Dict[int, 
 
 def cpu_report(table: _procs.Table, cwds: Dict[int, str],
                members_of: Dict[str, Tuple[Optional[str], Sequence[_procs.Proc]]],
-               sessions: Optional[List[Dict[str, Any]]], leases: Leases, survey: "_browser.Survey"
-               ) -> Tuple[Dict[str, Any], "_cpu.Rule"]:
-    """Whose processes the busy cores belong to (cpu.py): entries, Slotfather leases (and the agent-browser daemons
-    their processes started), agent sessions. Also the lease rule, empty without Slotfather."""
+               sessions: Optional[List[Dict[str, Any]]], leases: Tuple[Optional[List[Dict[str, Any]]], str],
+               survey: "_browser.Survey") -> Tuple[Dict[str, Any], "_cpu.Rule"]:
+    """Whose processes the busy cores belong to (cpu.py): entries, Slotfather leases (`leases`: the queue Leases
+    read, or None and why not; and the agent-browser daemons their processes started), agent sessions. Also the
+    lease rule, empty without Slotfather."""
     notes: List[str] = []
     rules = [_cpu.entry_rule(members_of)]
-    queue, why = leases()
+    queue, why = leases
     lease_rule = _cpu.Rule("lease", {})
     if queue is None:
         notes.append(f"Slotfather leases are left out: {why}")
@@ -371,7 +388,8 @@ def record(store: Store, report: Dict[str, Any]) -> None:
             _events.write(store.root, "unowned.reported", {"type": "process", "id": str(item["pid"]),
                                                            "pid": item["pid"]}, actor,
                           {"cmd": item["cmd"], "cwd": item["cwd"], "root": item["root"], "why": item["why"],
-                           "start": item["start"], "age": item["age"], "also": item.get("also") or []}, "warn")
+                           "start": item["start"], "age": item["age"], "also": item.get("also") or [],
+                           **({"session": item["session"]} if item.get("session") else {})}, "warn")
     for item in report["unowned_resources"]:
         if item["key"] not in seen_resources:
             subject = {"type": "resource", "id": item["key"], "kind": item["kind"]}
@@ -391,7 +409,10 @@ def result_of(report: Dict[str, Any]) -> Dict[str, Any]:
     return {"reaped": [r["id"] for r in report["reaped"] if r["result"] in _reap.STOPPED],
             "failed": [r["id"] for r in report["reaped"] if r["result"] == "failed"],
             "gone": [g["id"] for g in report["gone"]], "running": report["running"],
-            "unowned": len(report["unowned"]), "unowned_resources": len(report.get("unowned_resources") or []),
+            "unowned": len(report["unowned"]),
+            "stopped_unowned": [as_dict(r).get("pid") for r in as_list(report.get("stopped_unowned"))
+                                if as_dict(r).get("result") in _reap.STOPPED],
+            "unowned_resources": len(report.get("unowned_resources") or []),
             "pruned": report["pruned"], "errors": report["errors"], "notes": report.get("notes") or []}
 
 
@@ -415,6 +436,7 @@ def text(report: Dict[str, Any], quiet: bool = False) -> str:
         verb = verbs.get(result["result"], "reaped")  # text, not a state
         lines.append(f"{verb} {result['id']}: "
                      f"{result['reason']} -> {result['result']} (pids {', '.join(map(str, result['pids'])) or '-'})")
+    lines += _leftovers.text(as_list(report.get("stopped_unowned")), bool(report.get("dry_run")))
     for error in report["errors"]:
         lines.append(f"error: {error}")
     if quiet:
@@ -424,6 +446,13 @@ def text(report: Dict[str, Any], quiet: bool = False) -> str:
         under = ""
         also = f", {len(item['also'])} more in its group" if item.get("also") else ""
         lines.append(f"unowned pid {item['pid']} ({age}{under}{also}; {item['why']}): {item['cmd'][:160]}")
+        session = as_dict(item.get("session"))
+        if session:
+            verdict = "is gone" if session.get("gone") is True else "runs" if session.get("gone") is False \
+                else "cannot be told"
+            name = str(session.get("id") or "?")[:8]
+            lines.append(f"  its Claude Code session {name} {verdict} ({session.get('why')})"
+                         + (f"; kept: {session['kept']}" if session.get("kept") else ""))
         lines.append(f"  own it: spawnfather adopt {item['pid']} --ttl 1h   end it: spawnfather reap --pid "
                      f"{item['pid']} --force")
     for item in as_list(report.get("unowned_resources")):

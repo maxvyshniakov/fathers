@@ -45,6 +45,7 @@ BROWSER_LEFTOVER_AGE = 86400.0  # an agent-browser session's files unchanged thi
 BROWSER_DAEMON_IDLE = 3600.0  # an agent-browser daemon no one owns, idle this long, is reported
 BROWSER_IDLE_CPU = 1.0  # under this %cpu (its whole tree) a daemon is idle
 WORKTREE_IDLE = 86400.0  # an unowned worktree unchanged this long (and clean, merged, empty) is removed
+SESSION_END_KEEP = 7 * 86400.0  # the SessionEnd records (leftovers.py) are pruned after this long
 
 # Claims (owner.py)
 CLAIM_WINDOW = 1800.0  # a claim may wait this long for its command (a permission prompt can take a while)

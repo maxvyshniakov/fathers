@@ -37,6 +37,7 @@ _REAL_TABLE_READ = procs.Table.read
 _REAL_IDENTITIES = procs.identities
 _REAL_WORKING_DIRS_OR_NONE = procs.working_dirs_or_none
 _REAL_SOCKETS = browser.sockets
+REAL_ENVIRONMENTS = procs.environments
 
 
 def proc(pid: int, ppid: int = 1, pgid: Optional[int] = None, uid: Optional[int] = None, tty: str = "",
@@ -137,11 +138,13 @@ class Case(unittest.TestCase):
             me: proc(me, ppid=1, pgid=me, start=FAKE_START, cmd="python3"),
         }
         self.fake_cwds: Dict[int, str] = {1: "/", me: "/"}
+        self.fake_envs: Dict[int, Dict[str, List[str]]] = {}  # pid -> the session variables its environment holds
         for patcher in (
             mock.patch.object(procs.Table, "read", side_effect=self._table_read),
             mock.patch.object(procs, "identities", side_effect=self._identities),
             mock.patch.object(procs, "working_dirs_or_none", side_effect=self._working_dirs_or_none),
             mock.patch.object(browser, "sockets", side_effect=self._sockets),
+            mock.patch.object(procs, "environments", side_effect=self._environments),
         ):
             patcher.start()
             self.addCleanup(patcher.stop)
@@ -195,6 +198,16 @@ class Case(unittest.TestCase):
         if self._real_lsof:
             return _REAL_SOCKETS(pids)
         return {}
+
+    def _environments(self, cmds: Mapping[int, str]) -> Dict[int, Optional[Dict[str, List[str]]]]:
+        """A fake process's session variables from `self.fake_envs` (none by default); with real processes, the
+        real read for the others."""
+        found: Dict[int, Optional[Dict[str, List[str]]]] = {
+            pid: dict(self.fake_envs.get(pid) or {}) for pid in cmds if not self._real_procs or pid in self.fake_procs}
+        rest = {pid: cmd for pid, cmd in cmds.items() if pid not in found}
+        if rest:
+            found.update(REAL_ENVIRONMENTS(rest))
+        return found
 
     def kill_children(self) -> None:
         for child in self.children:

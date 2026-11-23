@@ -49,6 +49,7 @@
    "pruned": 0,
    "reaped": [],
    "running": 0,
+   "stopped_unowned": [],
    "unlisted": [],
    "unowned": [],
    "unowned_resources": [],
@@ -111,6 +112,7 @@
    "pruned": 1,
    "reaped": [],
    "running": 0,
+   "stopped_unowned": [],
    "unlisted": [],
    "unowned": [],
    "unowned_resources": [],
@@ -259,6 +261,7 @@
      "pruned": 1,
      "reaped": [],
      "running": 0,
+     "stopped_unowned": [],
      "unowned": 0,
      "unowned_resources": 0
     },
@@ -348,6 +351,7 @@
       "pruned": 1,
       "reaped": [],
       "running": 0,
+      "stopped_unowned": [],
       "unowned": 0,
       "unowned_resources": 0
      },

@@ -4,8 +4,9 @@ sweep's unowned report and its unowned resources (docs/reference.md, Ending an e
 Never touched, nor anything below them: a process with a terminal and an agent session (Claude Code, Codex) are
 `unsafe`; pid 0 and 1, Spawnfather itself and its ancestors are `protected`; another user's process is not ours.
 An unowned process is only reported, and stopped only by `reap --pid --force` when the last sweep listed it and it
-is still that process, or by `reap --pid --started --cmd` when it is still the process the caller names by its
-identity (Slotfather's live sweep, fathers#171); an unowned resource is only ever reported.
+is still that process, by `reap --pid --started --cmd` when it is still the process the caller names by its
+identity (Slotfather's live sweep, fathers#171), or by the sweep when its Claude Code session is certainly gone and
+nothing holds it (leftovers.py, fathers#168); an unowned resource is only ever reported.
 """
 from __future__ import annotations
 

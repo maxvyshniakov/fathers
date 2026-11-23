@@ -6,7 +6,8 @@ event's JSON on stdin; Mastack's hook dispatcher runs this for the events it is 
                 that is not one explicit `spawnfather own`: answer with the command rewritten to own its shell first
                 (background.py), the one thing the hook prints
   SubagentStop  reap the subagent's explicit ownership, except entries kept for the session
-  SessionEnd    reap everything the session owns that was not handed to another session
+  SessionEnd    record that the session ended (leftovers.py: what the sweep may stop of a session that is gone), and
+                reap everything the session owns that was not handed to another session
   Stop          (end of a main-agent turn, not of the session) reap the session's entries whose TTL passed
 
 The hook never blocks and always exits 0, and prints only that answer: a reap that has work to do runs in a detached
@@ -70,6 +71,12 @@ def handle(data: Dict[str, Any], store: Store, spawn: Optional[Callable[[List[st
         if answer is not None:
             (emit or _background.answer)(answer)
         return None
+    if event == _reap.Lifecycle.SESSION_END:
+        from . import leftovers as _leftovers  # here: PreToolUse, on every Bash call, does not need it
+        try:
+            _leftovers.record_end(store, data.get("session_id"), data.get("reason"))
+        except OSError:
+            pass  # the sweep then has one proof less, and keeps that session's processes report-only
     arguments = plan(data, store)
     if arguments:
         from .launch import self_command

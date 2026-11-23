@@ -38,6 +38,7 @@
    "pruned": 0,
    "reaped": [],
    "running": 2,
+   "stopped_unowned": [],
    "unlisted": [
     "docker"
    ],
@@ -390,6 +391,7 @@
      "pruned": 0,
      "reaped": [],
      "running": 2,
+     "stopped_unowned": [],
      "unowned": 3,
      "unowned_resources": 2
     },

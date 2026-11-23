@@ -28,8 +28,12 @@ a running instance, a person's or another suite's, never makes their quit refuse
 
 - Every signal goes to a pid whose start time was read again just before; a reap never uses a group id without a
   verified leader of that group (docs/reference.md, Ending an entry).
-- Nothing spawnfather did not start or adopt is stopped, except `reap --pid --force` on a pid the last sweep listed
-  and `reap --pid --started --cmd` on a pid whose start second and command both still match (fathers#171).
+- Nothing spawnfather did not start or adopt is stopped, except `reap --pid --force` on a pid the last sweep listed,
+  `reap --pid --started --cmd` on a pid whose start second and command both still match (fathers#171), and the
+  sweep's stop of a report item whose environment ties it to a Claude Code session that is certainly gone and that
+  no entry or Slotfather lease holds (`leftovers.py`, fathers#168). Anything that loosens one of its certainties
+  (an uncertain link or liveness taken as an answer, a lease list that could not be read taken as empty) is a
+  review finding.
   The sweep deletes two things no entry owns, both owner-approved: an unowned git worktree that passes every guard
   of `worktrees.plan` (read again right before) and was idle for a day (fathers#112), and an agent-browser session's
   files whose daemon and starting pid are gone and that did not change for a day, checked again right before each

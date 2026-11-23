@@ -67,7 +67,7 @@ Copy this into an agent brief:
 | `reap --pid PID --started EPOCH --cmd CMD [--tree] --reason TEXT` | stops an unowned process by its identity (pid, start second, command), as Slotfather's live sweep asks; the `--force` policy applies |
 | `hand ID --to SESSION\|self` | gives an entry to another session |
 | `extend ID --ttl D` | a new TTL from now |
-| `sweep [--dry-run] [--json] [--quiet]` | reaps expired and orphaned entries, reports unowned agent processes and unowned simulators, containers, serve routes and worktrees |
+| `sweep [--dry-run] [--json] [--quiet]` | reaps expired and orphaned entries, reports unowned agent processes (stopping those of a Claude Code session that is certainly gone) and unowned simulators, containers, serve routes and worktrees |
 | `sweep --plist` | the hourly launchd agent |
 | `hook` | the Claude Code / Codex lifecycle hook (JSON on stdin) |
 | `settings [--json]`, `settings check\|set KEY VALUE`, `settings reset KEY\|--all` | the default TTL, the background-call TTL, the sweep interval and the reap grace, for people and [Godfather](../godfather)'s Settings ([reference](docs/reference.md#settings)) |

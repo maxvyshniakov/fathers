@@ -8,7 +8,9 @@ factor: every decision to signal a process checks the pid, the start time and th
 """
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Tuple
+from pathlib import Path
+import sys
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from fathers_common import proc as _proc
 
@@ -66,6 +68,69 @@ def identities(pids: List[int], command: bool = False) -> Dict[int, Any]:
     if not command:
         return {pid: here.start for pid, here in found.items()}
     return {pid: (here.start, here.cmd) for pid, here in found.items()}
+
+
+LINK_NAMES = ("CLAUDE_CODE_SESSION_ID", "CLAUDE_PID")  # what ties a process to the Claude Code session it came from
+
+
+def environments(cmds: Mapping[int, str], names: Sequence[str] = LINK_NAMES
+                 ) -> Dict[int, Optional[Dict[str, List[str]]]]:
+    """pid -> the values each of `names` has in that process's environment (a name it lacks is left out), for the
+    processes of `cmds` (pid -> its command as the table read it); None for one whose environment cannot be read.
+
+    Linux: /proc/<pid>/environ. macOS: one `ps -E` call, whose line is the command and then the environment as
+    words, so a value holding a space reads as more words and a name counts only at a word's start; a line that
+    does not start with the command the table read (a process that rewrote its arguments, a reused pid) cannot be
+    read. Apple's own programs hide their environment from ps, so theirs reads as empty. Elsewhere none can be read.
+    """
+    if not cmds:
+        return {}
+    if sys.platform.startswith("linux"):
+        return {pid: _proc_environ(pid, cmd, names) for pid, cmd in cmds.items()}
+    if sys.platform != "darwin":
+        return {pid: None for pid in cmds}
+    try:
+        result = _proc.run(["ps", "-E", "-ww", "-o", "pid=,command=", "-p", ",".join(map(str, sorted(cmds)))],
+                           env=_proc.environment("utc"), timeout=PS_TIMEOUT)
+    except ProcError:
+        return {pid: None for pid in cmds}
+    lines: Dict[int, str] = {}
+    for line in result.stdout.splitlines():
+        first, _, rest = line.strip().partition(" ")
+        if first.isdigit():
+            lines[int(first)] = rest.strip()
+    found: Dict[int, Optional[Dict[str, List[str]]]] = {}
+    for pid, cmd in cmds.items():
+        line = lines.get(pid)
+        if line is None or not cmd or not (line == cmd or line.startswith(cmd + " ")):
+            found[pid] = None
+            continue
+        values: Dict[str, List[str]] = {}
+        for word in line[len(cmd):].split(" "):
+            name, equals, value = word.partition("=")
+            if equals and name in names:
+                values.setdefault(name, []).append(value)
+        found[pid] = values
+    return found
+
+
+def _proc_environ(pid: int, cmd: str, names: Sequence[str]) -> Optional[Dict[str, List[str]]]:
+    if not cmd:
+        return None
+    try:
+        raw_cmd = Path(f"/proc/{pid}/cmdline").read_bytes()
+        live_cmd = " ".join(part.decode("utf-8", "replace") for part in raw_cmd.split(b"\0") if part).strip()
+        if live_cmd != cmd:
+            return None
+        data = Path(f"/proc/{pid}/environ").read_bytes()
+    except OSError:
+        return None
+    values: Dict[str, List[str]] = {}
+    for item in data.split(b"\0"):
+        name, equals, value = item.decode("utf-8", "replace").partition("=")
+        if equals and name in names:
+            values.setdefault(name, []).append(value)
+    return values
 
 
 def working_dirs(uid: int) -> Dict[int, str]:

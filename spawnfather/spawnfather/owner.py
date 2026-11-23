@@ -281,7 +281,7 @@ def alive(owner: Owner, table: Optional[_procs.Table],
 
 # Claims
 
-SAFE_NAME = re.compile(r"^[\w.-]{1,128}$")  # a session or tool-use id that may name a claim's file
+SAFE_NAME = re.compile(r"\A[\w.-]{1,128}\Z")  # a session or tool-use id that may name a claim's file
 
 
 def claim_path(store: Store, session: str, tool_use: str) -> Path:

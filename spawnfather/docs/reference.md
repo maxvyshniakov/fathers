@@ -52,9 +52,9 @@ characters. An event follows the change it describes; one that cannot be written
 | `resource.owned` | resource | `own --kind` or `own-resource`; `resource`, `argv`, `cwd`, `ttl`, `keep`; a lane owner's also `owner` (`lane:<project>/<id>`) and `no_ttl` |
 | `resource.stopped` | resource | its stop ran and it is gone (or was gone already); `reason`, `result`, `resource`, `steps`; a lane owner's `owner`; `override: {reason, lifted}` when an override lifted a guard; `stopped` when --stop-inside stopped processes first; also the sweep's and `reap --worktree`'s removal of an unowned worktree (no `entry` in the subject) |
 | `resource.stop_failed` (error) | resource | a stop command failed or timed out, or it still runs; the entry keeps running; `error`, `steps` |
-| `unowned.reported` (warn) | process or resource | a sweep listed it for the first time; a process: `cmd`, `cwd`, `root`, `why`, `start`, `age`; a resource: `kind`, `id`, `name`, `why` |
-| `unowned.reaped` | process | `reap --pid --force` or `reap --pid --started --cmd`; `cmd`, `start`, `result`, `pids`, `reason`; by identity also `started` (epoch seconds) |
-| `sweep.finished` | sweep | `reaped`, `failed`, `gone`, `running`, `unowned`, `pruned`, `errors` |
+| `unowned.reported` (warn) | process or resource | a sweep listed it for the first time; a process: `cmd`, `cwd`, `root`, `why`, `start`, `age`, and `session` when its environment names a Claude Code session (Sweep, A gone session's leftovers); a resource: `kind`, `id`, `name`, `why` |
+| `unowned.reaped` | process | `reap --pid --force`, `reap --pid --started --cmd`, or the sweep stopping a gone session's leftover (actor via `sweep`); `cmd`, `start`, `result`, `pids`, `reason`; by identity also `started` (epoch seconds); from the sweep also `session`, `cwd`, `left` (error level when the stop failed) |
+| `sweep.finished` | sweep | `reaped`, `failed`, `gone`, `running`, `unowned`, `stopped_unowned` (the pids of the leftovers it stopped), `pruned`, `errors` |
 | `hook.failed` (error) | hook | the hook hit an error and let the event pass; `error` |
 
 The subject of an entry is `{"type": "entry", "id", "label", "pid"}`; of a resource `{"type": "resource", "id":
@@ -156,7 +156,8 @@ Slotfather's "another user's queue" (fathers#118) and is not used here.
   kind below it, not protected, no entry holding it: exit 3 otherwise). No sweep need have listed it: Slotfather's
   `sweep --live` decides which leftovers go, under its leases, and asks this call to stop them. A pid that runs
   another process, or none, is `gone` (exit 0); `--tree` takes its descendants too (less any unsafe one with its
-  subtree); `--dry-run` shows `would-stop`.
+  subtree); `--dry-run` shows `would-stop`. And the sweep's stop of an unowned process whose Claude Code session is
+  certainly gone, which no entry or Slotfather lease holds (Sweep, A gone session's leftovers, fathers#168).
 - **Another entry's**: an entry holds a process directly (its leader, a known member, a daemon, its supervisor),
   through its leader's group, or below one of those. An adopted entry (`adopt`, a background call's shell) leaves
   out of its reap what another active entry holds more firmly, or as firmly and is newer: an attached `spawnfather
@@ -288,7 +289,7 @@ Codex one when the registry never named it) and ends at its TTL or when swept as
 | `PreToolUse` (Bash, command names spawnfather) | writes a claim |
 | `PreToolUse` (Bash, `run_in_background`, not one explicit `spawnfather own`/`own-resource`/`adopt`) | writes a claim and answers with the command rewritten to own its shell (Background Bash calls) |
 | `SubagentStop` | reaps the subagent's explicitly owned entries with `keep: owner`. Auto-owned background calls survive the turn. |
-| `SessionEnd` | reaps the session's entries (handed ones belong to their new session) |
+| `SessionEnd` | records that the session ended (`ended/<session>.json`: one proof the sweep takes that a session is gone) and reaps the session's entries (handed ones belong to their new session) |
 | `Stop` | the end of a main-agent turn, not of the session: reaps the session's entries past their TTL |
 
 The hook never blocks and exits 0, and prints only the answer to a background call; a reap runs in a detached
@@ -363,8 +364,34 @@ terminal's process or an agent session (a tmux server). A browser or server left
 so it is reported; one item per tree and process group. It also reports booted simulators, running containers and
 `tailscale serve` routes that no live entry owns (not Safari Technology Preview, which is as often a person's own
 browser), once each in `unowned.reported`; a kind whose tool is not installed is skipped, and one that cannot be
-listed is noted. A resource entry whose kind says it is gone is marked `gone`. The report goes to `unowned.json`
-and never stops anything; there is no `--force` for a resource.
+listed is noted. A resource entry whose kind says it is gone is marked `gone`. The report goes to `unowned.json`;
+of what it lists the sweep stops only a gone session's leftovers (below), and there is no `--force` for a resource.
+
+**A gone session's leftovers** (fathers#168; `stopped_unowned` in the report). An unowned process in the report is
+stopped, with its tree, only when both of these are certain; anything less leaves it in the report, and its item's
+`session: {id, gone, why, kept}` says what was found (`gone`: true, false, or null when it cannot be told; `kept`: why
+a process whose session is gone still stays).
+- It came from a Claude Code session: its environment names the session. Claude Code gives each Bash call
+  `CLAUDE_CODE_SESSION_ID` and `CLAUDE_PID` (its own process); a shell's children inherit both and keep them after
+  launchd adopts them. They are read with `ps -E` on macOS (this user's processes only; Apple's own programs hide
+  their environment, so they are never tied to a session) and from `/proc/<pid>/environ` on Linux. Each process of
+  the item's group must name the same one session, and nothing in its tree another; one whose environment cannot
+  be read, or whose line no longer starts with the command the sweep read, is tied to none.
+- The session is gone: Claude Code's session registry can be read and names it with no running process (a resumed
+  session runs again, under a new process); the process `CLAUDE_PID` named runs no more, or its pid now runs a
+  process that started after the leftover did (a process there that started no later may still be the session's,
+  and keeps it); and one proof: the `SessionEnd` hook recorded its end (kept 7 days), the `CLAUDE_PID` process is gone
+  as above, or the registry names the session and the process of every such record is gone by pid and start time.
+
+Never stopped, whatever the session: a tree that holds a process of any Slotfather lease (its holder and the tree
+Slotfather lists, or an agent-browser daemon a lease's process started) or runs below one, and nothing at all while
+`slotfather status --json` cannot be read (or Slotfather is not installed); a tree that holds a member, the group or
+the supervisor of an active entry, read again right before the stop; an agent-browser daemon, whose browser session
+another agent may use; and what the report already leaves out (a terminal's process, an agent session, spawnfather
+and its ancestors, another user's). The stop is a reap's: SIGTERM to the pids whose start time and command still
+match, SIGKILL after the grace, one `unowned.reaped` event each. `stopped_unowned: [{pid, start, cmd, cwd, session,
+reason, pids, result}]`, and a failed stop keeps the process in the report; `sweep --dry-run` lists them as
+`would-stop` and stops nothing.
 
 **Worktrees** (`worktrees` in the report and `sweep.json`). The repositories are `$SPAWNFATHER_REPOS`
 (colon-separated; empty: none), else every folder in the home folder holding a `.git` directory; each one's linked
