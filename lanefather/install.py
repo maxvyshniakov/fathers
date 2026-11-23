@@ -409,7 +409,7 @@ def install(share: Path, bin_dir: Path, python: str | None, *, switch: bool = Tr
         release = stage_release(share / "releases", release_name, populate, verify_existing=verify_existing)
         if switch:
             if cur is not None and cur != release.resolve():
-                switch_symlink(share / "previous", cur, share)
+                switch_symlink(share / "previous", cur, share.resolve())
             switch_symlink(share / "current", release, share)
             if python is None:
                 raise InstallError("an interpreter is required to write the command")
