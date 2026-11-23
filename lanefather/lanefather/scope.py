@@ -33,6 +33,11 @@ from .state import Record
 NONE = "none"
 # A ticket is an issue number as start always took it: GitHub's digits, or a project's own token.
 TICKET = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
+# A ticket of another repository (fathers#238): `owner/repo#N`, or its issue URL, which reads as that form.
+_OWNER = r"[A-Za-z0-9][A-Za-z0-9-]{0,38}"
+_REPO = r"(?!\.\.?/|\.\.?#)[A-Za-z0-9_.-]{1,100}"
+FOREIGN = re.compile(rf"^({_OWNER})/({_REPO})#(\d+)$")
+ISSUE_URL = re.compile(rf"^https://github\.com/({_OWNER})/({_REPO})/issues/(\d+)/?$")
 DECISION = re.compile(
     r"^https://github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)/issues/(\d+)#issuecomment-(\d+)$")
 _WARNED: set[tuple[str, str]] = set()
@@ -40,9 +45,28 @@ _WARNED: set[tuple[str, str]] = set()
 
 @dataclass(frozen=True)
 class Issue:
-    """A ticket of the lane's scope; a partial one the lane does only part of, so its merge says `Refs`."""
+    """A ticket of the lane's scope; a partial one the lane does only part of, so its merge says `Refs`.
+
+    `number` is the ticket as the record stores it: the lane's own repository's number (`12`), as always, or
+    `owner/repo#N` for a ticket of another repository (fathers#238)."""
     number: str
     partial: bool = False
+
+    @property
+    def repo(self) -> str | None:
+        """The other repository a foreign ticket belongs to; None for the lane's own."""
+        head, sep, _ = self.number.rpartition("#")
+        return head if sep and "/" in head else None
+
+    @property
+    def local(self) -> str:
+        """The issue number within its repository."""
+        return self.number.rpartition("#")[2]
+
+    @property
+    def ref(self) -> str:
+        """How GitHub refers to it from the lane's repository: `#12`, or `owner/repo#97`."""
+        return self.number if self.repo else f"#{self.number}"
 
 
 @dataclass(frozen=True)
@@ -64,10 +88,17 @@ Item = Issue | Decision | Spec
 
 
 def ticket_number(value: str) -> str:
-    """An issue number as given (`#12` or `12`), or a refusal."""
-    number = str(value).strip().lstrip("#")
+    """A ticket as the record stores it: an issue number as given (`#12` or `12`), or `owner/repo#N` for a ticket
+    of another repository, given so or as its issue URL; else a refusal."""
+    given = str(value).strip()
+    found = FOREIGN.match(given) or ISSUE_URL.match(given)
+    if found:
+        owner, name, number = found.groups()
+        return f"{owner}/{name}#{number}"
+    number = given.lstrip("#")
     if not TICKET.match(number) or number.lower() == NONE:
-        raise LaneError(f"ticket {value!r}: give an issue number")
+        raise LaneError(f"ticket {value!r}: give an issue number, owner/repo#N, or "
+                        "https://github.com/<owner>/<repo>/issues/<n>")
     return number
 
 
@@ -99,10 +130,10 @@ def validate(items: Sequence[Item]) -> None:
     """Refuse an issue, decision or spec named twice."""
     seen: set[tuple[str, str]] = set()
     for item in items:
-        key = (("issue", item.number) if isinstance(item, Issue)
+        key = (("issue", item.ref) if isinstance(item, Issue)
                else ("decision", item.url) if isinstance(item, Decision) else ("spec", item.path))
         if key in seen:
-            raise LaneError(f"scope names {key[0]} {'#' if key[0] == 'issue' else ''}{key[1]} twice")
+            raise LaneError(f"scope names {key[0]} {key[1]} twice")
         seen.add(key)
 
 
@@ -217,7 +248,7 @@ def as_partial(items: Iterable[Item]) -> tuple[Item, ...]:
 
 
 def issue_label(issue: Issue) -> str:
-    return f"#{issue.number}" + (" (partial)" if issue.partial else "")
+    return issue.ref + (" (partial)" if issue.partial else "")
 
 
 def describe(items: Sequence[Item]) -> str:
@@ -239,7 +270,7 @@ def label(item: Item) -> str:
 
 def entry_line(item: Item) -> str:
     if isinstance(item, Issue):
-        return f"ticket #{item.number} ({'partial: its merge says Refs' if item.partial else 'completes: Fixes'})"
+        return f"ticket {item.ref} ({'partial: its merge says Refs' if item.partial else 'completes: Fixes'})"
     if isinstance(item, Decision):
         return f"decision {item.url}"
     return f"spec {item.path}"
@@ -293,17 +324,18 @@ def _resolve_issue(issue: Issue, record: Record, project: config.Config) -> Reso
     rule = project.tickets
     try:
         data, error = github.issue_view(
-            issue.number, json_fields="number,title,body,url,state,updatedAt",
-            common=None if rule.repo else record["common_dir"], repo=rule.repo or None, project=project,
+            issue.local, json_fields="number,title,body,url,state,updatedAt",
+            common=None if issue.repo or rule.repo else record["common_dir"], repo=issue.repo or rule.repo or None,
+            project=project,
             timeout=GH_TIMEOUT)
     except (OSError, subprocess.TimeoutExpired) as failure:
         return Resolved(issue, "unreadable", reason=f"gh could not run: {failure}")
     if data is None:
         status: Status = "missing" if GONE.search(error) else "unreadable"
-        return Resolved(issue, status, reason=f"gh could not read #{issue.number}: {_gh_error(error)}")
+        return Resolved(issue, status, reason=f"gh could not read {issue.ref}: {_gh_error(error)}")
     number = data.get("number")
-    if number is not None and str(number) != issue.number:
-        return Resolved(issue, "missing", reason=f"#{issue.number} now reads as #{number}: moved or renumbered")
+    if number is not None and str(number) != issue.local:
+        return Resolved(issue, "missing", reason=f"{issue.ref} now reads as #{number}: moved or renumbered")
     body = str(data.get("body") or "").strip() or "(empty body)"
     url = str(data.get("url") or "") or None
     state = str(data.get("state") or "")
@@ -411,7 +443,7 @@ def receipt_entry(entry: Resolved) -> dict[str, Any]:
 def heading(entry: Resolved) -> str:
     item = entry.item
     if isinstance(item, Issue):
-        what = f"Ticket #{item.number}" + (" (partial: the lane does only part of it)" if item.partial
+        what = f"Ticket {item.ref}" + (" (partial: the lane does only part of it)" if item.partial
                                             else " (the lane completes it)")
     elif isinstance(item, Decision):
         what = "Decision"

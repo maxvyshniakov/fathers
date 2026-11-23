@@ -92,6 +92,17 @@ never an implementer's report. `start` refuses `--ticket none` beside another ti
 named twice, a decision that is not one issue comment's URL, and a spec path that is absolute or has `..`. A lane
 needs `--ticket` (`none` for no ticket) or `--partial`.
 
+A ticket is a number of the lane's own repository (`12` or `#12`, stored as `12`, as always), or a ticket of another
+repository (fathers#238): `owner/repo#N`, or its issue URL `https://github.com/<owner>/<repo>/issues/<n>`, both stored
+as `owner/repo#N`. `start` refuses any other form, such as a pull request's URL or a comment's. The same number in
+two repositories is two tickets. A foreign ticket the lane completes gets `Fixes owner/repo#N` in the merge, a
+partial one `Refs owner/repo#N`: GitHub's closing keywords take `KEYWORD OWNER/REPOSITORY#ISSUE-NUMBER` for an issue
+in a different repository, and a closing keyword in a commit message closes the issue when the commit is merged
+into the default branch ([Linking a pull request to an issue](https://docs.github.com/en/issues/tracking-your-work-with-issues/using-issues/linking-a-pull-request-to-an-issue)),
+here this repository's. Its land comment, its `integrated` label and its release comment go to that repository
+(the comment links the merge in this one), and the lane review reads it there. An older Lanefather does not read a
+foreign ticket (its scope reads as malformed), so land such a lane with a version that does.
+
 The lane's primary ticket is the first ticket it completes, else its first partial ticket, else `none`; the record's
 `ticket`, the brief header's first line, `list`, `show`, `status` and the ticket-comment check of `done` name it. The
 brief header adds a `Scope:` line for a lane with more than that one ticket.
@@ -330,7 +341,8 @@ repo = "owner/name"       # optional; default: origin's GitHub repository
 ```
 
 The rules cover every ticket of the lane's [accepted scope](#accepted-scope). The merge ends with one line per
-ticket, in scope order: `Fixes #N` for a ticket it completes, `Refs #N` for a partial one; a ticket that a given
+ticket, in scope order: `Fixes #N` for a ticket it completes, `Refs #N` for a partial one (`Fixes owner/repo#N`
+and `Refs owner/repo#N` for [another repository's](#accepted-scope)); a ticket that a given
 `land -m` message already names on a `Fixes` or `Refs` line of its own keeps that line. The default title names
 every ticket: `Merge lane/<id> (#A, #B)`. After a green smoke, land labels each completed ticket `integrated` and
 comments on every ticket (`ticket.marked`, one event per ticket); a partial ticket's comment says the merge does part

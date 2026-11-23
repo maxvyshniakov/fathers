@@ -19,6 +19,13 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
   warns when a lane commit says `Fixes` for a partial ticket. A lane with one ticket keeps today's record, merge
   message and comments, and older Lanefather versions read every lane by its first completed ticket.
 
+- A lane can name a ticket of another repository (fathers#238): `--ticket`, `--partial` and `scope`'s `--add-*` and
+  `--mark-*` options take `owner/repo#N` or the issue's URL as well as a bare number, which stays the lane's own
+  repository's and is stored as before. The merge says `Fixes owner/repo#N` for such a ticket the lane completes,
+  which GitHub closes when the merge reaches this repository's default branch, and `Refs owner/repo#N` for a partial
+  one; land's comment and `integrated` label, and the release comment, go to that repository. An older Lanefather
+  does not read a foreign ticket: land such a lane with this version.
+
 - The lane review reads the lane's whole accepted scope (fathers#192): every ticket's title and body without its
   comments, each decision's one comment and each spec as it stands at the review's base, so every panel member sees
   the same text. A partial ticket is marked so the reviewer does not report its other parts as missing; a land

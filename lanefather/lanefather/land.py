@@ -373,7 +373,7 @@ def merge(
                 integration=integration, onto=onto, keep=keep_flag, new_overrides=new_overrides, receipt=receipt,
             )
         issues = scope.issues(record)
-        ticket = f" ({', '.join('#' + issue.number for issue in issues)})" if issues else ""
+        ticket = f" ({', '.join(issue.ref for issue in issues)})" if issues else ""
         merge_msg = tickets.merge_message(
             message or f"Merge {record['branch']}{ticket}", issues, store.project.tickets
         )
