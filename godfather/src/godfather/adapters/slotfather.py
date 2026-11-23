@@ -157,8 +157,9 @@ def _item(raw: Any, entries: Optional[Entries] = None) -> Request:
     lock = _decoding.text(given.get("lock"))
     if lock is not None:
         item["lock"] = lock
-    if _decoding.is_whole(given.get("uid")):
-        item["uid"] = int(given["uid"])
+    uid: Any = given.get("uid", entry.get("uid"))  # the holder's uid (fathers#88): another user's offers no actions
+    if _decoding.is_whole(uid):
+        item["uid"] = int(uid)
     for flag in ("yieldable", "passable", "all"):
         if flag in given:
             item[flag] = given[flag] is True

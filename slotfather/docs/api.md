@@ -75,7 +75,7 @@ Per-entry fields:
 - `id`, `lease_id`, `lease`: entry filename stem, unique lease identifier, and full path (`SLOTFATHER_LEASE`).
 - `state`, `phase`: `state` is `held` or `waiting`; `phase` is `waiting`, `yielded`, `held`, `asked`, or `unknown`.
 - `count`, `min_count`, `max_count`, `label`, `cmd`, `cwd`, `meta`: requested (or granted) slots, `-n MIN-MAX` bounds when a slot range was requested, label, command, working directory, and metadata.
-- `pid`, `pgid`, `start`, `tree`: holder PID, process group, process start time, and live descendant PIDs.
+- `pid`, `pgid`, `start`, `uid`, `tree`: holder PID, process group, process start time, the holder's uid (the owner of the entry's file, which only the queue's owner writes; `null` once the file is gone), and live descendant PIDs.
 - `since`, `granted`: queue arrival and grant timestamps.
 - `priority`, `ticket`, `effective_priority`, `aged`, `reprioritized`: requested class and ticket, served class, whether ageing promoted it, and original class before `reprioritize` (`null` if unchanged).
 - `yieldable`, `yields`, `yield_asked`, `position`, `lock`: cooperative-yield settings, yield count, standing yield request, queue position, and lock path while waiting on `slotfather lock` (only when waiting on a lock).

@@ -141,6 +141,8 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
   details put the same mark before the priority's name.
 - `slotfather procs --json` gives each process's start as epoch seconds too (`started`), the form another tool
   takes to name the same process (fathers#171).
+- `status --json` (and so `status --json --full`) gives each entry's `uid`, the user its holder runs as, so a
+  dashboard offers `reprioritize` only on the requests Slotfather lets that user move (fathers#88).
 
 ### Changed
 

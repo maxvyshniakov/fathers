@@ -144,9 +144,11 @@ def normal(text: str) -> str:
 
 
 def plain(value: Any) -> Any:
-    """normal() through JSON data: this process's pid as SELF in numbers and text."""
+    """normal() through JSON data: this process's pid as SELF in numbers and text, and an entry's `uid` as OWNER
+    when it is this user's (fathers#88), as it is on every machine the scenarios run on."""
     if isinstance(value, dict):
-        return {normal(str(k)): plain(v) for k, v in cast(dict[Any, Any], value).items()}
+        return {normal(str(k)): "OWNER" if k == "uid" and v == os.geteuid() and type(v) is int else plain(v)
+                for k, v in cast(dict[Any, Any], value).items()}
     if isinstance(value, (list, tuple)):
         return [plain(v) for v in cast(list[Any], value)]
     if isinstance(value, str):

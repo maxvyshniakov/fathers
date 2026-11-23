@@ -47,6 +47,8 @@ Versions and release rules: [README.md](README.md#versions).
   the command runs in the background with no shell, a 30 s timeout and `GODFATHER_ACTOR=godfather/<version>`; the
   footer shows its first stdout line, or its first stderr line in red, and the source is polled at once. Land,
   promote, done, sync, review and sweep are never offered. Under `GODFATHER_FIXTURES` actions are recorded, never run.
+  A request of another user (its `uid` in Slotfather's `status --json`) offers no actions, which Slotfather would
+  refuse.
 
 - Junkfather is a source (fathers#86): its `junkfather status --json` (versions 1 and 2) is polled like
   Lanefather's. SLOTS' bottom border sums it up on the right, `3 procs 7 · 1 orphan · 1 expired · 2 unowned` (a

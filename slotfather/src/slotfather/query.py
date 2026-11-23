@@ -258,12 +258,22 @@ def unknown_text(path: Path, entry: dict[str, Any], table: dict[int, tuple[int, 
     return found + f"; its holder cannot be checked, so it reserves no slots: remove {path} once no client holds it"
 
 
+def owner_uid(path: Path) -> int | None:
+    """The uid that owns an entry's file, or None once it is gone: its holder's, since only the queue's owner may
+    take a lease in it (state.require_own()). Read from the file, so an entry any client wrote has one (fathers#88)."""
+    try:
+        return path.stat().st_uid
+    except OSError:
+        return None
+
+
 def entry_item(path: Path, entry: dict[str, Any], table: dict[int, tuple[int, str]]) -> dict[str, Any]:
-    """`status --json`'s fields of an entry as it was written, with its holder's process group and live tree."""
+    """`status --json`'s fields of an entry as it was written, with its holder's process group, live tree and uid."""
     pid = entry.get("pid") if type(entry.get("pid")) is int else None
     return {"id": path.stem, "lease_id": _entry.lease_id(path.stem, entry), "lease": str(path),
             "state": entry.get("state"), "count": entry.get("count"), "label": entry.get("label"),
             "pid": entry.get("pid"), "pgid": _platform.process_group(pid), "start": entry.get("start"),
+            "uid": owner_uid(path),
             "since": entry.get("since"), "granted": entry.get("granted"), "cmd": entry.get("cmd"),
             "cwd": entry.get("cwd"), "meta": _entry.meta_of(entry), "tree": _lineage.descendants(table, pid),
             "priority": _entry.priority_of(entry), "ticket": _entry.ticket_of(entry),

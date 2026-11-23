@@ -107,11 +107,12 @@ entry:
   overrun            bool          a held entry past its p90 (Slotfather's margin applied); absent: false
   start              str | null    the holder's process start as `ps -o lstart=` gives it (fathers#88): QUEUE's row
                                    actions pass it back as `--start START`, and a row without it offers none
-  uid                int           (wanted, not yet given) the holder's uid: a request of another user offers no
-                                   reprioritize, which Slotfather refuses
+  uid                int | null    the holder's uid (fathers#88), the owner of the entry's file: a request whose
+                                   uid is not Godfather's effective uid offers no actions, which Slotfather would
+                                   refuse; without it (an older Slotfather, or null) Slotfather's refusal is the check
 ```
 
-A row that carries `lease_id`, `expected`, `overrun` or `start` itself is read from the row first.
+A row that carries `lease_id`, `expected`, `overrun`, `start` or `uid` itself is read from the row first.
 
 ### What the adapter requires (fathers#142)
 

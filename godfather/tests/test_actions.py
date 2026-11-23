@@ -1,31 +1,42 @@
 """Row actions run by the owner tools' CLIs (fathers#88): which actions each row offers in which state, the menu,
 the reason and the confirmation through the reducer, the run with the row checked again (recorded under
-GODFATHER_FIXTURES with GODFATHER_ACTOR, never run), a failing command's stderr in red, the live flow in a PTY, and
-the real Spawnfather's extend and reap in a temporary state directory."""
+GODFATHER_FIXTURES with GODFATHER_ACTOR, never run), a failing command's stderr in red, the live flow in a PTY, the
+real Spawnfather's extend and reap in a temporary state directory, and the real Slotfather's reprioritize and
+ask-yield on live leases in an isolated SLOTFATHER_DIR."""
 from __future__ import annotations
 
 import dataclasses
+import datetime
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
 from unittest import mock
 
 from helpers import ROOT
+from test_expected import raw_item as expected_raw_item, snapshot as expected_snapshot
 from test_lanes import STRAYLIGHT, decoded as lanes_decoded, request
 from test_procs import PROCS, PageTests, decoded as procs_decoded
 from test_state import entry
 
-from godfather import actions, app, reducer, sources, state as state_module
-from godfather.adapters import lanefather, spawnfather
-from godfather.model import Lane, Processes, ProcessTableRow
+from godfather import actions, app, eventcheck, reducer, sources, state as state_module
+from godfather.adapters import lanefather, slotfather as slotfather_adapter, spawnfather
+from godfather.layout import Rect
+from godfather.model import Dashboard, Lane, Processes, ProcessTableRow
+from godfather.tui import Canvas
+from godfather.views.queue import draw_requests
 
 START = "Tue Nov  4 09:00:00 2026"
+SLOTFATHER = ROOT.parent / "slotfather" / "slotfather"  # the sibling checkout: both packages at one commit
+HOLD = 'echo "start $1" >> "$LOG"; while [ ! -e "$RELEASE/$1" ]; do sleep 0.05; done'  # runs until released
 
 
 def names(found: list[actions.Action]) -> list[str]:
@@ -350,6 +361,27 @@ class RecheckTests(unittest.TestCase):
         self.assertTrue(actions.for_request(item, [], ["reprioritize"], uid=501))
         self.assertEqual([], actions.for_request(item, [], ["reprioritize"], uid=502))
 
+    def test_the_uid_comes_from_slotfathers_entry_and_another_users_offers_no_reprioritize(self) -> None:
+        """fathers#88: Slotfather gives `uid` on its `status --json` entries; the adapter pairs it with the row, and
+        only the requests of Godfather's own uid offer reprioritize. A row without one (an older Slotfather) still
+        offers it: Slotfather's refusal is then the check."""
+        since = "2026-11-13T09:48:00Z"
+        me = os.geteuid()
+        rows = [expected_raw_item(pid, since, "waiting") for pid in (41, 42, 43)]
+        found = slotfather_adapter.decode(expected_snapshot([], rows, entries=[
+            {"pid": 41, "since": since, "lease_id": "mine", "start": START, "uid": me},
+            {"pid": 42, "since": since, "lease_id": "theirs", "start": START, "uid": me + 1},
+            {"pid": 43, "since": since, "lease_id": "older", "start": START}]))
+        waiters = found["waiters"]
+        self.assertEqual([me, me + 1, None], [item.get("uid") for item in waiters])
+        offered = [names(actions.for_request(cast(dict[str, Any], item), [], ["reprioritize"], me))
+                   for item in waiters]
+        self.assertEqual([["Reprioritize to interactive", "Reprioritize to batch"], [],
+                          ["Reprioritize to interactive", "Reprioritize to batch"]], offered)
+        theirs = actions.for_request(cast(dict[str, Any], dict(waiters[1], uid=me)), [], ["reprioritize"], me)[0]
+        self.assertIsNone(actions.revalidate(theirs, cast(dict[str, Any], found), me),
+                          "a fresh snapshot naming another user drops the action")
+
 
 class ExecutorTests(FixtureCase):
     """fathers#88 review: the pager goes through the one executor; the worker has Sources of its own; an opener is
@@ -637,6 +669,138 @@ class ContractTests(unittest.TestCase):
             self.assertEqual(0, reply.code, f"reap: {reply.stdout} {reply.stderr}")
             after = spawnfather.decode(json.loads(sources.run("spawnfather", ["status", "--json"], 30).stdout))
             self.assertFalse([row for row in after["entries"] if row["id"] == entry_row["id"]])
+
+
+class SlotfatherContractTests(unittest.TestCase):
+    """The real Slotfather (the sibling checkout) in an isolated SLOTFATHER_DIR, with live leases and waiters:
+    reprioritize and ask-yield run through Screen.act, as the app runs them (the row checked again in a fresh
+    `status --json --full`, then the command with GODFATHER_ACTOR), and a fresh snapshot shows what changed."""
+
+    def setUp(self) -> None:
+        if not SLOTFATHER.is_file():
+            self.skipTest("no slotfather checkout beside godfather")
+        self.tmp = Path(tempfile.mkdtemp(prefix="godfather-slot-actions-"))
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.state = self.tmp / "state"
+        self.started_log, self.release = self.tmp / "log", self.tmp / "release"
+        self.release.mkdir()
+        self.started_log.touch()
+        (self.tmp / "memory").write_text("8000 1\n")
+        bin_dir = self.tmp / "bin"
+        bin_dir.mkdir()
+        self.tool = bin_dir / "slotfather"  # this interpreter, whatever python3 /usr/bin has
+        self.tool.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{SLOTFATHER}" "$@"\n')
+        self.tool.chmod(0o755)
+        # 12 cores and 64 GiB: 4 slots; the host's own load and Spawnfather stay out of it
+        self.env = {"PATH": f"{bin_dir}:/usr/bin:/bin", "HOME": str(self.tmp), "TMPDIR": str(self.tmp),
+                    "XDG_CONFIG_HOME": str(self.tmp / "config"), "SLOTFATHER_DIR": str(self.state),
+                    "SLOTFATHER_LEGACY_DIRS": "", "SLOTFATHER_CORES": "12", "SLOTFATHER_MEMORY_GIB": "64",
+                    "SLOTFATHER_MEMORY_FILE": str(self.tmp / "memory"), "SLOTFATHER_LOADAVG": "0",
+                    "SLOTFATHER_POLL": "0.05", "SLOTFATHER_POLL_MAX": "0.5", "SLOTFATHER_OVERTAKE_WINDOW": "0",
+                    "SLOTFATHER_AUTO_TAGS": "0", "SLOTFATHER_SPAWNFATHER": str(self.tmp / "no-spawnfather"),
+                    "LOG": str(self.started_log), "RELEASE": str(self.release)}
+        self.processes: list[subprocess.Popen[bytes]] = []
+        self.addCleanup(self.stop_all)
+        # nobody asks a lease to yield on their own here: only Godfather's ask-yield does
+        self.slotfather("order", "--yield-after", "3600")
+        found = json.loads(self.slotfather("capabilities", "--json").stdout)
+        self.advertised: list[str] = found["dashboard"]["actions"]
+        self.assertTrue({"reprioritize", "ask-yield"} <= set(self.advertised), found)
+        patcher = mock.patch.dict(os.environ, self.env, clear=True)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def stop_all(self) -> None:
+        """Each request runs in a session of its own: stopping its group stops its work too."""
+        for process in self.processes:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):  # macOS: a group whose leader exited unreaped
+                pass
+            process.wait()
+
+    def slotfather(self, *argv: str) -> subprocess.CompletedProcess[str]:
+        found = subprocess.run([str(self.tool), *argv], capture_output=True, text=True, env=self.env,
+                               stdin=subprocess.DEVNULL, timeout=60)
+        self.assertEqual(0, found.returncode, f"slotfather {' '.join(argv)}: {found.stderr}")
+        return found
+
+    def request(self, label: str, count: int, *options: str) -> None:
+        """`slotfather run -n COUNT --label LABEL OPTIONS -- work` in the background, running until released."""
+        self.processes.append(subprocess.Popen(
+            [str(self.tool), "run", "-n", str(count), "--label", label, *options, "--", "sh", "-c", HOLD, "work",
+             label], env=self.env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            start_new_session=True))
+
+    def entries(self) -> dict[str, dict[str, Any]]:
+        return {item["label"]: item for item in json.loads(self.slotfather("status", "--json").stdout)["entries"]}
+
+    def wait_for(self, predicate: Callable[[], bool], what: str) -> None:
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline:
+            if predicate():
+                return
+            time.sleep(0.05)
+        self.fail(f"timed out waiting for {what}: {self.slotfather('status').stdout}")
+
+    def queued(self, holder: tuple[str, str], waiter: tuple[str, str]) -> None:
+        """A yieldable 4-slot lease `holder` (label, class) running, and `waiter` (1 slot) queued behind it."""
+        self.request(holder[0], 4, "--priority", holder[1], "--yieldable")
+        self.wait_for(lambda: f"start {holder[0]}" in self.started_log.read_text(), f"{holder[0]} to start")
+        self.request(waiter[0], 1, "--priority", waiter[1])
+        self.wait_for(lambda: self.entries().get(waiter[0], {}).get("state") == "waiting", f"{waiter[0]} to queue")
+
+    def fresh(self) -> Dashboard:
+        return slotfather_adapter.decode(json.loads(self.slotfather("status", "--json", "--full").stdout))
+
+    def last_event(self, kind: str) -> dict[str, Any]:
+        found = [json.loads(line) for line in (self.state / "events.jsonl").read_text().splitlines()]
+        matching = [event for event in found if event["kind"] == kind]
+        self.assertTrue(matching, f"no {kind} in {[event['kind'] for event in found]}")
+        self.assertEqual([], eventcheck.validate(matching[-1], strict=True), matching[-1])
+        return matching[-1]
+
+    def run_action(self, label: str, name: str) -> None:
+        """The action `name` QUEUE offers on the request `label`, run as the app runs it."""
+        with app.Screen() as screen:
+            model, error = screen.load()
+            self.assertIsNone(error, screen.clients["slotfather"].state().problem)
+            assert model is not None
+            waiters = cast(list[dict[str, Any]], model["waiters"])
+            item = next(row for row in [*cast(list[dict[str, Any]], model["holders"]), *waiters]
+                        if row["label"] == label)
+            self.assertEqual(os.geteuid(), item.get("uid"), "Slotfather names the holder's uid")
+            offered = actions.for_request(item, waiters, self.advertised, os.geteuid())
+            action = next((found for found in offered if found.name == name), None)
+            self.assertIsNotNone(action, names(offered))
+            assert action is not None
+            done = cast(Any, screen.act(action, ""))
+            self.assertTrue(done.ok, done.line)
+
+    def test_reprioritize_a_queued_request(self) -> None:
+        self.queued(("gate", "normal"), ("quick", "batch"))
+        self.run_action("quick", "Reprioritize to interactive")
+        waiter = next(item for item in self.fresh()["waiters"] if item["label"] == "quick")
+        self.assertEqual(("interactive", "batch"), (waiter["priority"], waiter.get("reprioritized")))
+        moved = self.last_event("request.reprioritized")
+        self.assertEqual(("godfather", "batch", "interactive"),
+                         (moved["actor"]["via"], moved["details"]["from"], moved["details"]["to"]))
+
+    def test_ask_a_lower_class_lease_to_yield_for_a_waiter(self) -> None:
+        # The holder does not look between its steps: the request stands, ❓ on QUEUE, and nothing stops it
+        self.queued(("gate", "batch"), ("quick", "interactive"))
+        self.run_action("gate", "Ask to yield")
+        model = self.fresh()
+        held = next(item for item in model["holders"] if item["label"] == "gate")
+        self.assertEqual("quick", held["asked"])
+        canvas = Canvas(120, 8)
+        draw_requests(canvas, Rect(0, 0, 8, 120), model, 0, datetime.datetime.now(datetime.UTC))
+        rows = ["".join(str(cell[0]) for cell in line) for line in canvas.cells]
+        self.assertIn("❓", next(row for row in rows if "gate" in row), "\n".join(rows))
+        asked = self.last_event("lease.yield_asked")
+        self.assertEqual(("godfather", "quick", True),
+                         (asked["actor"]["via"], asked["details"]["for"]["label"], asked["details"]["by_hand"]))
+        self.assertEqual("held", self.entries()["gate"]["state"], "the holder runs on")
 
 
 if __name__ == "__main__":

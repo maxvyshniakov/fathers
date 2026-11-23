@@ -85,6 +85,7 @@ class _StatusEntryBase(TypedDict):
     pid: Any
     pgid: Optional[int]
     start: Any
+    uid: Optional[int]
     since: Any
     granted: Any
     cmd: Any

@@ -212,6 +212,24 @@ class LiveShapeConformanceTests(unittest.TestCase):
         self.assertTrue(typed_dict_required(sf_contract.Event) <= set(raw_event))
         self.assertTrue(set(raw_event) <= typed_dict_keys(sf_contract.Event))
 
+    def test_each_entry_names_its_holders_uid_from_its_file(self) -> None:
+        """fathers#88: `uid` is the entry file's owner, so an entry an older client wrote has one too; once the file
+        is gone it is null. --full carries the same entries (Godfather pairs its rows with them)."""
+        pid = os.getpid()
+        start = sf_query.status_processes(self.state, pid)[pid][1]
+        older = {"pid": pid, "start": start, "count": 1, "label": "older", "cmd": "true", "cwd": str(self.tmp),
+                 "since": sf_config.now(), "state": "waiting"}  # no lease_id, no uid: as an older client wrote it
+        path = self.state / "queue/0000000001-older.json"
+        sf_state.write(path, older)
+        self.assertNotIn("uid", json.loads(path.read_text()), "nothing new is stored in the entry")
+        snap = sf_query.status_json(self.state)
+        self.assertEqual([os.geteuid()], [item["uid"] for item in snap["entries"]])
+        full = sf_board.full_status(self.state)
+        self.assertEqual([os.geteuid()], [item["uid"] for item in full["entries"]])
+        self.assertEqual(os.geteuid(), sf_query.entry_item(path, older, {})["uid"])
+        path.unlink()
+        self.assertIsNone(sf_query.entry_item(path, older, {})["uid"])
+
 
 if __name__ == "__main__":
     unittest.main()
