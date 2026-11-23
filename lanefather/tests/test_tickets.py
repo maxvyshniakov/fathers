@@ -413,6 +413,140 @@ class ConfigOffTests(TicketCase):
         self.assertEqual(self.gh_calls(), [])
 
 
+SID_KIT = "maxvyshniakov/sid-kit"
+
+
+class ForeignTicketFormTests(unittest.TestCase):
+    """A ticket of another repository (fathers#238): `owner/repo#N` or its issue URL; a bare number stays the lane's
+    own repository's, stored as it always was."""
+
+    def test_a_bare_number_reads_as_today(self):
+        from lanefather import scope
+        self.assertEqual((scope.ticket_number("12"), scope.ticket_number("#12")), ("12", "12"))
+        issue = scope.Issue("12")
+        self.assertEqual((issue.repo, issue.local, issue.ref), (None, "12", "#12"))
+        self.assertEqual(scope.to_json(issue), {"issue": "12"})
+
+    def test_owner_repo_number_and_the_issue_url_name_the_same_foreign_ticket(self):
+        from lanefather import scope
+        for given in (f"{SID_KIT}#97", f"https://github.com/{SID_KIT}/issues/97", f" {SID_KIT}#97 "):
+            with self.subTest(given=given):
+                self.assertEqual(scope.ticket_number(given), f"{SID_KIT}#97")
+        issue = scope.Issue(f"{SID_KIT}#97", partial=True)
+        self.assertEqual((issue.repo, issue.local, issue.ref), (SID_KIT, "97", f"{SID_KIT}#97"))
+        self.assertEqual(scope.to_json(issue), {"issue": f"{SID_KIT}#97", "partial": True})
+
+    def test_a_malformed_foreign_ticket_is_refused(self):
+        from lanefather import scope
+        from lanefather.errors import LaneError
+        for given in (f"{SID_KIT}#", f"{SID_KIT}#x", "sid-kit#97", f"{SID_KIT}/x#97", "/sid-kit#97",
+                      "o/..#1", f"https://github.com/{SID_KIT}/pull/97",
+                      f"https://github.com/{SID_KIT}/issues/97#issuecomment-1", f"http://github.com/{SID_KIT}/issues/9"):
+            with self.subTest(given=given), self.assertRaises(LaneError):
+                scope.ticket_number(given)
+
+    def test_a_foreign_scope_round_trips_through_the_record_and_names_the_primary(self):
+        from lanefather import scope
+        items = scope.from_options([(f"https://github.com/{SID_KIT}/issues/97", False), ("12", True)])
+        record: dict[str, Any] = {"id": "a"}
+        scope.write(record, items)
+        self.assertEqual(record["ticket"], f"{SID_KIT}#97")
+        self.assertEqual(record["scope"], [{"issue": f"{SID_KIT}#97"}, {"issue": "12", "partial": True}])
+        self.assertEqual(scope.of(record), items)
+        self.assertEqual(scope.describe(items), f"{SID_KIT}#97, #12 (partial)")
+        alone: dict[str, Any] = {"id": "b"}
+        scope.write(alone, scope.from_options([(f"{SID_KIT}#97", False)]))
+        self.assertEqual(alone, {"id": "b", "ticket": f"{SID_KIT}#97"}, "one completed ticket writes no scope")
+        self.assertEqual(scope.of(alone), (scope.Issue(f"{SID_KIT}#97"),))
+
+    def test_the_same_number_in_two_repositories_is_two_tickets(self):
+        from lanefather import scope
+        items = scope.from_options([("97", False), (f"{SID_KIT}#97", True)])
+        self.assertEqual([issue.ref for issue in items if isinstance(issue, scope.Issue)], ["#97", f"{SID_KIT}#97"])
+
+    def test_the_merge_says_fixes_or_refs_in_the_cross_repository_form(self):
+        from lanefather import config, scope, tickets
+        rule = config.Tickets(fixes_trailer=True)
+        issues = [scope.Issue("12"), scope.Issue(f"{SID_KIT}#97"), scope.Issue(f"{SID_KIT}#98", partial=True)]
+        self.assertEqual(tickets.merge_message("Merge lane/a", issues, rule).splitlines(),
+                         ["Merge lane/a", "", "Fixes #12", f"Fixes {SID_KIT}#97", f"Refs {SID_KIT}#98"])
+        given = f"Merge it\n\nFixes {SID_KIT}#97\nFixes #98\n"
+        self.assertEqual(tickets.merge_message(given, issues, rule).splitlines(),
+                         ["Merge it", "", f"Fixes {SID_KIT}#97", "Fixes #98", "", "Fixes #12", f"Refs {SID_KIT}#98"],
+                         "a given line keeps its ticket; #98 of this repository is not sid-kit's #98")
+
+
+class ForeignTicketLandTests(TicketCase):
+    """A lane of this repository (fixture/straylight) that completes or does part of a sid-kit ticket (fathers#238):
+    the merge uses the cross-repository form, and the label and comment go to sid-kit."""
+
+    def foreign_lane(self, *scope_args: str) -> None:
+        self.scoped("a", *scope_args)
+        worktree = pathlib.Path(self.record("a")["worktree"])
+        self.commit(worktree, {"lib/api.txt": "foo\nbaz\n"})
+        self.lane("check", "a")
+
+    def calls_on(self, repo: str, verb: str) -> list[list[str]]:
+        return [call for call in self.gh_calls()
+                if call[:2] == ["issue", verb] and call[call.index("--repo") + 1] == repo]
+
+    def test_a_completed_foreign_ticket_lands_as_fixes_and_is_marked_in_its_repository(self):
+        self.foreign_lane("--ticket", f"{SID_KIT}#97")
+        output = self.lane("land", "a")
+        merge = self.git(self.integration, "rev-parse", "HEAD")
+        self.assertEqual(self.git(self.integration, "log", "-1", "--format=%B").splitlines(),
+                         [f"Merge lane/a ({SID_KIT}#97)", "", f"Fixes {SID_KIT}#97"])
+        self.assertEqual({call[2] for call in self.calls_on(SID_KIT, "edit")}, {"97"})
+        created = [call for call in self.gh_calls() if call[:2] == ["label", "create"]]
+        self.assertEqual([call[call.index("--repo") + 1] for call in created], [SID_KIT],
+                         "the label is created in sid-kit, which lacks it")
+        self.assertEqual([call[2] for call in self.calls_on(SID_KIT, "comment")], ["97"])
+        self.assertTrue(all(call[call.index("--repo") + 1] == SID_KIT for call in self.gh_calls()))
+        self.assertEqual(self.issue("97")["labels"], ["integrated"])
+        [comment] = self.land_comments("97")
+        self.assertIn(f"The merge says `Fixes {SID_KIT}#97`, so GitHub closes this issue when the merge reaches "
+                      "the default branch of fixture/straylight.", comment)
+        self.assertIn(f"Landed on `integrate/q` as `{merge[:10]}`", comment)
+        self.assertIn(f"{SID_KIT}#97 labelled integrated and commented in {SID_KIT}", output)
+        [marked] = self.events_of("ticket.marked")
+        self.assertEqual((marked["details"]["issue"], marked["details"]["repository"]), (f"{SID_KIT}#97", SID_KIT))
+
+    def test_a_partial_foreign_ticket_refers_and_gets_only_the_comment(self):
+        self.foreign_lane("--ticket", "404", "--partial", f"https://github.com/{SID_KIT}/issues/97")
+        self.lane("land", "a")
+        self.assertEqual(self.git(self.integration, "log", "-1", "--format=%B").splitlines(),
+                         [f"Merge lane/a (#404, {SID_KIT}#97)", "", "Fixes #404", f"Refs {SID_KIT}#97"])
+        self.assertEqual(self.calls_on(SID_KIT, "edit"), [], "a partial ticket is not labelled")
+        self.assertEqual([call[2] for call in self.calls_on(SID_KIT, "comment")], ["97"])
+        self.assertEqual([call[2] for call in self.calls_on("fixture/straylight", "comment")], ["404"])
+        self.assertEqual(self.issue("404")["labels"], ["integrated"])
+        [partial] = self.land_comments("97")
+        self.assertIn(f"- Lane scope: #404, {SID_KIT}#97 (partial)", partial)
+        self.assertIn(f"Partial: this merge does part of {SID_KIT}#97 (`Refs {SID_KIT}#97`); the issue stays open "
+                      "and is not labelled `integrated`.", partial)
+
+    def test_a_lane_commit_that_fixes_a_partial_foreign_ticket_warns(self):
+        self.scoped("a", "--ticket", "404", "--partial", f"{SID_KIT}#97")
+        worktree = pathlib.Path(self.record("a")["worktree"])
+        self.commit(worktree, {"lib/api.txt": "foo\nbaz\n"}, f"lane change\n\nFixes {SID_KIT}#97\nFixes #97")
+        self.lane("check", "a")
+        output = self.lane("land", "a")
+        self.assertIn(f"says Fixes {SID_KIT}#97, which is partial", output)
+        self.assertNotIn("says Fixes #97,", output, "#97 of this repository is not the partial ticket")
+
+    def test_shipped_comments_and_unlabels_a_foreign_ticket_in_its_repository(self):
+        base = self.tip()
+        self.foreign_lane("--ticket", f"{SID_KIT}#97")
+        self.lane("land", "a")
+        output = self.lane("shipped", "v1.4.0", "--since", base)
+        self.assertIn(f"release v1.4.0: commented on 1 of 1 issues it fixes ({SID_KIT}#97)", output)
+        self.assertTrue(self.land_comments("97")[-1].startswith("Released in `v1.4.0`"))
+        self.assertIn("https://github.com/fixture/straylight/commit/", self.land_comments("97")[-1])
+        removals = [call for call in self.calls_on(SID_KIT, "edit") if "--remove-label" in call]
+        self.assertEqual([call[2] for call in removals], ["97"])
+        self.assertEqual(self.issue("97")["labels"], [])
+
+
 class ConfigTests(unittest.TestCase):
     def test_the_table_is_checked(self):
         from lanefather import config
