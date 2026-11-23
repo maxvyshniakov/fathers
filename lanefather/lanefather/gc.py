@@ -20,6 +20,7 @@ from __future__ import annotations
 import contextlib
 from dataclasses import dataclass, field
 import fnmatch
+import io
 import json
 import os
 from pathlib import Path
@@ -28,7 +29,7 @@ import subprocess
 import time
 from typing import Any, cast
 
-from . import config, lifecycle, lifetimes, state, worktrees
+from . import admission, config, done, lifecycle, lifetimes, state, worktrees
 from .errors import LaneError
 from .gitops import common_dir, git, git_ok, main_checkout, worktree_list
 
@@ -121,7 +122,24 @@ class Project:
                     result.removed.append({"kind": "branch", "path": branch})
                 except LaneError as error:
                     result.errors.append(str(error))
+        self._drop_gone(dry_run, result)
         return result
+
+    def _drop_gone(self, dry_run: bool, result: Result) -> None:
+        """Drop this repository's gone lanes (fathers#237): drop's own proof holds for them, so nothing can be lost.
+        Outside the state lock, which drop takes for each lane; a lane drop refuses is an error, the others go on."""
+        here = common_dir(self._root)
+        for record in state.of_project(self._store.lanes(strict=True), here):
+            if not admission.gone(record):
+                continue
+            if not dry_run:
+                try:
+                    with contextlib.redirect_stdout(io.StringIO()):
+                        done.drop_lane(record["id"], self._store)
+                except LaneError as error:
+                    result.errors.append(f"lane {record['id']}: {error}")
+                    continue
+            result.removed.append({"kind": "lane", "path": record["id"]})
 
     def _keep(self, entry: dict[str, str], targets: list[str], records: list[state.Record]) -> str | None:
         path, branch = entry["path"], entry.get("branch", "")
@@ -278,6 +296,10 @@ def collect(args: Any, store: state.Store) -> int:
         print(json.dumps(result.as_dict()))
     else:
         for item in result.removed:
+            if item["kind"] == "lane":
+                print(f"{'would drop' if args.dry_run else 'dropped'} lane {item['path']}: its branch and worktree "
+                      "are gone")
+                continue
             print(f"{'would remove' if args.dry_run else 'removed'} {item['kind']} {item['path']}")
         for item in result.kept:
             print(f"keep {item['path']}: {item['reason']}")

@@ -651,10 +651,27 @@ def nothing_added(cwd: str, commit: str, bases: list[tuple[str, str]]) -> tuple[
 
 
 def drop(args: Any, store: state.Store) -> int:
-    """`drop ID` (fathers#167): remove a planned or active lane that adds nothing to its base, with done's cleanup
-    and refusals for what still works there. Nothing it removes can be lost, so it takes no --force-reason: a
-    lane with commits beyond its base, a worktree HEAD that has some, or uncommitted or untracked changes refuse."""
-    prog, lane_id = store.prog, args.id
+    """`drop ID [ID ...]` (fathers#167, fathers#237): drop_lane on each id in turn; one that refuses is reported and
+    the others go on. Exits with the first refusal's code."""
+    ids = [args.id] if isinstance(args.id, str) else list(args.id)
+    failed = 0
+    for lane_id in dict.fromkeys(ids):
+        try:
+            drop_lane(lane_id, store)
+        except LaneError as error:
+            if len(ids) == 1:
+                raise
+            print(f"{store.prog}: drop {lane_id}: {error}", file=sys.stderr)
+            failed = failed or error.code
+    return failed
+
+
+def drop_lane(lane_id: str, store: state.Store) -> str:
+    """Remove a planned or active lane that adds nothing to its base, with done's cleanup and refusals for what
+    still works there; returns why it adds nothing. Nothing it removes can be lost, so it takes no --force-reason:
+    a lane with commits beyond its base, a worktree HEAD that has some, or uncommitted or untracked changes
+    refuse."""
+    prog = store.prog
     with store.locked("state"):
         record = store.load(lane_id)
         if lifecycle.awaiting_done(record):
@@ -721,7 +738,7 @@ def drop(args: Any, store: state.Store) -> int:
         )
     print(f"Lane {lane_id} dropped ({why}): claims released, {freed / 1e9:.1f} GB freed")
     print_removed(removed)
-    return 0
+    return why
 
 
 def footprint(record: Record) -> int:

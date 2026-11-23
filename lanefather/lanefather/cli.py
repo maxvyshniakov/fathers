@@ -13,6 +13,7 @@ from collections.abc import Sequence
 import os
 from pathlib import Path
 import re
+import shlex
 import sys
 import textwrap
 from typing import Any, NoReturn
@@ -21,6 +22,7 @@ from fathers_common.cli import UsageParser
 
 from . import (
     __version__,
+    admission,
     changelog,
     checks,
     config,
@@ -45,6 +47,7 @@ from . import (
     wait,
 )
 from .errors import LaneError
+from .gitops import main_checkout
 from .host import CHECK_MAX_JOBS
 
 
@@ -94,10 +97,11 @@ COMMANDS: dict[str, Command] = {
                         "HEAD --json"),
     "done": Command("clean up a landed lane: worktree, branches, scratch", "<id> | --finished [--dry-run]",
                     "fix-login"),
-    "drop": Command("remove a lane that adds nothing to its base", "<id>", "fix-login"),
+    "drop": Command("remove a lane that adds nothing to its base", "<id> [<id> ...]", "fix-login"),
     "recheck": Command("rerun a landed lane's red post-merge smoke", "<id> [--slots N]", "fix-login"),
     "keep": Command("keep a lane from auto-done; --off releases it", "<id> [--off]", "fix-login"),
-    "list": Command("lanes that are not done: claims, receipts, load", "[--all] [--json]", "--json"),
+    "list": Command("this repository's lanes that are not done: claims, receipts, load",
+                    "[--all] [--all-projects] [--json]", "--json"),
     "show": Command("one lane's details, read-only",
                     "<id> [--json] [--state-dir DIR] [--project-dir DIR]", "fix-login --json"),
     "status": Command("every registered project's lanes, read-only", "[--json]", "--json"),
@@ -337,8 +341,8 @@ def parser(project: config.Config = config.DEFAULT) -> Parser:
     p.add_argument("--force-reason", help="clean up a lane that is not landed or lacks a ticket comment; logged")
     p.set_defaults(run=done.done)
     p = add(root, commands, "drop", "A planned or active lane with no commits beyond its base, or commits that change "
-            "nothing: done's cleanup, with no override; refuses otherwise.", prog=prog)
-    p.add_argument("id")
+            "nothing: done's cleanup, with no override; refuses otherwise. Several ids drop each in turn.", prog=prog)
+    p.add_argument("id", nargs="+")
     p.set_defaults(run=done.drop)
     p = add(root, commands, "recheck", "On the integration tip that holds its merge; green replaces the red result "
             "(lanefather.land).", prog=prog)
@@ -353,6 +357,8 @@ def parser(project: config.Config = config.DEFAULT) -> Parser:
     p.set_defaults(run=done.keep)
     p = add(root, commands, "list", prog=prog)
     p.add_argument("--all", action="store_true", help="include done lanes")
+    p.add_argument("--all-projects", action="store_true",
+                   help="every repository's lanes in the Store, each naming its project (default: this repository's)")
     p.add_argument("--json", action="store_true", help="the lane records with their worktree and receipt state, the "
                                                         "cap and the host, as JSON")
     p.set_defaults(run=lanes.list_lanes)
@@ -502,6 +508,31 @@ def command_parser(root: Parser, name: str) -> Parser:
     return root.children.get(name, root)
 
 
+# The commands that act on one registered lane (fathers#236): from another repository's checkout they refuse, as
+# they would act from the wrong checkout. show is read-only and names the lane's project, so it reads any lane.
+LANE_COMMANDS = ("check", "wait", "land", "review", "done", "drop", "recheck", "keep", "scope")
+
+
+def lane_ids(args: Any) -> list[str]:
+    value = getattr(args, "id", None)
+    return [] if value is None else [value] if isinstance(value, str) else list(value)
+
+
+def refuse_foreign(store: state.Store, command: str, lane_id: str) -> None:
+    """Refuse a lane of another repository than the one the command runs in, naming where it runs."""
+    if not state.ID.fullmatch(lane_id):
+        return
+    record = state.read_json(store.record_path(lane_id))
+    theirs = record.get("common_dir") if record else None
+    here = admission.running_common(store.project)
+    if not theirs or not here or os.path.realpath(str(theirs)) == os.path.realpath(here):
+        return
+    checkout = main_checkout(str(theirs))
+    raise LaneError(f"lane {lane_id} belongs to {state.project_name(str(theirs))}, not "
+                    f"{state.project_name(here)}; run it there ({checkout}): cd {shlex.quote(checkout)} && "
+                    f"{store.prog} {command} {lane_id}")
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     try:
@@ -520,7 +551,11 @@ def main(argv: list[str] | None = None) -> int:
             return runtime.project_hook(args, loaded_cfg)
         if args.command not in registry.READ_ONLY:
             registry.note(loaded_cfg)
-        return args.run(args, state.Store(loaded_cfg))
+        store = state.Store(loaded_cfg)
+        if args.command in LANE_COMMANDS:
+            for lane_id in lane_ids(args):
+                refuse_foreign(store, args.command, lane_id)
+        return args.run(args, store)
     except LaneError as error:
         print(f"lane: {error}", file=sys.stderr)
         return error.code

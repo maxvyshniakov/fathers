@@ -139,6 +139,10 @@ def admit(store: state.Store, record: Record, force_reason: str | None,
         pairs = [] if other["id"] in after else claims.overlapping(lane_claims, other, project=store.project)
         if pairs:
             listed = ", ".join(f"{m} with {t}" for m, t in pairs)
+            if admission.gone(other):
+                # fathers#237: --after a lane that can never land would wait forever.
+                raise LaneError(f"claims overlap lane {other['id']} (#{other['ticket']}): {listed}. "
+                                + admission.drop_advice(prog, [other["id"]], "its claims"))
             raise LaneError(f"claims overlap lane {other['id']} (#{other['ticket']}): {listed}. Run the lanes "
                             f"in sequence: start this one with --after {other['id']}")
     return decision, refusals
@@ -379,23 +383,32 @@ def scope_command(args: Any, store: state.Store) -> int:
 
 
 def list_lanes(args: Any, store: state.Store) -> int:
+    """The lanes of the repository the command runs in, as the cap counts them (fathers#236); --all-projects every
+    lane of the Store, each naming its project."""
     records = store.lanes(strict=True)
-    shown = [r for r in records if args.all or not lifecycle.finished(r)]
-    decision = admission.evaluate(store.project, records, admission.running_common(store.project))
+    here = admission.running_common(store.project)
+    every = getattr(args, "all_projects", False)
+    mine = records if every else state.of_project(records, here)
+    shown = [r for r in mine if args.all or not lifecycle.finished(r)]
+    decision = admission.evaluate(store.project, records, here)
     cap, source, machine = decision.cap, decision.source, decision.machine
     ceiling = decision.ceiling
     priorities = slots.priorities(store.project)
-    views = [(r, receipts.lane_view(store, r, repository=None, prog=store.prog)) for r in shown]
+    views = [(r, receipts.lane_view(store, r, repository=None, prog=store.prog), admission.gone(r)) for r in shown]
+    stale = [r["id"] for r in decision.occupying if admission.gone(r)]
     if args.json:
-        print(json.dumps({"lanes": [view.for_list(r) for r, view in views],
+        print(json.dumps({"lanes": [dict(view.for_list(r), project=state.project_name(r.get("common_dir")),
+                                         gone=is_gone) for r, view, is_gone in views],
                           "active": len(decision.occupying), "cap": cap, "cap_source": source,
                           "global": {"active": len(decision.everywhere), "cap": ceiling[0] if ceiling else None,
                                      "cap_source": ceiling[1] if ceiling else None},
                           "host": machine, "priorities": priorities}, indent=2))
         return 0
-    for record, view in views:
+    for record, view, is_gone in views:
         print(f"{record['id']}  {record['status']}  #{record['ticket']}  {record['branch']}  "
-              f"receipt: {view.list_receipt_text()}")
+              f"receipt: {view.list_receipt_text()}"
+              + (f"  project: {state.project_name(record.get('common_dir'))}" if every else "")
+              + (f"  gone: {admission.GONE}; {store.prog} drop {record['id']}" if is_gone else ""))
         print(f"    claims: {' '.join(record['claims'])}"
               + (f"  after: {', '.join(record['after'])}" if record["after"] else ""))
         if record.get("worktree"):
@@ -403,6 +416,9 @@ def list_lanes(args: Any, store: state.Store) -> int:
     across = f"{len(decision.everywhere)} of {ceiling[0]} across projects ({ceiling[1]}); " if ceiling else ""
     print(f"{len(decision.occupying)} of {cap} lanes planned or active (cap {source}); {across}"
           f"{host.host_line(machine, decision.floor)}")
+    if stale:
+        held = "lane holds the cap and its claims" if len(stale) == 1 else "lanes hold the cap and their claims"
+        print(f"{len(stale)} gone {held}: {store.prog} drop {' '.join(stale)} (or {store.prog} gc)")
     print("slot priorities: " + ", ".join(
         f"{phase} {found['priority']}" + ("" if found["source"] == "built-in" else f" ({found['source']})")
         for phase, found in priorities.items()))

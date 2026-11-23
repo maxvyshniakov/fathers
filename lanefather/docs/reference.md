@@ -18,19 +18,28 @@ lanefather review <id> [--mark N fixed:<merge>|rejected:<reason>] [--fix-lane]
 lanefather review --overall <sha> --since <base>
 lanefather done <id>
 lanefather done --finished [--dry-run]    done on every finished lane of the registered projects
-lanefather drop <id>                      remove an active lane that adds nothing to its base
+lanefather drop <id> [<id> ...]           remove an active lane that adds nothing to its base
 lanefather recheck <id> [--slots N]       rerun a red post-merge smoke on the integration tip
 lanefather keep <id> [--off]              auto-done and done --finished leave the lane
-lanefather gc [--dry-run] [--json]         merged idle worktrees and unused branches
+lanefather gc [--dry-run] [--json]         merged idle worktrees, unused branches and gone lanes
 lanefather promote <sha> [--ship] [--no-push] [--install [--deploy HOST]]
 lanefather sync [--drop-local]
 lanefather perf <sha>
 lanefather shipped <version> --since REF [--head REF]    comment a published version on the issues it fixes
-lanefather list [--all] [--json]
+lanefather list [--all] [--all-projects] [--json]   this repository's lanes
 lanefather show <id> [--state-dir DIR] [--project-dir DIR] [--json]   read-only lane context
 lanefather status [--json]                every registered project's lanes on this machine, read-only
 lanefather settings [check KEY VALUE | set KEY VALUE [--revision R] | reset KEY|--all] [--json]
 ```
+
+Several projects may share one Store (its `lanes` directory, fathers#149). `list` (text and `--json`) shows the
+lanes of the repository it runs in, as the lane cap counts them; `--all-projects` shows every lane of the Store,
+each row ending in `project: <name>` (fathers#236). Every lane object of `list --json` carries `project`, the
+repository's main checkout directory name, and `gone` (below). `check`, `wait`, `land`, `review`, `done`, `drop`,
+`recheck`, `keep` and `scope` refuse an id of another repository's lane, naming that repository and the command to
+run there (`lane X belongs to sid-kit, not data-grid; run it there (<checkout>): cd <checkout> && lanefather drop
+X`); nothing changes. `show` is read-only and names the lane's project, so it reads any lane of the Store; with
+`--project-dir` it refuses another repository's lane. `status` lists every registered project's lanes by project.
 
 `lanefather --help` lists each command in one line; `lanefather <command> --help` gives its options and an
 example, and a misused command prints its usage and that example in the line after the error (fathers#175). `start`
@@ -202,6 +211,18 @@ check's base checkout, a review's, the smoke's and the gate's) and the shared ca
   lane in the same worktree. The record becomes `done` with `dropped` (`why`, `tip`, `base`) and the ledger names
   why (`lane.dropped`). A lane with work refuses, with no flag to override it: land it, or revert its commits on
   the lane first.
+- A lane is *gone* when it is planned or active, its repository exists, it had a worktree, and neither that
+  worktree (as a directory) nor its branch is left: a batch whose branches were deleted by hand leaves such lanes,
+  and they hold the lane cap and their claims although they can never land (fathers#237). A planned lane that never
+  had a worktree is not gone. `list`, `show` and `status` mark it (`gone: no branch or worktree`; `"gone": true` in
+  their JSON), and `list` ends with the `drop` command that frees them. `start` refused by the cap names the gone
+  lanes among the ones it counts with `lanefather drop A B`; refused by a claim overlap with a gone lane it names
+  the `drop` instead of `--after`, which would wait forever. `drop` takes several ids and drops each in turn; one
+  that refuses is reported and the others go on. `lanefather gc` drops this repository's gone lanes (`dropped lane
+  X: its branch and worktree are gone`; in `--json` a `removed` item `{"kind": "lane", "path": "X"}`), and `gc
+  --dry-run` only reports them. `start` drops none itself: a worktree on a volume that is not mounted, or one being
+  recreated, looks gone for a moment, and registering a lane should never remove another agent's; the refusal
+  names the command instead.
 - A landed lane whose post-merge smoke went red for a reason outside it (the smoke checkout's environment) is cleared
   by a later green run on the same integration branch, on a commit that holds the lane's merge and that the
   integration worktree's HEAD holds: the batch gate there (its `promote-<sha>.gate.json`, the full gate), or another

@@ -8,6 +8,14 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
 
 ### Added
 
+- `lanefather list --all-projects` shows every repository's lanes in a shared Store, each row naming its project;
+  `list --json` gives each lane its `project` (fathers#236).
+- Gone lanes (fathers#237): a planned or active lane whose repository exists but whose branch and worktree are both
+  gone is marked `gone` by `list`, `show` and `status` (text and JSON). `start` refused by the lane cap names the
+  gone lanes it counted and the `lanefather drop A B` that frees them; refused by a claim overlap with a gone lane,
+  it names the `drop` instead of `--after`. `drop` takes several ids. `gc` drops this repository's gone lanes, and
+  `gc --dry-run` reports them; `start` never drops one itself.
+
 - A lane can name all of its accepted scope (fathers#192, fathers#64): `start` takes `--ticket N` more than once for
   the tickets it completes and `--partial N` for those it does only part of, kept in the order given, and
   `--decision URL` and `--spec PATH` for the owner decisions and specs it answers to. On land the merge says
@@ -195,6 +203,11 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
   shows the category, and receipts without it read as before.
 
 ### Changed
+
+- `lanefather list` shows only the lanes of the repository it runs in, as its cap line counts them, not every
+  project's lanes in a shared Store (fathers#236). `check`, `wait`, `land`, `review`, `done`, `drop`, `recheck`,
+  `keep` and `scope` refuse another repository's lane and name where to run them: from the wrong checkout `drop`
+  used to remove another project's lane. `show` still reads any lane.
 
 - Spawnfather now removes what a lane owns (fathers#171). `start`, `adopt` and the fix-lane hand-over register the
   lane's worktree, scratch and build directories with Spawnfather; `done`, `drop` and `gc` ask it to stop what was

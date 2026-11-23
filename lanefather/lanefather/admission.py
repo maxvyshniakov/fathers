@@ -13,7 +13,7 @@ import sys
 import time
 from typing import Any, cast
 
-from . import config, host, slots, state
+from . import config, host, lifecycle, slots, state
 from .errors import LaneError
 from .gitops import common_dir, git_ok, main_checkout
 
@@ -215,6 +215,31 @@ def running_common(project: config.Config) -> str | None:
     return repository_of(os.getcwd()) or (repository_of(project.path.parent) if project.path else None)
 
 
+GONE = "no branch or worktree"
+
+
+def gone(record: state.Record) -> bool:
+    """A planned or active lane that can never land (fathers#237): its repository exists, it had a worktree, and
+    neither that worktree (as a directory) nor its branch is left. drop's proof holds for it ("no branch and no
+    commits"). A planned lane that never had a worktree is not gone: its branch may not exist yet."""
+    common, worktree = record.get("common_dir"), record.get("worktree")
+    if not lifecycle.occupying(record) or not worktree or not common or not os.path.isdir(common):
+        return False
+    if os.path.isdir(worktree):
+        return False
+    try:
+        return not git_ok(main_checkout(common), "rev-parse", "--verify", "--quiet",
+                          f"refs/heads/{record['branch']}")
+    except OSError:
+        return False
+
+
+def drop_advice(prog: str, ids: list[str], what: str) -> str:
+    """The sentence that names gone lanes and the one command that frees them."""
+    verb = "has" if len(ids) == 1 else "have"
+    return f"{', '.join(ids)} {verb} {GONE} left: {prog} drop {' '.join(ids)} frees {what}"
+
+
 def grouped(records: list[state.Record]) -> str:
     """The lanes by repository: `data-grid: a, b; sid-kit: c`. Two repositories of one name show their paths."""
     groups: dict[str | None, list[str]] = {}
@@ -308,6 +333,9 @@ def evaluate(project: config.Config, records: list[state.Record], common: str | 
         where = f" in {state.project_name(common)}" if common else ""
         refusals.append(f"{len(active)} lanes are planned or active{where} ({', '.join(r['id'] for r in active)}); "
                         f"the cap is {cap} ({source}): land one to make room under the lane cap")
+        stale = [r["id"] for r in active if gone(r)]
+        if stale:
+            refusals[-1] += "; " + drop_advice(project.command, stale, "them")
     if ceiling and len(everywhere) >= ceiling[0] and not cap_exempt:
         refusals.append(f"{len(everywhere)} lanes are planned or active across projects ({grouped(everywhere)}); "
                         f"the global ceiling is {ceiling[0]} ({ceiling[1]}): land one to make room")
