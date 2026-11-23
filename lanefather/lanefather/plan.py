@@ -520,13 +520,34 @@ def exact_tree_reuse(
     found = inspector.module()
     rows: Rows
     if ids and found is not None:
-        if same_base and set(receipt.get("suites") or ()) <= {"structure"} and receipt.get("selection") is not None:
+        if (same_base and isinstance(receipt.get("suites"), list)
+                and set(receipt["suites"]) <= {"structure"} and receipt.get("selection") is not None):
             rows = list(receipt["selection"])
         else:
             smoke_list = inspector.smoke_rows()
             if smoke_list is None:
                 return None, None, {}, "plan module could not list smoke checks"
             rows = smoke_list
+            if not same_base:
+                # Another base: the merged diff could select checks (a structure-only plan) the smoke does not
+                # name. For a scoped receipt it selects nothing the receipt's plan did not, provided it touches no
+                # path that plan left out; for both scoped and full receipts, every check in the receipt's own
+                # selection must have passed as well (a green receipt may carry flaky/pre-existing failures).
+                if not receipt.get("full"):
+                    merged = {p for p in gitops.git(
+                        inspector.root, "-c", "core.quotePath=false", "diff", "--no-renames", "--name-only",
+                        previous, merge_tree, "--",
+                    ).splitlines() if p}
+                    outside = sorted(merged - receipt_paths(receipt))
+                    if outside or receipt.get("selection") is None:
+                        listed = ", ".join(outside[:3]) + ("..." if len(outside) > 3 else "")
+                        return None, None, {}, ("merge base differs from the lane receipt's base"
+                                                + (f" and the merge changes {listed}, which its plan did not cover"
+                                                   if outside else ""))
+                elif receipt.get("selection") is None:
+                    return None, None, {}, "merge base differs from the lane receipt's base"
+                named = {str(row["id"]) for row in rows}
+                rows = rows + [row for row in receipt["selection"] if str(row["id"]) not in named]
     else:
         if receipt.get("selection") is None:
             return None, None, {}, "the lane's receipt has no per-check selection"

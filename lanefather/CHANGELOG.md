@@ -307,10 +307,12 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
   children are classified as `dependency-blocked` with their `blocked_by` prerequisites instead of `regression`, and
   the receipt stays red until those checks actually run and pass.
 
-- `lanefather land` checks exact-tree green receipt reuse before running `plan_for` (fathers#198): when the merge
-  tree matches the lane's current green receipt under the same toolchain and platform and the receipt covers every
-  post-merge check, land takes the skip path without invoking the plan adapter's dependency bootstrap; when plan
-  preparation is genuinely required, land prints the preparation stage, reason and `queue: slotfather status`.
+- `lanefather land` no longer prepares the post-merge plan (and so no longer waits for a slot while the project's
+  plan step installs dependencies) when the lane's current green receipt already verified the exact merge tree
+  under the same toolchain and platform and passed every check the smoke would run (fathers#198). A changed tree, a
+  stale or red receipt, a changed toolchain, or a merge onto another base that changes paths the receipt's plan did
+  not cover still prepares the plan and runs the required checks. When it prepares one, the land log says so and
+  why, with `queue: slotfather status`, and then how many checks the prepared plan leaves to run.
 
 - Usage errors follow argparse's handling of option values. A quoted merge message or force reason starting with
   a dash works again (fathers#175).

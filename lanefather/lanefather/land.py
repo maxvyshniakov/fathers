@@ -415,7 +415,10 @@ def post_merge(store: state.Store, landed: Landed, slots: int | None) -> Smoke:
             inspector, receipt, record["landed"], merge_tree, previous, toolchain, record.get("worktree")
         )
         if exact_verified is not None and exact_narrowing is not None:
-            merged_paths = [p for p in git(checkout, "diff", "--name-only", previous, merge_sha).splitlines() if p]
+            merged_paths = [p for p in git(
+                checkout, "-c", "core.quotePath=false", "diff", "--no-renames", "--name-only",
+                previous, merge_sha, "--",
+            ).splitlines() if p]
             docs_only = review.documentation_only(merged_paths, store.project)
             record = store.update(lane_id, lambda rec: rec["landed"].update(docs_only=docs_only))
             print(f"lane: {review.start_lane_review(store, record)}", flush=True)
@@ -451,6 +454,9 @@ def post_merge(store: state.Store, landed: Landed, slots: int | None) -> Smoke:
             reasons = merged_plan["reasons"]
             suites, selected = ((merged_plan["selected"], None) if rows is None
                                 else (plan.suites_of(rows), plan.by_suite(rows)))
+            left = (f"{len(rows)} check{'s' if len(rows) != 1 else ''} to run" if rows
+                    else f"suites {', '.join(suites)} to run" if rows is None and suites else "nothing to run")
+            print(f"lane: post-merge plan for {lane_id} prepared ({kind}): {left}", flush=True)
             decision, results, check_results, triaged, stamp, status = run_smoke(
                 store, record, checkout, suites, selected, f"post-merge-{lane_id}", slots, toolchain
             )

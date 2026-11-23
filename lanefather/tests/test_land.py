@@ -452,7 +452,7 @@ class SmokeNarrowingTests(LaneCase):
     def post(self, lane_id: str) -> dict[str, Any]:
         return json.loads((self.state / f"{lane_id}.post-merge.json").read_text())
 
-    def receipt(self, lane_id):
+    def receipt(self, lane_id: str) -> dict[str, Any]:
         return json.loads((self.state / f"{lane_id}.receipt.json").read_text())
 
     def slotfather_calls(self):
@@ -660,6 +660,168 @@ class SmokeNarrowingTests(LaneCase):
         self.assertIn("preparing post-merge plan for b", output_b)
         self.assertIn("queue: slotfather status", output_b)
         self.assertEqual(self.post("b")["status"], "green")
+
+    def observe_plan_bootstrap(self) -> pathlib.Path:
+        """verify.sh logs each plan call with the checkout it ran in, the stand-in for a plan adapter that bootstraps
+        dependencies (bun install under a heavy slot) before it can answer (fathers#198). The plan module stays."""
+        log = self.tmp / "plan-bootstrap.log"
+        verify = (self.integration / "verify.sh").read_text().replace(
+            'if args[:1] == ["--changed"]:\n',
+            f'if args[:1] == ["--changed"]:\n    with open({str(log)!r}, "a") as _log:\n'
+            '        _log.write(str(root) + "\\n")\n')
+        self.commit(self.integration, {"verify.sh": verify}, "log the plan bootstrap")
+        return log
+
+    @staticmethod
+    def smoke_bootstraps(log: pathlib.Path) -> int:
+        """The plan calls made in a post-merge smoke checkout, not in a lane worktree."""
+        return sum(pathlib.Path(line).name.startswith("smoke-")
+                   for line in (log.read_text().splitlines() if log.exists() else []))
+
+    def test_an_exact_tree_receipt_lands_without_the_plan_bootstrap_under_a_plan_module(self):
+        # fathers#198: the merge tree is the green receipt's, under the same toolchain; the smoke checks the plan module
+        # names all passed on it, so land never runs the plan adapter's bootstrap to find that out.
+        log = self.observe_plan_bootstrap()
+        worktree = self.created("a", "lib/**")
+        self.commit(worktree, {"lib/api.txt": "foo\nbaz\n"})
+        self.lane("check", "a")
+        output = self.lane("land", "a")
+        self.assertEqual(self.smoke_bootstraps(log), 0)
+        self.assertIn("no plan bootstrap needed", output)
+        self.assertNotIn("preparing post-merge plan", output)
+        self.assertEqual(self.verify_runs(), ["checks structure-check,lib-check"])
+        post = self.post("a")
+        self.assertEqual((post["kind"], post["status"], post["narrowing"]["dropped"]),
+                         ("skip", "green", ["structure-check", "lib-check"]))
+
+    def test_a_red_receipt_on_the_exact_tree_prepares_the_plan_and_says_so_before_it_waits(self):
+        # fathers#198: a forced land of a red receipt on the merge tree prepares the plan; the land log names that stage
+        # and its reason before the bootstrap starts, and the plan's result before the smoke runs.
+        from lanefather import config, land, plan, state
+        log = self.observe_plan_bootstrap()
+        worktree = self.created("a", "calls/**")
+        self.commit(worktree, {"calls/main.txt": "missing\n"})
+        self.lane("check", "a", ok=False)
+        self.assertEqual(self.receipt("a")["status"], "red")
+        store = state.Store(config.load(config.find(self.repo)), directory=self.state)
+        printed = io.StringIO()
+        seen_before_bootstrap: list[str] = []
+        prepare = plan.Checkout.plan_for
+
+        def bootstrap(inspector: Any, base: str) -> dict[str, Any]:
+            seen_before_bootstrap.append(printed.getvalue())
+            return prepare(inspector, base)
+
+        args = unittest.mock.MagicMock(id="a", into=None, force_reason="red on purpose", wait=0, message=None,
+                                       keep=False, slots=None, repair=False)
+        with unittest.mock.patch.dict(os.environ, self.env, clear=False), \
+                unittest.mock.patch.object(plan.Checkout, "plan_for", bootstrap), \
+                contextlib.redirect_stdout(printed), contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(land.land(args, store), 1)
+        output = printed.getvalue()
+        self.assertEqual(self.smoke_bootstraps(log), 1)
+        self.assertEqual(len(seen_before_bootstrap), 1)
+        self.assertIn("lane: preparing post-merge plan for a in", seen_before_bootstrap[0])
+        self.assertIn("(the lane's receipt is red); queue: slotfather status", seen_before_bootstrap[0])
+        self.assertNotIn("prepared", seen_before_bootstrap[0])
+        stages = [output.index(s) for s in ("lane: preparing post-merge plan for a",
+                                            "lane: post-merge plan for a prepared (smoke): 1 check to run",
+                                            "lane: running lib (1 checks)")]
+        self.assertEqual(stages, sorted(stages))
+        # The smoke runs whole: structure-check passed on this very tree in the lane check, lib-check runs again.
+        self.assertEqual(self.verify_runs()[-1], "checks lib-check")
+        post = self.post("a")
+        self.assertEqual((post["kind"], post["status"], post["narrowing"]["narrowed"]), ("smoke", "red", False))
+        self.assertEqual(post["narrowing"]["reason"], "the lane's receipt is red")
+
+    def test_a_receipt_for_an_earlier_tip_prepares_the_plan_and_runs_the_smoke(self):
+        log = self.observe_plan_bootstrap()
+        worktree = self.created("a", "lib/**")
+        self.commit(worktree, {"lib/api.txt": "foo\nbaz\n"})
+        self.lane("check", "a")
+        self.commit(worktree, {"lib/api.txt": "foo\nbaz\nqux\n"}, "after the check")
+        output = self.lane("land", "a", "--force-reason", "stale on purpose")
+        self.assertGreaterEqual(self.smoke_bootstraps(log), 1)
+        self.assertIn("(the lane's receipt covers tree", output)
+        self.assertIn("lane: post-merge plan for a prepared (smoke): 2 checks to run", output)
+        self.assertEqual(self.verify_runs()[-1], "checks structure-check,lib-check")
+        self.assertEqual((self.post("a")["kind"], self.post("a")["status"]), ("smoke", "green"))
+
+    def test_a_changed_toolchain_on_the_exact_tree_prepares_the_plan_and_runs_the_smoke(self):
+        self.commit(self.integration, {"rust-toolchain.toml": '[toolchain]\nchannel = "1.98.1"\n',
+                                       "tools/rust-toolchain.py": RUST_STUB}, "pin Rust")
+        log = self.observe_plan_bootstrap()
+        worktree = self.created("a", "lib/**")
+        self.commit(worktree, {"lib/api.txt": "foo\nbaz\n"})
+        self.lane("check", "a")
+        self.env["FIXTURE_RUST"] = "1.99.0"
+        output = self.lane("land", "a")
+        self.assertEqual(self.git(self.integration, "rev-parse", "HEAD^{tree}"), self.receipt("a")["tree"])
+        self.assertEqual(self.smoke_bootstraps(log), 1)
+        self.assertIn("(the toolchain changed since the lane check); queue: slotfather status", output)
+        self.assertEqual(self.verify_runs()[-1], "checks structure-check,lib-check")
+
+    def test_an_exact_tree_receipt_on_another_base_stands_only_for_paths_its_plan_covered(self):
+        # Review of fathers#198: with another base, the merged diff could select checks the smoke does not name; the
+        # receipt stands for the merge without a plan only when that diff touches nothing its plan left out.
+        from lanefather import config, plan, receipts, state
+        worktree = self.created("a", "lib/**")
+        self.commit(worktree, {"lib/api.txt": "foo\nbaz\n"})
+        self.lane("check", "a")
+        store = state.Store(config.load(config.find(self.repo)), directory=self.state)
+        receipt = receipts.read(store, "a")
+        assert receipt is not None
+        record = self.record("a")
+        tip = self.git(worktree, "rev-parse", "HEAD")
+        landed = {"tip": tip, "tree": receipt["tree"]}
+        covered = self.commit(self.integration, {"lib/api.txt": "other\n"}, "another lib/api.txt")
+        uncovered = self.commit(self.integration, {"docs/elsewhere.md": "new\n"}, "a path the lane never had")
+        inspector = plan.Checkout(store.project, worktree)
+        toolchain = inspector.toolchain()
+        with unittest.mock.patch.dict(os.environ, self.env, clear=False):
+            verified, _narrowing, _reasons, why = plan.exact_tree_reuse(
+                inspector, receipt, landed, receipt["tree"], covered, toolchain, record["worktree"])
+            self.assertIsNone(why)
+            self.assertEqual(sorted(verified or {}), ["lib-check", "structure-check"])
+            verified, _narrowing, _reasons, why = plan.exact_tree_reuse(
+                inspector, receipt, landed, receipt["tree"], uncovered, toolchain, record["worktree"])
+        self.assertIsNone(verified)
+        self.assertEqual(why, "merge base differs from the lane receipt's base and the merge changes "
+                              "docs/elsewhere.md, which its plan did not cover")
+
+    def test_exact_tree_reuse_catches_rename_from_uncovered_path_and_non_smoke_failure_on_full_receipt(self):
+        from lanefather import config, plan, receipts, state
+        worktree = self.created("a", "lib/**")
+        self.commit(worktree, {"lib/api.txt": "foo\nline2\nline3\nline4\nline5\n"})
+        self.lane("check", "a")
+        store = state.Store(config.load(config.find(self.repo)), directory=self.state)
+        receipt = receipts.read(store, "a")
+        assert receipt is not None
+        record = self.record("a")
+        tip = self.git(worktree, "rev-parse", "HEAD")
+        landed = {"tip": tip, "tree": receipt["tree"]}
+        # Previous base had an identical-content file at an uncovered path; diff without --no-renames hides it.
+        renamed_base = self.commit(
+            self.integration, {"docs/renamed.md": "foo\nline2\nline3\nline4\nline5\n"}, "same content elsewhere",
+        )
+        inspector = plan.Checkout(store.project, worktree)
+        toolchain = inspector.toolchain()
+        with unittest.mock.patch.dict(os.environ, self.env, clear=False):
+            verified, _narrowing, _reasons, why = plan.exact_tree_reuse(
+                inspector, receipt, landed, receipt["tree"], renamed_base, toolchain, record["worktree"])
+            self.assertIsNone(verified)
+            self.assertIn("docs/renamed.md", why or "")
+            # Full green receipt on another base still requires non-smoke checks in its selection to have passed.
+            full_receipt = dict(receipt, full=True, selection=[
+                *receipt["selection"], {"id": "extra-structure", "suite": "structure"},
+            ], check_results={
+                **receipt["check_results"],
+                "extra-structure": {"suite": "structure", "status": "failed", "classification": "pre-existing"},
+            })
+            verified, _narrowing, _reasons, why = plan.exact_tree_reuse(
+                inspector, full_receipt, landed, receipt["tree"], renamed_base, toolchain, record["worktree"])
+        self.assertIsNone(verified)
+        self.assertEqual(why, "lane receipt did not verify extra-structure")
 
     def test_land_and_recheck_print_blocked_checks_for_blocked_suites(self):
         from lanefather import config, land, state
