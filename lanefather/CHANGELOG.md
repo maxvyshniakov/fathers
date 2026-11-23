@@ -252,6 +252,21 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
 
 ### Fixed
 
+- Antigravity reviews run (fathers#201): Lanefather now finds `agy` where its installer puts it
+  (`~/.gemini/bin/agy`) or the copy T3 Code bundles, and calls it the way the real CLI works: read-only plan mode in
+  its sandbox, the prompt as a stream-json message on stdin, so a large diff no longer overflows the command line,
+  and the answer read from the result event. An Antigravity error result, such as a used-up quota, or a run that
+  changes the review checkout hands the review to the next choice. The receipt keeps the run's `session` and token
+  `usage`. A models file's `[cli.antigravity] run` command is no longer used for reviews; `review` still is.
+
+- A failing review panel member takes a stand-in (fathers#201): when a member's run fails, as on a used-up Claude
+  quota, the next candidate not on the panel reviews in its place, its entry's `fallback` saying why; two failing
+  members never share one. `--reviewer` still takes no stand-in.
+
+- The implementer's family for `not_family` comes from the model the lane's agent recorded (fathers#201): a lane
+  built in T3 Code with Claude counts as Anthropic, not Google, and T3 Code without a recorded model is unknown.
+  T3 Code's `T3CODE_THREAD_ID` now names the agent session.
+
 - Multi-project readiness and verification receipt reuse (fathers#234): multi-project readiness queries now resolve
   directory claims against each project's own repository root rather than the caller's working directory, review-fix
   lane check reuse infers the host platform for legacy parent receipts from the lane worktree, and multiple projects

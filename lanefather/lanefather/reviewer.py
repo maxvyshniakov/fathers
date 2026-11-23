@@ -11,12 +11,14 @@ whose candidates are its primary choice and the next ones, its fallbacks.
 """
 from __future__ import annotations
 
+from collections.abc import Callable
 import contextlib
 from dataclasses import dataclass
 import hashlib
 import json
 import os
 from pathlib import Path
+import platform
 import re
 import shlex
 import shutil
@@ -46,6 +48,8 @@ CATEGORIES = ("bug", "standards", "docs", "package-misuse", "design")
 # The share of the weekly Codex limit a Codex choice needs when the models file names none (the 2026-11-13
 # incident: a review on credits); a Codex review never runs without a limit read.
 DEFAULT_MIN_LEFT = 15
+# `agy --print-timeout`: the turn ends with a result a minute before Lanefather stops the run (fathers#201).
+AGY_PRINT_TIMEOUT = REVIEW_TIMEOUT - 60
 
 # Provider/CLI option names and known model presets matching Mastack's models.toml (fathers#201).
 CLI_OPTIONS: dict[str, str] = {
@@ -89,8 +93,9 @@ class Model:
     """One review choice: the model's alias in the models file, its id, CLI (codex, claude or antigravity) and effort,
     the share of the weekly Codex limit it needs (`when.limit.codex_weekly`), its family, `when.not_family`, the
     choice's `note` for the person reading the review ("same family as the implementer: fresh context only"), its
-    provider option name (`effort`, `model_reasoning_effort`, `thought_level`), and an optional `[cli.<cli>].review`
-    or `run` command template."""
+    provider option name (`effort`, `model_reasoning_effort`, `thought_level`; the receipt's `options` key, which
+    for Antigravity is Mastack's `thought_level` while `agy` takes `--effort`), and an optional
+    `[cli.antigravity].review` command template."""
     alias: str
     id: str
     cli: str
@@ -252,7 +257,8 @@ class Conditions:
             return f"no claude CLI on PATH ({self.project.env_names('CLAUDE')})"
         if model.cli == "antigravity" and not self.antigravity and not model.review_argv:
             return (f"no Antigravity CLI ({self.project.env_names('ANTIGRAVITY')}, "
-                    f"{self.project.env_names('AGY')}, ANTIGRAVITY_CLI_PATH, agy or antigravity on PATH)")
+                    f"{self.project.env_names('AGY')}, ANTIGRAVITY_CLI_PATH, AGY_CLI_PATH, "
+                    "agy or antigravity on PATH, ~/.gemini/bin/agy, T3 Code's bundled antigravity)")
         if model.cli not in ("codex", "claude", "antigravity"):
             return f"{model.alias} runs on {model.cli}, which Lanefather cannot start"
         if forced:
@@ -273,9 +279,33 @@ class Conditions:
 
 @dataclass
 class Slot:
-    """One reviewer of a review: the receipt entry and the candidates still to try, in order."""
+    """One reviewer of a review: the receipt entry, the candidates still to try, in order, and for a panel member
+    (unless forced) the panel's shared pool of stand-ins it may take one from when its run fails (fathers#201)."""
     entry: dict[str, Any]
     candidates: list[Model]
+    pool: list[Model] | None = None
+
+
+@dataclass(frozen=True)
+class Decoded:
+    """A reviewer's answer read from its structured output: the review text, the run's own error (Antigravity's
+    `status: ERROR`), whether the output had no result at all, and the session and token usage it reported."""
+    text: str
+    error: str | None = None
+    missing: bool = False
+    session: str | None = None
+    usage: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True)
+class Job:
+    """One reviewer process: its command line, the file it reads on stdin, where its stdout and stderr go (the same
+    file for a CLI that writes its answer itself), and the decoder that turns its stdout into the answer, if any."""
+    argv: list[str]
+    stdin: Path
+    stdout: Path
+    log: Path
+    decode: Callable[[str], Decoded] | None = None
 
 
 class Reviewer:
@@ -317,6 +347,7 @@ class Reviewer:
                 entry = slots[0].entry
                 evidence.update(
                     {k: entry.get(k) for k in ("reviewer", "model", "effort", "provider", "cli", "options")},
+                    **{k: entry[k] for k in ("session", "usage") if entry.get(k)},
                     fallback=entry.get("fallback") or entry.get("reason"),
                 )
             else:
@@ -331,7 +362,9 @@ class Reviewer:
         conditions hold under the panel's family policy (_pick: a member of the implementer's family stays, on the
         table's choice for that case); one with none (a used-up Codex week, no CLI) is replaced by the first
         candidate (role's choice when role answered), or skipped when that is on the panel already (fathers#151). A
-        forced member (`--reviewer`) runs whatever the limit, or fails. Each entry's note is its actual reviewer's."""
+        forced member (`--reviewer`) runs whatever the limit, or fails. Each entry's note is its actual reviewer's.
+        Unless forced, the members that run share one pool of stand-ins, the candidates not on the panel, in order: a
+        member whose run fails takes the next one nobody else reviews with (fathers#201)."""
         slots: list[Slot] = []
         stand_in = ordered[0] if ordered else None
         role_choice = ordered[0] if ordered and conditions.role is not None else None
@@ -367,6 +400,12 @@ class Reviewer:
                 entry.update(model=known.id, effort=known.effort, provider=known.provider, cli=known.cli,
                              options=known.options)
             slots.append(Slot(entry, []))
+        if not forced:
+            taken = set(panel) | {s.entry["reviewer"] for s in slots}
+            pool = [m for m in ordered if m.alias not in taken]
+            for slot in slots:
+                if slot.candidates:
+                    slot.pool = pool
         return slots
 
     def _execute(self, label: str, checkout: str, request: Request, slots: list[Slot], output: Path, log: Path,
@@ -397,50 +436,64 @@ class Reviewer:
             prompt_path.write_text(prompt)
             attempt = 0
             while pending:
-                jobs: list[tuple[list[str], Path, Path]] = []
+                runs: list[tuple[Slot, Job, Path]] = []
                 for slot in pending:
                     model = slot.candidates.pop(0)
                     attempt += 1
-                    stem = private / f"{attempt}-{model.alias}"
-                    answer_path, job_log = stem.with_suffix(".md"), stem.with_suffix(".log")
-                    job_log.write_text("")
+                    for stale in ("session", "usage"):
+                        slot.entry.pop(stale, None)
                     slot.entry.update(reviewer=model.alias, model=model.id, effort=model.effort,
-                                      provider=model.provider, cli=model.cli, options=model.options,
-                                      answer=str(answer_path), job_log=str(job_log))
+                                      provider=model.provider, cli=model.cli, options=model.options)
+                    if slot.entry.get("member"):
+                        _noted(slot.entry, model, request.family)
                     why = slot.entry.get("fallback") or slot.entry.get("reason")
                     left = evidence.get("codex_left")
                     print(f"lane: review {label}: {model.id} {model.effort}"
                           + (f" ({left}% of the weekly Codex limit left)" if model.cli == "codex" and left is not None
                              else f" ({why})" if why else "")
                           + f" on {request.base[:10]}...{request.tip[:10]}", flush=True)
-                    if model.cli == "codex":
-                        jobs.append((_codex_argv(self.codex(), model, checkout, answer_path), job_log, job_log))
-                    elif model.cli == "antigravity":
-                        argv, writes_output = _antigravity_argv(self.antigravity(), model, checkout,
-                                                                answer_path, prompt_path)
-                        jobs.append((argv, job_log if writes_output else answer_path, job_log))
-                    else:
-                        jobs.append((_claude_argv(self.claude(), model), answer_path, job_log))
-                results = _run_together(jobs, checkout, prompt_path)
+                    job, answer_path = self._job(model, checkout, prompt_path, private / f"{attempt}-{model.alias}")
+                    runs.append((slot, job, answer_path))
+                # An Antigravity run may not change the frozen checkout (fathers#201): plan mode and the sandbox
+                # should hold it read-only, and this says so when they do not.
+                guarded = any(s.entry["cli"] == "antigravity" for s, _, _ in runs)
+                before = _checkout_state(checkout) if guarded else ""
+                results = _run_together([job for _, job, _ in runs], checkout)
+                changed = _checkout_state(checkout) if guarded else before
+                if changed != before and not before:
+                    _restore_checkout(checkout)
                 retry: list[Slot] = []
-                for slot, (status, seconds) in zip(pending, results, strict=True):
+                for (slot, job, answer_path), (status, seconds) in zip(runs, results, strict=True):
                     entry = slot.entry
-                    answer_path, job_log = Path(entry.pop("answer")), Path(entry.pop("job_log"))
+                    raw = job.stdout.read_text(errors="replace") if job.decode and job.stdout.exists() else ""
+                    decoded = job.decode(raw) if job.decode else None
+                    if decoded is not None:
+                        answer_path.write_text(decoded.text)
+                        entry.update({k: v for k, v in (("session", decoded.session), ("usage", decoded.usage)) if v})
                     text = answer_path.read_text(errors="replace") if answer_path.exists() else ""
                     with open(log, "a") as combined:
                         combined.write(f"== {entry['reviewer']} ({entry['model']})\n"
-                                       + job_log.read_text(errors="replace"))
+                                       + job.log.read_text(errors="replace") + raw)
                     entry["seconds"] = round(entry.get("seconds", 0) + seconds, 1)
-                    if status == 0 and text.strip():
+                    name = entry["reviewer"].capitalize()
+                    if changed != before and entry["cli"] == "antigravity":
+                        failure = f"the {name} run changed the review checkout: {changed[:300] or 'files removed'}"
+                    elif decoded is not None and decoded.error:
+                        exit_text = f" (exit {status})" if status else ""
+                        failure = f"the {name} run failed{exit_text}: {decoded.error}"
+                    elif status:
+                        failure = f"the {name} run failed (exit {status}): {_last_lines(job.log)}"
+                    elif not text.strip():
+                        failure = f"{name} returned an empty review" + (
+                            " (no result in its output)" if decoded is not None and decoded.missing else "")
+                    else:
                         entry["status"] = "finished"
                         texts[id(slot)] = text
                         continue
-                    name = entry["reviewer"].capitalize()
-                    failure = (f"the {name} run failed (exit {status}): {_last_lines(job_log)}" if status
-                               else f"{name} returned an empty review")
                     print(f"lane: review {label}: {entry['reviewer']} failed: {failure}", flush=True)
+                    spare = None if slot.candidates else _spare(slot, slots)
                     if slot.candidates:
-                        entry["fallback"] = failure
+                        entry["fallback"] = failure + (f": {spare.alias} reviews in its place" if spare else "")
                         retry.append(slot)
                     else:
                         entry.update(status="failed", error=failure, numbers=[])
@@ -488,8 +541,10 @@ class Reviewer:
                             provider="+".join(dict.fromkeys(providers)) or None,
                             cli="+".join(dict.fromkeys(clis)) or None,
                             options=combined_options or None,
-                            fallback="; ".join(f"{e['member']}: {e.get('error') or e['reason']}" for e in members
-                                               if e.get("status") != "finished" or e.get("reason")) or None)
+                            fallback="; ".join(
+                                f"{e['member']}: {e.get('error') or e.get('reason') or e.get('fallback')}"
+                                for e in members
+                                if e.get("status") != "finished" or e.get("reason") or e.get("fallback")) or None)
         if not answered:
             entry = slots[0].entry
             return Answer(evidence, entry.get("error") if not members else "no panel member answered: " + "; ".join(
@@ -505,6 +560,23 @@ class Reviewer:
 
     def antigravity(self) -> str:
         return _antigravity_cli(self.project) or "agy"
+
+    def _job(self, model: Model, checkout: str, prompt: Path, stem: Path) -> tuple[Job, Path]:
+        """The process that runs one candidate, and the file its answer ends in. Codex and Claude read the prompt
+        on stdin and write the answer (to -o, to stdout); Antigravity reads it as one stream-json message and its
+        answer is decoded from the stream (fathers#201), unless `[cli.antigravity].review` names a command."""
+        answer, log = Path(f"{stem}.md"), Path(f"{stem}.log")
+        log.write_text("")
+        if model.cli == "codex":
+            return Job(_codex_argv(self.codex(), model, checkout, answer), prompt, log, log), answer
+        if model.cli == "claude":
+            return Job(_claude_argv(self.claude(), model), prompt, answer, log), answer
+        if model.review_argv:
+            argv, writes_output = _antigravity_template_argv(self.antigravity(), model, checkout, answer, prompt)
+            return Job(argv, prompt, log if writes_output else answer, log), answer
+        message = Path(f"{stem}.stdin.ndjson")
+        message.write_text(_agy_message(prompt.read_text()))
+        return Job(_agy_argv(self.antigravity(), model), message, Path(f"{stem}.ndjson"), log, _agy_result), answer
 
 
 def _pick(choices: list[Model], model: Model, conditions: Conditions, panel: bool) -> tuple[Model | None, str | None]:
@@ -532,6 +604,20 @@ def _noted(entry: dict[str, Any], model: Model, family: str | None) -> dict[str,
     if family and model.family == family:
         entry["note"] = model.note or f"same family as the implementer ({family})"
     return entry
+
+
+def _spare(slot: Slot, slots: list[Slot]) -> Model | None:
+    """The next stand-in of the panel's shared pool that no other member reviews with, now queued as the slot's
+    candidate and gone from the pool, so two failing members never take the same one; None without one."""
+    if slot.pool is None:
+        return None
+    busy = {s.entry.get("reviewer") for s in slots}
+    while slot.pool:
+        model = slot.pool.pop(0)
+        if model.alias not in busy:
+            slot.candidates.append(model)
+            return model
+    return None
 
 
 def _candidates(choices: list[Model], conditions: Conditions, role: Role | None,
@@ -579,37 +665,92 @@ def _claude_argv(claude: str, model: Model) -> list[str]:
     return [claude, "-p", "--model", model.id, "--effort", model.effort, "--allowedTools", OPUS_TOOLS]
 
 
-def _antigravity_argv(antigravity: str, model: Model, checkout: str, output: Path,
-                      prompt: Path) -> tuple[list[str], bool]:
-    """Build the command line for an Antigravity / Google reviewer (fathers#201): uses `[cli.antigravity].review`
-    (or `run`) from `models.toml` when configured, else the `agy` / `antigravity` headless CLI contract
-    (`-p --model <id> --thought-level <effort>`). Returns `(argv, writes_output_file)`."""
-    if model.review_argv:
-        substitutions = {
-            "{cli}": antigravity,
-            "{id}": model.id,
-            "{model}": model.id,
-            "{effort}": model.effort,
-            "{thought_level}": model.effort,
-            "{option}": model.option_name,
-            "{checkout}": checkout,
-            "{output}": str(output),
-            "{prompt}": str(prompt),
-        }
-        argv: list[str] = []
-        writes_output = False
-        for index, token in enumerate(model.review_argv):
-            if "{output}" in token:
-                writes_output = True
-            expanded = token
-            for key, value in substitutions.items():
-                expanded = expanded.replace(key, value)
-            if index == 0 and expanded in ("antigravity", "agy") and antigravity:
-                expanded = antigravity
-            argv.append(expanded)
-        return argv, writes_output
+def _antigravity_template_argv(antigravity: str, model: Model, checkout: str, output: Path,
+                               prompt: Path) -> tuple[list[str], bool]:
+    """`[cli.antigravity].review` from `models.toml` expanded for one run, the escape hatch beside the built-in
+    `agy` contract (fathers#201): the raw prompt on stdin, the answer as text on stdout or in `{output}`. Returns
+    `(argv, writes_output_file)`."""
+    substitutions = {
+        "{cli}": antigravity,
+        "{id}": model.id,
+        "{model}": model.id,
+        "{effort}": model.effort,
+        "{thought_level}": model.effort,
+        "{option}": model.option_name,
+        "{checkout}": checkout,
+        "{output}": str(output),
+        "{prompt}": str(prompt),
+    }
+    argv: list[str] = []
+    writes_output = False
+    for index, token in enumerate(model.review_argv):
+        if "{output}" in token:
+            writes_output = True
+        expanded = token
+        for key, value in substitutions.items():
+            expanded = expanded.replace(key, value)
+        if index == 0 and expanded in ("antigravity", "agy") and antigravity:
+            expanded = antigravity
+        argv.append(expanded)
+    return argv, writes_output
+
+
+def _agy_argv(antigravity: str, model: Model) -> list[str]:
+    """The headless `agy` review (fathers#201): plan mode in the sandbox, no slash commands or skills, one
+    stream-json message in (the prompt can exceed one argument's limit) and the event stream out, and a time limit
+    that ends the turn with a result before Lanefather's own."""
     base = shlex.split(antigravity) if " " in antigravity and not os.path.exists(antigravity) else [antigravity]
-    return [*base, "-p", "--model", model.id, "--thought-level", model.effort], False
+    # `agy --effort` takes low, medium, high, xhigh or max: Mastack's `minimal` runs as `low`.
+    effort = "low" if model.effort == "minimal" else model.effort
+    return [*base, "--model", model.id, "--effort", effort, "--mode", "plan", "--sandbox",
+            "--disable-slash-commands", "--print-timeout", f"{AGY_PRINT_TIMEOUT}s", "--input-format", "stream-json",
+            "--output-format", "stream-json", "-p="]
+
+
+def _agy_message(prompt: str) -> str:
+    """The prompt as the one stream-json user message `agy --input-format stream-json` reads on stdin."""
+    return json.dumps({"event": "user", "message": {"content": prompt}}) + "\n"
+
+
+def _agy_result(stream: str) -> Decoded:
+    """The answer of an `agy --output-format stream-json` run: the `response` of its last `result` event. A result
+    whose status is ERROR (a used-up quota) is the run's error; no result event at all is an empty answer. Lines
+    that are not JSON events are skipped. The conversation id and token usage go to the receipt."""
+    result: dict[str, Any] | None = None
+    for line in stream.splitlines():
+        try:
+            event: Any = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(event, dict) or cast(dict[str, Any], event).get("event") != "result":
+            continue
+        payload: Any = cast(dict[str, Any], event).get("result")
+        result = cast(dict[str, Any], payload) if isinstance(payload, dict) else cast(dict[str, Any], event)
+    if result is None:
+        return Decoded("", missing=True)
+    session = result.get("conversation_id")
+    raw_usage: Any = result.get("usage")
+    usage = ({str(k): v for k, v in cast(dict[Any, Any], raw_usage).items()
+              if isinstance(v, (int, float)) and not isinstance(v, bool)}
+             if isinstance(raw_usage, dict) else None)
+    response = result.get("response")
+    error: str | None = None
+    if str(result.get("status") or "").upper() == "ERROR":
+        raw_error = result.get("error")
+        error = (str(raw_error).strip() if raw_error else "") or "Antigravity reported an error"
+    return Decoded("" if error else (response if isinstance(response, str) else ""), error,
+                   session=session if isinstance(session, str) and session else None, usage=usage or None)
+
+
+def _checkout_state(checkout: str) -> str:
+    """The frozen checkout's `git status --porcelain`, untracked files included: empty while nothing changed it."""
+    return git(checkout, "status", "--porcelain", "--untracked-files=all", check=False)
+
+
+def _restore_checkout(checkout: str) -> None:
+    """Put a changed review checkout back at its commit, so the next candidate reviews the change itself."""
+    git(checkout, "reset", "--quiet", "--hard", check=False)
+    git(checkout, "clean", "-fdq", check=False)
 
 
 def _inline_diff(checkout: str, request: Request) -> str:
@@ -657,10 +798,10 @@ def _cli_review_template(data: dict[str, Any], cli: str) -> tuple[str, ...]:
     if not isinstance(cli_entry, dict):
         return ()
     entry = cast(dict[str, Any], cli_entry)
-    for key in ("review", "run"):
-        raw = entry.get(key)
-        if isinstance(raw, list) and raw and all(isinstance(item, str) for item in raw):  # pyright: ignore[reportUnknownVariableType]
-            return tuple(str(item) for item in cast(list[Any], raw))
+    # Only `review`: a `run` command implements and need not be read-only (fathers#201).
+    raw = entry.get("review")
+    if isinstance(raw, list) and raw and all(isinstance(item, str) for item in raw):  # pyright: ignore[reportUnknownVariableType]
+        return tuple(str(item) for item in cast(list[Any], raw))
     return ()
 
 
@@ -776,11 +917,9 @@ def _role(project: Config, codex: str | None, family: str | None, evidence: dict
     raw_argv = chosen.get("argv")
     if cli == "antigravity" and isinstance(raw_argv, dict):
         argv_map = cast(dict[str, Any], raw_argv)
-        for key in ("review", "run"):
-            candidate = argv_map.get(key)
-            if isinstance(candidate, list) and candidate and all(isinstance(x, str) for x in candidate):  # pyright: ignore[reportUnknownVariableType]
-                review_argv = tuple(str(x) for x in cast(list[Any], candidate))
-                break
+        candidate = argv_map.get("review")
+        if isinstance(candidate, list) and candidate and all(isinstance(x, str) for x in candidate):  # pyright: ignore[reportUnknownVariableType]
+            review_argv = tuple(str(x) for x in cast(list[Any], candidate))
     model = Model(alias, str(chosen["id"]), cli, str(chosen.get("effort") or "medium"),
                   None, chosen_family, note=note if isinstance(note, str) else None,
                   option=chosen_option, review_argv=review_argv)
@@ -888,22 +1027,62 @@ def _claude_cli(project: Config) -> str | None:
 
 
 def _antigravity_cli(project: Config) -> str | None:
-    """The Antigravity CLI or harness adapter the review runs (fathers#201): LANEFATHER_ANTIGRAVITY or
-    LANEFATHER_AGY; else ANTIGRAVITY_CLI_PATH or AGY_CLI_PATH from the environment; else `agy` or `antigravity` on
-    PATH."""
+    """The Antigravity CLI the review runs (fathers#201): LANEFATHER_ANTIGRAVITY or LANEFATHER_AGY; else
+    ANTIGRAVITY_CLI_PATH or AGY_CLI_PATH from the environment; else `agy` or `antigravity` on PATH; else where the
+    Antigravity installer puts it (~/.gemini/bin/agy); else the one T3 Code bundles. A set but empty override
+    disables Antigravity."""
     for setting in ("ANTIGRAVITY", "AGY"):
         explicit = project.env(setting)
         if explicit is not None:
-            if not explicit:
+            stripped = explicit.strip()
+            if not stripped:
                 return None
-            first = shlex.split(explicit)[0] if " " in explicit and not os.path.exists(explicit) else explicit
-            return explicit if (os.access(first, os.X_OK) or shutil.which(first)) else None
+            if " " in stripped and not os.path.exists(stripped):
+                try:
+                    parts = shlex.split(stripped)
+                except ValueError:
+                    return None
+                if not parts:
+                    return None
+                first = parts[0]
+            else:
+                first = stripped
+            return stripped if (os.access(first, os.X_OK) or shutil.which(first)) else None
     for env_var in ("ANTIGRAVITY_CLI_PATH", "AGY_CLI_PATH"):
         candidate = os.environ.get(env_var)
         if candidate is not None:
             return candidate if candidate and os.access(candidate, os.X_OK) else None
-    return shutil.which("agy") or shutil.which("antigravity")
+    found = shutil.which("agy") or shutil.which("antigravity")
+    if found:
+        return found
+    home = Path(os.path.expanduser("~"))
+    installed = home / ".gemini" / "bin" / "agy"
+    if installed.is_file() and os.access(installed, os.X_OK):
+        return str(installed)
+    return _t3_antigravity(home)
 
+
+def _t3_platform() -> str:
+    """T3 Code's name for this machine's platform (darwin-arm64, linux-x64, ...)."""
+    system = sys.platform if sys.platform in ("darwin", "win32") else sys.platform.split("-")[0]
+    machine = platform.machine().lower()
+    arch = {"x86_64": "x64", "amd64": "x64", "aarch64": "arm64", "arm64": "arm64"}.get(machine, machine)
+    return f"{system}-{arch}"
+
+
+def _t3_antigravity(home: Path) -> str | None:
+    """The antigravity binary T3 Code bundles: the release `active.json` names under
+    ~/.t3/tools/antigravity-acp/<platform>/versions/; None when any part is missing or unreadable."""
+    root = home / ".t3" / "tools" / "antigravity-acp" / _t3_platform()
+    try:
+        active: Any = json.loads((root / "active.json").read_text())
+    except (OSError, ValueError):
+        return None
+    release = cast(dict[str, Any], active).get("releaseId") if isinstance(active, dict) else None
+    if not isinstance(release, str) or not re.fullmatch(r"[A-Za-z0-9._-]+", release) or release in (".", ".."):
+        return None
+    binary = root / "versions" / release / ("antigravity.exe" if sys.platform == "win32" else "antigravity")
+    return str(binary) if binary.is_file() and os.access(binary, os.X_OK) else None
 
 
 def _review_prompt(cfg: Config, request: Request, diff: str | None) -> str:
@@ -1005,9 +1184,9 @@ def _unreadable_answer(text: str) -> list[dict[str, Any]]:
 
 
 
-def _run_together(jobs: list[tuple[list[str], Path, Path]], cwd: str, prompt: Path) -> list[tuple[int, float]]:
-    """Start every (argv, stdout, log) at once, each reading the same prompt file, and wait for all: each one's
-    exit (124 on the timeout, 127 when it cannot start) and its seconds. Stopping this process stops them all."""
+def _run_together(jobs: list[Job], cwd: str) -> list[tuple[int, float]]:
+    """Start every job at once, each reading its own stdin file, and wait for all: each one's exit (124 on the
+    timeout, 127 when it cannot start) and its seconds. Stopping this process stops them all."""
     children: list[subprocess.Popen[str] | None] = []
     results: list[tuple[int, float]] = [(124, 0.0)] * len(jobs)
     clock = time.monotonic()
@@ -1022,14 +1201,15 @@ def _run_together(jobs: list[tuple[list[str], Path, Path]], cwd: str, prompt: Pa
             results[index] = (124, time.monotonic() - clock)
 
     try:
-        for index, (argv, stdout, log) in enumerate(jobs):
+        for index, job in enumerate(jobs):
             try:
-                with open(prompt) as stdin, open(stdout, "a") as out, open(log, "a") as err:
-                    children.append(subprocess.Popen(argv, cwd=cwd, stdin=stdin, stdout=out,
-                                                     stderr=err if stdout != log else subprocess.STDOUT, text=True))
+                with open(job.stdin) as stdin, open(job.stdout, "a") as out, open(job.log, "a") as err:
+                    children.append(subprocess.Popen(job.argv, cwd=cwd, stdin=stdin, stdout=out,
+                                                     stderr=err if job.stdout != job.log else subprocess.STDOUT,
+                                                     text=True))
             except OSError as error:
-                with open(log, "a") as err:
-                    err.write(f"{argv[0]} did not start: {error}\n")
+                with open(job.log, "a") as err:
+                    err.write(f"{job.argv[0]} did not start: {error}\n")
                 children.append(None)
                 results[index] = (127, 0.0)
         waiters = [threading.Thread(target=wait, args=(i, c), daemon=True) for i, c in enumerate(children) if c]

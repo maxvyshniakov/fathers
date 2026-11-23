@@ -58,31 +58,42 @@ def asked_reviewers(args: Any, project: config.Config = config.DEFAULT) -> tuple
     return (asked,)
 
 
-# The family of the agent that ran the lane's last check (lanefather.events.actor), for the role's `not_family`.
-FAMILIES = {"claude-code": "anthropic", "codex": "openai", "antigravity": "google", "t3-code": "google"}
+# The family of a harness that runs one family only (lanefather.events.actor), for the role's `not_family`. T3 Code
+# runs Claude, Codex or Antigravity, so only its recorded model tells (fathers#201).
+FAMILIES = {"claude-code": "anthropic", "codex": "openai", "antigravity": "google"}
+MODEL_FAMILIES = (("claude-", "anthropic"), ("gpt-", "openai"), ("gemini-", "google"))
+
+
+def _agent_family(kind: str, model: str) -> str | None:
+    """The family of one recorded agent: its model's when the model names one, else its harness's when that runs
+    one family only."""
+    lowered = model.strip().lower()
+    for prefix, family in MODEL_FAMILIES:
+        if lowered.startswith(prefix):
+            return family
+    return FAMILIES.get(kind)
 
 
 def implementer_family(store: state.Store, lane_id: str) -> str | None:
-    """The implementer's model family: that of the agent whose `check` wrote the lane's receipt, None unknown."""
+    """The implementer's model family: that of the agent whose `check` wrote the lane's receipt (its recorded model
+    first, then a single-family harness), else of the lane's latest agent that tells; None unknown."""
     check_data = receipts.read(store, lane_id) or {}
-    family = FAMILIES.get(str(check_data.get("agent")))
-    if family:
-        return family
+    checker = str(check_data.get("agent") or "")
     record = state.read_json(store.record_path(lane_id)) or {}
-    agents: list[Any] = record.get("agents") or []
-    for raw_entry in reversed(agents):
-        if isinstance(raw_entry, dict):
-            entry = cast(dict[str, Any], raw_entry)
-            kind = str(entry.get("kind") or "")
-            if kind in FAMILIES:
-                return FAMILIES[kind]
-            model = str(entry.get("model") or "").lower()
-            if model.startswith("gemini-"):
-                return "google"
-            if model.startswith("claude-"):
-                return "anthropic"
-            if model.startswith("gpt-"):
-                return "openai"
+    raw_agents: list[Any] = record.get("agents") or []
+    agents = [cast(dict[str, Any], e) for e in reversed(raw_agents) if isinstance(e, dict)]
+    if checker:
+        for entry in agents:
+            if str(entry.get("kind") or "") == checker:
+                family = _agent_family(checker, str(entry.get("model") or ""))
+                if family:
+                    return family
+        if checker in FAMILIES:
+            return FAMILIES[checker]
+    for entry in agents:
+        family = _agent_family(str(entry.get("kind") or ""), str(entry.get("model") or ""))
+        if family:
+            return family
     return None
 
 
@@ -368,7 +379,8 @@ def review_lines(
                 if entry.get("status") == "failed"
                 else f"skipped: {entry.get('reason')}"
             )
-            + (f" ({entry['reason']})" if entry.get("status") == "finished" and entry.get("reason") else "")
+            + (f" ({entry.get('reason') or entry.get('fallback')})"
+               if entry.get("status") == "finished" and (entry.get("reason") or entry.get("fallback")) else "")
             + (f"; note: {entry['note']}" if entry.get("note") else "")
         )
     for f in findings:
@@ -614,7 +626,8 @@ def compare(args: Any, store: state.Store) -> int:
             "",
             f"{view.get('reviewer')} ({view.get('model')} {view.get('effort')}, "
             f"{view.get('seconds') or 0:.0f} s)"
-            + (f", for {view['member']}: {view['reason']}" if view.get("member") != view.get("reviewer") else "")
+            + (f", for {view['member']}: {view.get('reason') or view.get('fallback')}"
+               if view.get("member") != view.get("reviewer") else "")
             + (f"; note: {view['note']}" if view.get("note") else ""),
         ]
         if not view["findings"]:

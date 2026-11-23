@@ -326,7 +326,23 @@ A failed or empty reviewer run can fall back to the next choice in the role. Quo
 provider availability and account charges remain outside Lanefather.
 
 Set `LANEFATHER_CODEX`, `LANEFATHER_CLAUDE` and `LANEFATHER_ANTIGRAVITY` (or `LANEFATHER_AGY`) to explicit executable
-paths if PATH discovery (`codex`, `claude`, `agy` or `antigravity`) is unsuitable.
+paths if PATH discovery (`codex`, `claude`, `agy` or `antigravity`) is unsuitable; a set but empty value turns that
+reviewer off. Antigravity is also found through `ANTIGRAVITY_CLI_PATH` or `AGY_CLI_PATH`, then on PATH, then where
+its installer puts it (`~/.gemini/bin/agy`), then as the binary T3 Code bundles
+(`~/.t3/tools/antigravity-acp/<platform>/versions/<release>/antigravity`, the release `active.json` names).
+
+An Antigravity review runs `agy --model ID --effort E --mode plan --sandbox --disable-slash-commands --print-timeout
+1740s --input-format stream-json --output-format stream-json -p=` in the frozen checkout, the prompt as one
+stream-json user message on stdin (a large diff never rides on the command line) and the answer the `response` of
+the stream's last `result` event. `agy --effort` takes `low` to `max`, so a `minimal` choice runs at `low`. A result
+with `status: ERROR` (a used-up quota) fails the run with its error, as does a run that changes the checkout (`git
+status` differs afterwards); a stream without a result is an empty answer. Either way the next candidate reviews.
+The receipt keeps the run's `session` (the Antigravity conversation id) and `usage` (its token counts). The
+receipt's `options` names Mastack's option for the provider, `thought_level` for Google, though `agy` takes the
+value as `--effort`. `[cli.antigravity] review = [...]` in the models file replaces that command (`{cli}`, `{id}`,
+`{effort}`, `{checkout}`, `{output}` and `{prompt}` are filled in; the raw prompt goes on stdin and the answer is its
+stdout, or the `{output}` file when the command names one); `[cli.antigravity] run` is never used for a review,
+since an implementing command need not be read-only.
 `LANEFATHER_MODELS=/path/to/models.toml` selects model configuration. For example:
 
 ```toml
@@ -360,9 +376,10 @@ the receipt's `role` (fathers#150); the choices after role's are its fallbacks. 
 CLI the review runs (`MASTACK_CODEX`) and the same models file (`MASTACK_MODELS`); Lanefather reuses that read. The
 implementer's family is that of the lane's builder as its last `check` recorded it in the receipt's `agent`:
 `check --agent claude-code|codex|antigravity|t3-code`, else the agent session the check runs in
-(`ANTIGRAVITY_CONVERSATION_ID`, `CODEX_THREAD_ID`, `CLAUDE_CODE_SESSION_ID`, `T3_THREAD_ID`); `claude-code` is
-anthropic, `codex` is openai, `antigravity` and `t3-code` are google. Unknown, the flag is left out and `role`'s
-caution is shown. A `role` that fails or gives no choice leaves the choice to the models file.
+(`ANTIGRAVITY_CONVERSATION_ID`, `CODEX_THREAD_ID`, `CLAUDE_CODE_SESSION_ID`, `T3CODE_THREAD_ID`). The model that
+agent recorded decides first (`claude-*` anthropic, `gpt-*` openai, `gemini-*` google); without one, `claude-code`
+is anthropic, `codex` openai and `antigravity` google, while `t3-code`, which runs any of the three, tells nothing.
+Unknown, the flag is left out and `role`'s caution is shown. A `role` that fails or gives no choice leaves the choice to the models file.
 
 A review panel runs several reviewers on every lane at once:
 
@@ -383,10 +400,13 @@ member of the implementer's family is a second opinion beside the other. It runs
 model that does not ask for another family (Mastack's same-family Opus), and its entry carries that choice's `note`
 (else "same family as the implementer (F)"), which `review` and `--compare` print. The single reviewer keeps
 `not_family` as above. A member whose run fails or answers
-empty is kept as `failed` and the others' answers stand. `panel_required` holds the gate on a `failed` member only:
+empty takes a stand-in (fathers#201): the members share one pool, the candidates that hold and are not on the panel,
+in order, and each failing member takes the next one nobody else reviews with, its entry's `fallback` saying why
+("the Opus run failed (exit 1): ...: neon reviews in its place"). With none left the member is kept as `failed` and
+the others' answers stand. `panel_required` holds the gate on a `failed` member only:
 a member the rules skipped is not missing. The receipt's `panel` lists each member: `member`, `reviewer`, `model`,
-`effort`, `cli`, `status` (`finished`, `failed`, `skipped`), `reason`, `error`, `fallback`, `seconds`, `output` and
-`numbers`, its findings in the one `findings` list, which numbers them across the panel and names each one's
+`effort`, `cli`, `status` (`finished`, `failed`, `skipped`), `reason`, `error`, `fallback`, `seconds`, `output`,
+`session` and `usage` (an Antigravity run's) and `numbers`, its findings in the one `findings` list, which numbers them across the panel and names each one's
 `reviewer`; `review --mark N` and the gate read that list as before. `review ID --compare` prints each reviewer's
 findings with their marks, and `stats --json` gives per-reviewer totals.
 
@@ -399,7 +419,7 @@ shows. The receipt records the reviewer's actual `provider`, `cli`, `model`, `ef
 `model_reasoning_effort` or `thought_level`). `--reviewer` does not combine with `--mark`, `--compare` or `--fix-lane`.
 
 Receipts from this release add keys (`agent` in a check receipt; `panel`, `forced`, `role`, `prompt_sha256` and a
-finding's `reviewer` in a review receipt) that an earlier release reads past: it lists, shows, marks and gates them.
+finding's `reviewer`, `session` and `usage` in a review receipt) that an earlier release reads past: it lists, shows, marks and gates them.
 The `[review] panel` and `panel_required` keys of `.lanefather.toml`, though, are refused by an earlier release as
 unknown: install this release before a project sets them.
 

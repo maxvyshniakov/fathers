@@ -437,24 +437,80 @@ if os.environ.get("FIXTURE_CLAUDE_FAIL"):
 sys.stdout.write(pathlib.Path(os.environ.get("FIXTURE_CLAUDE_TEXT") or os.environ["FIXTURE_REVIEW_TEXT"]).read_text())
 '''
 
+# A stand-in for `agy` (fathers#201) that holds the real CLI's contract as `agy --help` gives it: an unknown flag
+# exits 2 (Go's flag package), `-p X` takes X as its prompt, and the review needs `-p=` with stream-json in and
+# out, one NDJSON user message on stdin. FIXTURE_ANTIGRAVITY_MODE: ok (a result event with the review text, the
+# conversation id and usage), error (a result with status ERROR, as a used-up quota), empty (exit 0, no output),
+# fail (exit 1, stderr only), write (changes a file in the checkout, then answers).
 FAKE_ANTIGRAVITY = r'''#!/usr/bin/env python3
 import json, os, pathlib, sys
 args = sys.argv[1:]
 log = os.environ["FIXTURE_ANTIGRAVITY_LOG"]
 with open(log, "a") as handle:
     handle.write(json.dumps([os.path.realpath(sys.argv[0]), os.path.realpath(os.getcwd()), *args]) + "\n")
-prompt = sys.stdin.read() if not sys.stdin.isatty() else ""
-pathlib.Path(log + ".prompt").write_text(prompt)
-if os.environ.get("FIXTURE_ANTIGRAVITY_FAIL"):
-    print("antigravity: quota exceeded or backend error", file=sys.stderr)
+VALUED = {"--model", "--effort", "--mode", "--print-timeout", "--input-format", "--output-format", "--add-dir",
+          "--agent", "--conversation", "--json-schema", "--log-file", "--project", "--settings"}
+SWITCHES = {"--sandbox", "--disable-slash-commands", "--dangerously-skip-permissions", "--new-project",
+            "--continue", "-c", "--remote-agent", "--remote-control"}
+def refuse(text):
+    print(text, file=sys.stderr)
+    sys.exit(2)
+options, switches, prompt, index = {}, set(), None, 0
+while index < len(args):
+    arg = args[index]
+    name, eq, value = arg.partition("=")
+    if name in ("-p", "--print", "--prompt"):
+        if eq:
+            prompt, index = value, index + 1
+        elif index + 1 < len(args):
+            prompt, index = args[index + 1], index + 2
+        else:
+            refuse(f"flag needs an argument: {arg}")
+        if prompt.startswith("-"):
+            refuse(f'{name} took "{prompt}" as its prompt')
+        continue
+    if name in VALUED:
+        if eq:
+            options[name], index = value, index + 1
+        elif index + 1 < len(args):
+            options[name], index = args[index + 1], index + 2
+        else:
+            refuse(f"flag needs an argument: {arg}")
+        continue
+    if arg in SWITCHES:
+        switches.add(arg)
+        index += 1
+        continue
+    refuse(f"flag provided but not defined: {arg}")
+if prompt != "":
+    refuse("this stand-in runs only `-p=` with the prompt on stdin")
+if options.get("--input-format") != "stream-json" or options.get("--output-format") != "stream-json":
+    refuse("--input-format stream-json requires --output-format stream-json")
+if options.get("--effort", "medium") not in ("low", "medium", "high", "xhigh", "max"):
+    refuse(f"invalid --effort {options['--effort']}")
+messages = [json.loads(line) for line in sys.stdin if line.strip()]
+if len(messages) != 1 or messages[0].get("event") != "user":
+    refuse(f"expected one user message on stdin, got {messages!r:.200}")
+pathlib.Path(log + ".prompt").write_text(messages[0]["message"]["content"])
+mode = os.environ.get("FIXTURE_ANTIGRAVITY_MODE", "ok")
+if mode == "fail":
+    print("agy: backend unavailable", file=sys.stderr)
     sys.exit(1)
-if os.environ.get("FIXTURE_ANTIGRAVITY_EMPTY"):
+if mode == "empty":
     sys.exit(0)
+print("not json: a status line between events")
+print(json.dumps({"event": "init", "conversation_id": "conv-fixture-1"}))
+if mode == "error":
+    print(json.dumps({"event": "result", "result": {"status": "ERROR", "conversation_id": "conv-fixture-1",
+                      "error": "RESOURCE_EXHAUSTED: the Gemini quota is used up"}}))
+    sys.exit(1)
+if mode == "write":
+    pathlib.Path("written-by-agy.txt").write_text("a reviewer must not write\n")
 text = pathlib.Path(os.environ.get("FIXTURE_ANTIGRAVITY_TEXT") or os.environ["FIXTURE_REVIEW_TEXT"]).read_text()
-if "-o" in args:
-    pathlib.Path(args[args.index("-o") + 1]).write_text(text)
-else:
-    sys.stdout.write(text)
+print(json.dumps({"event": "result", "result": {
+    "status": "SUCCESS", "response": text, "conversation_id": "conv-fixture-1",
+    "usage": {"input_tokens": 1200, "output_tokens": 80, "thinking_tokens": 40, "cache_read_tokens": 0,
+              "total_tokens": 1320}}}))
 '''
 
 # A stand-in for Mastack's `bin/role` (fathers#150), installed beside a models file by LaneCase.with_role: it logs
@@ -721,7 +777,7 @@ class ScratchCase(unittest.TestCase):
         self.env: dict[str, str] = {
             k: v for k, v in os.environ.items()
             if not k.startswith(("STRAYLIGHT_", "LANEFATHER_", "SLOTFATHER_", "GIT_", "FIXTURE_",
-                                 "ANTIGRAVITY_", "AGY_", "T3_", "CLAUDE_", "CODEX_", "SPAWNFATHER_", "FAKE_"))
+                                 "ANTIGRAVITY_", "AGY_", "T3_", "T3CODE_", "CLAUDE_", "CODEX_", "SPAWNFATHER_", "FAKE_"))
             and k not in ("CODEX_CLI_PATH", "PYTHONPATH", "ANTHROPIC_MODEL", "AGENT_TRANSCRIPT_PATH",
                           "THOUGHT_LEVEL")
             and not k.startswith("MASTACK_")
@@ -796,7 +852,7 @@ class LaneCase(unittest.TestCase):
         self.review_text.write_text(NO_FINDINGS)
         self.env = {k: v for k, v in os.environ.items()
                     if not k.startswith(("STRAYLIGHT_", "LANEFATHER_", "SLOTFATHER_", "GIT_", "FIXTURE_",
-                                         "ANTIGRAVITY_", "AGY_", "T3_", "CLAUDE_", "CODEX_", "SPAWNFATHER_",
+                                         "ANTIGRAVITY_", "AGY_", "T3_", "T3CODE_", "CLAUDE_", "CODEX_", "SPAWNFATHER_",
                                          "FAKE_"))
                     and k not in ("CODEX_CLI_PATH", "PYTHONPATH", "ANTHROPIC_MODEL", "AGENT_TRANSCRIPT_PATH",
                                   "THOUGHT_LEVEL")

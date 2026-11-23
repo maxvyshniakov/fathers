@@ -114,12 +114,14 @@ def timestamp(moment: datetime.datetime) -> str:
 
 # The agent sessions a process can run for, the most specific first: a Codex thread started from a Claude Code
 # session inherits CLAUDE_CODE_SESSION_ID, never the other way round (fathers#150 review); Antigravity inside T3 Code
-# carries ANTIGRAVITY_CONVERSATION_ID alongside T3_THREAD_ID (fathers#200).
+# carries ANTIGRAVITY_CONVERSATION_ID alongside T3 Code's thread id (fathers#200); T3 Code sets T3CODE_THREAD_ID,
+# the other T3 names are older guesses kept for callers that set them (fathers#201).
 AGENTS = (
     ("ANTIGRAVITY_CONVERSATION_ID", "antigravity"),
     ("ANTIGRAVITY_SESSION_ID", "antigravity"),
     ("CODEX_THREAD_ID", "codex"),
     ("CLAUDE_CODE_SESSION_ID", "claude-code"),
+    ("T3CODE_THREAD_ID", "t3-code"),
     ("T3_THREAD_ID", "t3-code"),
     ("T3_CODE_THREAD_ID", "t3-code"),
     ("T3_SESSION_ID", "t3-code"),
@@ -177,7 +179,7 @@ def agent_context(explicit_kind: str | None = None, env: Mapping[str, str] | Non
 
     thread_vars: list[str] = ["LANEFATHER_AGENT_THREAD_ID"]
     if kind in ("antigravity", "t3-code"):
-        thread_vars.extend(["T3_THREAD_ID", "T3_CODE_THREAD_ID"])
+        thread_vars.extend(["T3CODE_THREAD_ID", "T3_THREAD_ID", "T3_CODE_THREAD_ID"])
     thread_id = _first_env(source, tuple(thread_vars))
 
     transcript_vars: list[str] = ["LANEFATHER_AGENT_TRANSCRIPT", "AGENT_TRANSCRIPT_PATH"]
