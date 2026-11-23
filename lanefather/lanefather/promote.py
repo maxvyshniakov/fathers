@@ -354,10 +354,8 @@ def step_review_refusals(run: PromoteRun) -> None:
                         + f", then rerun {prog} promote {run.sha[:10]}; a stamped tree is not gated again. "
                         "--force-reason overrides, logged")
     if refusals:
-        journal.ledger(f"override promote {run.sha}: {run.force_reason} ({'; '.join(refusals)})", kind="override",
-                       level="warn", subject={"type": "commit", "id": run.sha},
-                       details={"command": "promote", "reason": run.force_reason, "refusals": refusals},
-                       store=run.store)
+        journal.override("promote", None, run.force_reason, refusals, subject={"type": "commit", "id": run.sha},
+                         store=run.store)
 
 
 def step_perf_suite(run: PromoteRun) -> None:

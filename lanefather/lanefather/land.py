@@ -247,13 +247,7 @@ def check_other_reviews(store: state.Store, record: state.Record,
                                   "--force-reason overrides and is logged"]))
     for text in refusals:
         print(f"lane: overridden: {text}", file=sys.stderr)
-    override = {"at": journal.now(), "reason": force_reason, "refusals": refusals}
-    record.setdefault("overrides", []).append(override)
-    journal.ledger(f"override land {record['id']}: {force_reason} ({'; '.join(refusals)})", kind="override",
-                   level="warn", lane=record,
-                   details={"command": "land", "reason": force_reason, "refusals": refusals},
-                   store=store)
-    return override
+    return journal.override("land", record, force_reason, refusals, store=store)
 
 
 def _find_merge_commit(integration: str, tip: str, since: str | None = None) -> tuple[str, str] | None:
@@ -331,13 +325,7 @@ def merge(
         if problem and not force_reason:
             raise LaneError("land refused: " + problem)
         if problem:
-            override = {"at": journal.now(), "reason": force_reason, "refusals": [problem]}
-            record.setdefault("overrides", []).append(override)
-            new_overrides.append(override)
-            journal.ledger(f"override land {lane_id}: {force_reason} ({problem})", kind="override",
-                           level="warn", lane=record,
-                           details={"command": "land", "reason": force_reason, "refusals": [problem]},
-                           store=store)
+            new_overrides.append(journal.override("land", record, force_reason, [problem], store=store))
         if dirty(integration) or os.path.exists(git(integration, "rev-parse", "--git-path", "MERGE_HEAD")):
             raise LaneError(f"land refused: {integration} has uncommitted changes or a merge in progress")
         if onto in store.project.promoted:
@@ -347,15 +335,9 @@ def merge(
                     raise LaneError(f"land refused: {integration} is on {onto}, which promote would not hold for "
                                     f"this lane's review ({words}); run {prog} review {lane_id} and mark its "
                                     "findings first, or land into the integration branch")
-                override = {"at": journal.now(), "reason": force_reason,
-                            "refusals": [f"unreviewed land onto {onto}"]}
-                record.setdefault("overrides", []).append(override)
-                new_overrides.append(override)
-                journal.ledger(f"override land {lane_id} onto {onto} unreviewed: {force_reason} ({words})",
-                               kind="override", level="warn", lane=record,
-                               details={"command": "land", "reason": force_reason,
-                                        "refusals": [f"unreviewed land onto {onto}"], "review": words},
-                               store=store)
+                new_overrides.append(journal.override(
+                    "land", record, force_reason, [f"unreviewed land onto {onto}"],
+                    qualifier=f"onto {onto} unreviewed", described=words, details={"review": words}, store=store))
             else:
                 journal.ledger(f"land {lane_id} onto {onto}: {words}", kind="landing.reviewed", lane=record,
                                details={"onto": onto, "review": words}, store=store)

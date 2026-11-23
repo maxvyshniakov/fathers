@@ -182,11 +182,8 @@ def register_admitted(store: state.Store, record: Record, decision: admission.De
     store.directory.mkdir(parents=True, exist_ok=True)
     Path(record["scratch"][0]).mkdir(parents=True, exist_ok=True)
     if refusals:
-        record["overrides"].append({"at": journal.now(), "reason": force_reason, "refusals": refusals})
-        journal.ledger(f"override start {lane_id}: {force_reason} (refusals: {'; '.join(refusals)})",
-                       kind="override", level="warn", lane=record,
-                       details={"command": "start", "reason": force_reason, "refusals": refusals},
-                       store=store)
+        journal.override("start", record, force_reason, refusals, described=f"refusals: {'; '.join(refusals)}",
+                         store=store)
     worktree: str | None = record.get("worktree")
     status = "planned"
     if create:

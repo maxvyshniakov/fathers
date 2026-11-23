@@ -163,6 +163,35 @@ class CallSiteTests(unittest.TestCase):
                 self.assertNotIn('"ledger.log"', path.read_text().replace("'ledger.log'", '"ledger.log"'), path.name)
         self.assertGreaterEqual(calls, 35)
 
+    def test_every_override_is_audited_by_journal_override(self):
+        """Review of fathers#172, finding 4: the override audit (record entry and `override` ledger line) is one
+        helper, not a copy per command."""
+        sites: list[str] = []
+        for path in sorted((ROOT / "lanefather").glob("*.py")):
+            if path.name == "journal.py":
+                continue
+            text = path.read_text()
+            self.assertFalse('kind="override"' in text, f"{path.name} audits an override by hand")
+            self.assertFalse('setdefault("overrides", []).append' in text, f"{path.name} audits an override by hand")
+            self.assertFalse('["overrides"].append' in text, f"{path.name} audits an override by hand")
+            sites += [path.name] * text.count("journal.override(")
+        self.assertEqual(sorted(sites), ["done.py", "land.py", "land.py", "land.py", "lanes.py", "promote.py",
+                                        "review.py", "review_gate.py"])
+
+    def test_journal_override_appends_the_entry_and_writes_the_warn_ledger_line(self):
+        directory = pathlib.Path(tempfile.mkdtemp(prefix="lanefather-override-"))
+        record: dict[str, Any] = {"id": "x"}
+        entry = journal.override("land", record, "urgent", ["a", "b"], directory=directory)
+        self.assertEqual(record["overrides"], [entry])
+        self.assertEqual((entry["reason"], entry["refusals"]), ("urgent", ["a", "b"]))
+        journal.override("land", record, "why", ["r"], qualifier="onto dev unreviewed", described="no review",
+                         directory=directory)
+        journal.override("done", record, "gone", ["c"], audited=False, directory=directory)
+        self.assertEqual(len(record["overrides"]), 2)
+        lines = [line.split(" ", 1)[1] for line in (directory / "ledger.log").read_text().splitlines()]
+        self.assertEqual(lines, ["override land x: urgent (a; b)", "override land x onto dev unreviewed: why (no review)",
+                                 "override done x: gone (c)"])
+
 
 if __name__ == "__main__":
     unittest.main()

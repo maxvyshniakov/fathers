@@ -576,14 +576,7 @@ def review_lane(args: Any, store: state.Store) -> int:
             print(f"Lane {args.id} is already reviewed: one review per lane (--force-reason reviews again, logged)")
         return 0
     if already_finished or incomplete_panel:
-        journal.ledger(
-            f"override review {args.id}: {args.force_reason} (reviewed again)",
-            kind="override",
-            level="warn",
-            lane=record,
-            details={"command": "review", "reason": args.force_reason, "refusals": ["reviewed again"]},
-            store=store,
-        )
+        journal.override("review", record, args.force_reason, ["reviewed again"], audited=False, store=store)
     exempt = review_exemption(record, store)
     if exempt and not args.force_reason:
         start_lane_review(store, record)

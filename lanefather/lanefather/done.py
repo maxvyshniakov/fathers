@@ -598,10 +598,8 @@ def cleanup(plan: FinishPlan, force_reason: str | None, store: state.Store) -> t
     if refusals and not force_reason:
         raise LaneError("done refused (not landed or not safe to remove):\n- " + "\n- ".join(refusals))
     if refusals:
-        journal.ledger(f"override done {record['id']}: {force_reason} ({'; '.join(refusals)})", kind="override",
-                       level="warn", lane=record,
-                       details={"command": "done", "reason": force_reason, "refusals": refusals},
-                       directory=store.directory, project=store.project)
+        journal.override("done", record, force_reason, refusals, audited=False, directory=store.directory,
+                         project=store.project)
     holding = git(plan.integration, "rev-parse", "HEAD") if plan.integration else None
     return remove(record, store, plan.spawnfather, plan.main, plan.proof, verb="done", holding=holding)
 
