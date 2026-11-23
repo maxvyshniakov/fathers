@@ -18,7 +18,7 @@ import re
 import subprocess
 from typing import Any, Literal, cast
 
-from . import config, lifecycle, review_record, state
+from . import config, lifecycle, review_record, scope, state
 from . import results as result_store
 from .gitops import main_checkout
 from .state import Record
@@ -530,6 +530,8 @@ class LaneView:
     ticket_raw: str
     ticket_number: str | None
     ticket_url: str | None
+    # Every ticket of the lane's scope (fathers#192), beside `ticket`, the primary one older readers use.
+    tickets: list[dict[str, Any]]
     branch: str | None
     base: str | None
     worktree: str | None
@@ -624,6 +626,7 @@ class LaneView:
             "project": self.project,
             "repository": repo_url,
             "ticket": {"number": self.ticket_raw, "url": self.ticket_url},
+            "tickets": self.tickets,
             "status": self.status,
             "branch": self.branch,
             "base": self.base,
@@ -645,6 +648,7 @@ class LaneView:
             "id": self.id,
             "status": self.status,
             "ticket": {"number": self.ticket_number, "url": self.ticket_url},
+            "tickets": self.tickets,
             "branch": self.branch,
             "base": self.base,
             "worktree": self.worktree,
@@ -719,6 +723,15 @@ def lane_view(
         if repo_slug and ticket_raw.isdigit()
         else None
     )
+    tickets = [
+        {
+            "number": issue.number,
+            "url": (f"https://github.com/{repo_slug}/issues/{issue.number}"
+                    if repo_slug and issue.number.isdigit() else None),
+            "partial": issue.partial,
+        }
+        for issue in scope.issues(record)
+    ]
     project_name = store.project.project if store.project.project != "this project" else Path(root).name
 
     raw_claims: Any = record.get("claims", [])
@@ -733,6 +746,7 @@ def lane_view(
         ticket_raw=ticket_raw,
         ticket_number=ticket_number,
         ticket_url=ticket_url,
+        tickets=tickets,
         branch=branch_str,
         base=str(record["base"]) if record.get("base") is not None else None,
         worktree=str(record["worktree"]) if record.get("worktree") is not None else None,

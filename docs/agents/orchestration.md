@@ -38,6 +38,9 @@
 - Every landed lane is reviewed once, blind: Lanefather's land starts it with the `review` role of `models.toml`
   (another family than the implementer). Mark each finding `lanefather review <id> --mark N fixed:<merge>` or
   `rejected:<reason>` after the one fix round. A batch is pushed only with every finding marked.
+- The review reads the lane's whole accepted scope: every ticket's title and body (never its comments), each
+  `--decision` comment and each `--spec` at the lane's base. Register an owner answer as a decision rather than
+  copying it into a ticket body, and never register an implementer's report as one.
 - One fix lane for the findings of several landed lanes names them: `lanefather start review-fixes-<n> --fix-of A,B,C
   --ticket <N> --claims '<paths>' --create`. Its land is exempt from review like a `review <id> --fix-lane` lane's;
   mark each parent's findings `fixed:review-fixes-<n>`.

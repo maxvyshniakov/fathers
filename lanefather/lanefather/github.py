@@ -1,4 +1,5 @@
-"""GitHub CLI (`gh`) adapter (fathers#74): one subprocess seam for issue view, comment, create and label."""
+"""GitHub CLI (`gh`) adapter (fathers#74): one subprocess seam for issue view, comment, create and label, and for
+reading one issue comment (fathers#192)."""
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
@@ -89,6 +90,26 @@ def issue_view(
     except ValueError:
         return None, result.stderr.strip()
     return (cast(dict[str, Any], parsed), "") if isinstance(parsed, dict) else (None, result.stderr.strip())
+
+
+def issue_comment_view(
+    repo: str,
+    comment_id: str,
+    *,
+    project: config.Config | None = None,
+    env: Mapping[str, str] | None = None,
+    timeout: float | None = None,
+) -> tuple[dict[str, Any] | None, str]:
+    """One issue comment by its id via `gh api repos/<owner>/<name>/issues/comments/<id>`; returns
+    `(data, stderr)`. It reads that one comment, never the issue's thread."""
+    result = run_gh(["api", f"repos/{repo}/issues/comments/{comment_id}"], project=project, env=env, timeout=timeout)
+    if result.returncode != 0:
+        return None, (result.stderr or result.stdout).strip() or f"gh exit {result.returncode}"
+    try:
+        parsed = json.loads(result.stdout)
+    except ValueError:
+        return None, "gh api answered no JSON"
+    return (cast(dict[str, Any], parsed), "") if isinstance(parsed, dict) else (None, "gh api answered no object")
 
 
 def issue_create(

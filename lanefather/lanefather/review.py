@@ -3,8 +3,9 @@ promote --ship, whose findings become one ticket.
 
 The reviewer is the `review` role of the shared models.toml (mastack): today Sol 6.1 at medium effort while Codex
 has at least 15% of its weekly limit left, else Opus 5.5 at medium effort. The lane review gets the lane's diff
-against the last integration commit it merged, its ticket and the coding standards, never the lane's report, in a
-checkout detached at the lane tip. It asks `codex app-server` for the weekly limit and runs `codex exec` in a
+against the last integration commit it merged, its accepted scope (fathers#192: its tickets without their comments,
+its decisions, its specs at the base) and the coding standards, never the lane's report, in a checkout detached at
+the lane tip. It asks `codex app-server` for the weekly limit and runs `codex exec` in a
 read-only sandbox; under the limit, a reached limit, no Codex CLI, a failed Sol run or an empty answer runs `claude
 -p` instead. A lane that changes only *.md and docs/**, none of them a steering file, and a fix lane are exempt.
 LANEFATHER_REVIEW_START=manual makes land and promote --ship print the review command instead of starting it.
@@ -34,6 +35,7 @@ from . import (
     receipts,
     review_record,
     reviewer,
+    scope,
     settings,
     state,
     worktrees,
@@ -168,17 +170,9 @@ def coding_standards(main: str, tip: str, project: config.Config = config.DEFAUL
         return f"(no {name})"
 
 
-def ticket_text(record: Record, project: config.Config = config.DEFAULT) -> str:
-    if record["ticket"] == "none":
-        return "The lane has no ticket."
-    data, error = github.issue_view(
-        record["ticket"], json_fields="title,body", common=record["common_dir"], project=project
-    )
-    if data is None:
-        return f"Ticket #{record['ticket']} (gh could not read it: {error[:300]})"
-    title = str(data.get("title") or "")
-    body = str(data.get("body") or "")
-    return f"Ticket #{record['ticket']}: {title}\n\n{body}".strip()
+def ticket_text(record: Record, project: config.Config = config.DEFAULT, base: str | None = None) -> str:
+    """What the change is for: the lane's whole accepted scope as the reviewer reads it (lanefather.scope)."""
+    return scope.prompt_text(scope.resolve(record, base, project))
 
 
 def review_about(label: str, fields: dict[str, Any]) -> dict[str, Any]:
@@ -332,6 +326,30 @@ def perform_review(
     return completed
 
 
+def scope_lines(raw: dict[str, Any], record: Record | None, label: str, prog: str) -> list[str]:
+    """`Scope reviewed:` from a lane receipt's `scope`, and a warning when the lane's scope changed since."""
+    raw_scope: Any = raw.get("scope")
+    if raw.get("kind") != "lane" or not isinstance(raw_scope, list):
+        return []
+    raw_entries = cast(list[Any], raw_scope)
+    if not all(isinstance(e, dict) for e in raw_entries):
+        return ["Scope reviewed: the receipt's scope is unreadable (entry is not an object)"]
+    entries = [cast(dict[str, Any], e) for e in raw_entries]
+    try:
+        items = scope.from_json([e.get("item") for e in entries])
+    except (ValueError, LaneError) as error:
+        return [f"Scope reviewed: the receipt's scope is unreadable ({error})"]
+    unseen = [f"{scope.label(item)} {e.get('status')}"
+              for item, e in zip(items, entries, strict=True) if e.get("status") not in scope.READ]
+    lines = [f"Scope reviewed: {scope.describe(items)}" + (f" (not seen: {'; '.join(unseen)})" if unseen else "")]
+    if record is not None:
+        now = scope.of(record)
+        if now != items:
+            lines.append(f"Warning: scope changed since the review: now {scope.describe(now)}; "
+                         f"{prog} review {label} --force-reason <why> reviews it again")
+    return lines
+
+
 def review_lines(
     rev: review_record.ReviewRecord,
     *,
@@ -357,11 +375,12 @@ def review_lines(
         + (f"; forced by --reviewer {', '.join(forced['reviewers'])}" if forced.get("by") == "flag" else "")
         + f", {raw.get('seconds', 0):.0f} s"
     )
+    scoped = scope_lines(raw, record, label, cmd_prog)
     if not rev.has_finished_receipt:
         error = verdict.error if isinstance(verdict, review_record.Failed) else None
-        return [head, f"review failed: {error}"]
+        return [head, *scoped, f"review failed: {error}"]
     findings = rev.findings
-    lines = [head + f": {len(findings)} findings  ({raw.get('output')})"]
+    lines = [head + f": {len(findings)} findings  ({raw.get('output')})", *scoped]
     raw_panel: Any = raw.get("panel")
     panel = (
         [cast(dict[str, Any], e) for e in cast(list[Any], raw_panel) if isinstance(e, dict)]
@@ -571,14 +590,17 @@ def review_lane(args: Any, store: state.Store) -> int:
         print(f"Review of {args.id}: exempt ({exempt})")
         return 0
     tip, base = review_range(record)
+    # The accepted scope as the reviewer reads it, once for every panel member; the receipt keeps what was read.
+    resolved = scope.resolve(record, base, store.project)
     completed = perform_review(
         store,
         args.id,
-        {"kind": "lane", "lane": args.id, "ticket": record["ticket"]},
+        {"kind": "lane", "lane": args.id, "ticket": record["ticket"],
+         "scope": [scope.receipt_entry(entry) for entry in resolved], "scope_complete": scope.complete(resolved)},
         main_checkout(record["common_dir"]),
         base,
         tip,
-        ticket_text(record, store.project),
+        scope.prompt_text(resolved),
         family=implementer_family(store, args.id),
         reviewers=asked_reviewers(args, store.project),
         force=bool(args.force_reason),

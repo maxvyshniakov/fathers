@@ -4,7 +4,8 @@ page), read-only.
   {"v": 1, "host", "time", "registry",
    "projects": [{"project", "state_dir", "config", "repository", "checkout", "cap", "cap_source", "active", "planned",
                  "gate": {"sha", "status", "at"} | null,
-                 "lanes": [{"id", "status", "ticket": {"number", "url"}, "branch", "base", "worktree", "claims",
+                 "lanes": [{"id", "status", "ticket": {"number", "url"}, "tickets": [{"number", "url", "partial"}],
+                            "branch", "base", "worktree", "claims",
                             "after", "created", "receipt": {"status", "tree_match", "path"},
                             "post_merge": str | null, "review": {"status", "open", "findings"},
                             "logs": {phase: path}, "outcome"}]}

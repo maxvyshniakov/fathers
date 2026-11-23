@@ -101,6 +101,28 @@ log `lane.scope_changed`: `--add-ticket`, `--add-partial`, `--add-decision` and 
 `--mark-partial N` and `--mark-complete N` change a ticket it already names. A landed lane's merge has already named
 its tickets, so its scope does not change. `--json` prints `{"v": 1, "lane", "ticket", "scope"}`.
 
+### What the lane review reads
+
+The lane review reads the whole accepted scope once, after it fixes the range it reviews and before any reviewer
+starts, so every panel member gets the same text (fathers#192). Each ticket gives its number, title, body, URL,
+state and update time, never its comments: those hold the implementer's reports and land comments, and the review
+stays blind to them. A partial ticket is marked so the reviewer reviews the part the lane does and does not report
+the rest as missing. A decision is read as its one registered comment (body, author, update time) and is never an
+implementer's report: a land comment registered as a decision is refused. A spec is read as it stands at the
+review's base, the merge-base of the lane with its integration branch, never from the lane tip or a worktree; a spec
+that is not there (one the lane adds) is not accepted scope, and a directory, submodule, symbolic link or non-UTF-8
+file is not readable. Each item's text is cut at 20,000 characters with a visible `[truncated at 20000 chars]` note.
+
+The reviewer sees each item with its source (URL, or `<path>@<base>`), its version (update time, or the spec's
+blob id) and the digest of exactly the text shown. An item the review could not read (`missing`, `unreadable` or
+`refused`) is listed under `Unavailable scope`, and the reviewer reports one P3 finding naming it. The review
+receipt keeps `scope`, one entry per item: `item` (as in the record), `status` (`ok`, `truncated`, `missing`,
+`unreadable` or `refused`), `source`, `version`, `digest` (`sha256:<hex>`) and, when there is one, `reason`; and
+`scope_complete`, true when every item was read whole or truncated. `review <id>` prints `Scope reviewed:` with what
+was not seen, and a warning when the lane's scope changed since the review. An incomplete scope does not hold the
+gate yet; it shows in the output and the receipt. A lane without a ticket, decision or spec reads `The lane has no
+ticket.`
+
 ### Review findings before landing
 
 `land` refuses if another lane in the same repository has a finished review with an unmarked P1 or P2 finding
@@ -460,8 +482,9 @@ one) the same way. Only then does the receipt carry `forced` (`{"by": "flag", "r
 shows. The receipt records the reviewer's actual `provider`, `cli`, `model`, `effort` and `options` (`effort`,
 `model_reasoning_effort` or `thought_level`). `--reviewer` does not combine with `--mark`, `--compare` or `--fix-lane`.
 
-Receipts from this release add keys (`agent` in a check receipt; `panel`, `forced`, `role`, `prompt_sha256` and a
-finding's `reviewer`, `session` and `usage` in a review receipt) that an earlier release reads past: it lists, shows, marks and gates them.
+Receipts from this release add keys (`agent` in a check receipt; `panel`, `forced`, `role`, `prompt_sha256`,
+`scope`, `scope_complete` and a finding's `reviewer`, `session` and `usage` in a review receipt) that an earlier
+release reads past: it lists, shows, marks and gates them.
 The `[review] panel` and `panel_required` keys of `.lanefather.toml`, though, are refused by an earlier release as
 unknown: install this release before a project sets them.
 
@@ -618,6 +641,8 @@ unless `LANEFATHER_REGISTRY` is set.
     "gate": {"sha": "cedf8b97...", "status": "red", "at": "2026-11-12T04:06:19Z"},
     "lanes": [{"id": "710-speech-paste-phase", "status": "active",
                "ticket": {"number": "710", "url": "https://github.com/maxvyshniakov/straylight/issues/710"},
+               "tickets": [{"number": "710", "url": "https://github.com/maxvyshniakov/straylight/issues/710",
+                            "partial": false}],
                "branch": "lane/710-speech-paste-phase", "base": "integrate/queue-347", "worktree": "/...",
                "claims": ["desktop/src/**"], "after": [], "created": "2026-11-12T03:10:00Z",
                "receipt": {"status": "green", "tree_match": true, "path": "/.../710-speech-paste-phase.receipt.json"},
@@ -627,7 +652,9 @@ unless `LANEFATHER_REGISTRY` is set.
    {"project": "data-grid", "state_dir": "/...", "error": "config not found at /.../.lanefather.toml"}]}
 ```
 
-The lanes are those not done. `receipt.tree_match` compares the receipt's tree with the lane branch's, null when
+The lanes are those not done. `ticket` is the lane's primary ticket; `tickets` lists every ticket of its accepted
+scope in order, with `partial` for one it does only part of (`show --json` carries the same list).
+`receipt.tree_match` compares the receipt's tree with the lane branch's, null when
 either is unknown; `review.status` is the review receipt's, `stopped` for a running review whose process is gone;
 `logs` holds the newest run log of each phase (`check`, `rerun`, `base`, `post-merge`, `review`); `gate` is the newest
 batch gate; `outcome` stays null until lane parking is implemented and records one. `checkout` is the project's main

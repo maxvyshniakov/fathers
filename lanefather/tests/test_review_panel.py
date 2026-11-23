@@ -321,6 +321,30 @@ class PanelTests(ReviewCase):
         execution = next(c for c in self.codex_calls() if c[2] == "exec")
         self.assertIn('model_reasoning_effort="high"', execution)
 
+    def test_every_member_reads_the_same_accepted_scope(self):
+        """fathers#192: the scope is read once, so each member's prompt holds the same texts and digests."""
+        decision = "https://github.com/fixture/straylight/issues/161#issuecomment-2541"
+        body = "Owner decision: Opus and Sol see the same scope."
+        self.write(self.tmp, "issues.json", json.dumps({"161": {"number": 161, "title": "Panel scope",
+                                                                "body": "Body of 161.", "updatedAt": "2026-11-01"}}))
+        self.write(self.tmp, "api.json", json.dumps({"repos/fixture/straylight/issues/comments/2541": {
+            "body": body, "user": {"login": "owner"}, "updated_at": "2026-11-02"}}))
+        self.env.update(FAKE_GH_ISSUES=str(self.tmp / "issues.json"), FAKE_GH_API=str(self.tmp / "api.json"))
+        self.panel()
+        self.scoped("a", "--ticket", "161", "--decision", decision)
+        self.commit(self.record("a")["worktree"], {"lib/api.txt": "foo\nbaz\n"})
+        self.lane("check", "a")
+        self.lane("land", "a")
+        self.lane("review", "a")
+        prompt = (self.tmp / "codex.log.prompt").read_text()
+        self.assertEqual(prompt, (self.tmp / "claude.log.prompt").read_text(), "one identical prompt")
+        receipt = self.review("a")
+        self.assertEqual(self.members("a"), [("sol", "finished"), ("opus", "finished")])
+        self.assertIs(receipt["scope_complete"], True)
+        self.assertEqual([e["status"] for e in receipt["scope"]], ["ok", "ok"])
+        for text in ("Body of 161.", body, *(f"digest {e['digest']}" for e in receipt["scope"])):
+            self.assertIn(text, prompt)
+
     def test_a_panel_of_one_is_refused(self):
         self.configure('panel = ["sol"]\n')
         self.assertIn("two reviewers or more", self.lane("list", ok=False))

@@ -19,6 +19,15 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
   warns when a lane commit says `Fixes` for a partial ticket. A lane with one ticket keeps today's record, merge
   message and comments, and older Lanefather versions read every lane by its first completed ticket.
 
+- The lane review reads the lane's whole accepted scope (fathers#192): every ticket's title and body without its
+  comments, each decision's one comment and each spec as it stands at the review's base, so every panel member sees
+  the same text. A partial ticket is marked so the reviewer does not report its other parts as missing; a land
+  comment registered as a decision is refused; a long item is cut at 20,000 characters with a visible note. Scope
+  the review could not read is listed for the reviewer, who reports it as a P3 finding. The review receipt records
+  each item's source, version and the digest of the text shown (`scope`) and whether all of it was read
+  (`scope_complete`); `review` prints `Scope reviewed:` and warns when the lane's scope changed since. `show --json`
+  and `status --json` list every ticket of a lane's scope under `tickets`, beside the primary `ticket`.
+
 - `lanefather status --json` names each project's main checkout (`checkout`, its real path): the project its
   lanes own their worktrees and folders under in Spawnfather, so Godfather shows a lane's spawns (fathers#171).
 

@@ -10,16 +10,24 @@ first issue, else `none`. The optional `scope` key holds the whole list:
 A record without `scope` (every record before fathers#192, and a lane that completes one ticket and names nothing
 else, which therefore stays byte-identical to them) reads as `[{"issue": ticket}]`, or as no scope for `none`. A
 malformed `scope` warns and reads the same way; it never fails a command.
+
+The lane review reads the whole scope (`resolve`) and shows it to the reviewer (`prompt_text`): each ticket's title
+and body without its comments, each decision's one comment, each spec as it stands at the review's base. What it
+cannot read it names, so the reviewer reports it instead of the review silently covering less.
 """
 from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, replace
+import hashlib
 import re
+import subprocess
 import sys
-from typing import Any, cast
+from typing import Any, Literal, cast
 
+from . import config, github
 from .errors import LaneError
+from .gitops import main_checkout
 from .state import Record
 
 NONE = "none"
@@ -222,9 +230,242 @@ def describe(items: Sequence[Item]) -> str:
     return ", ".join(words) or NONE
 
 
+def label(item: Item) -> str:
+    """`ticket #64 (partial)`, `decision <url>`, `spec <path>`."""
+    if isinstance(item, Issue):
+        return f"ticket {issue_label(item)}"
+    return f"decision {item.url}" if isinstance(item, Decision) else f"spec {item.path}"
+
+
 def entry_line(item: Item) -> str:
     if isinstance(item, Issue):
         return f"ticket #{item.number} ({'partial: its merge says Refs' if item.partial else 'completes: Fixes'})"
     if isinstance(item, Decision):
         return f"decision {item.url}"
     return f"spec {item.path}"
+
+
+# The review's reading of the scope (fathers#192).
+TEXT_LIMIT = 20_000
+GH_TIMEOUT = 60
+Status = Literal["ok", "missing", "unreadable", "refused", "truncated"]
+READ: tuple[Status, ...] = ("ok", "truncated")
+# What gh says of an issue or comment that is not there: deleted, never there, or moved to another repository.
+GONE = re.compile(r"could not resolve|not found|\b(?:404|410)\b|deleted|transferred|no longer exists", re.IGNORECASE)
+
+
+@dataclass(frozen=True)
+class Resolved:
+    """One scope item as the review read it: `text` exactly as the reviewer sees it, `digest` its sha256, `source`
+    a URL or `<path>@<base>`, `version` the issue's or comment's update time or the spec's blob id."""
+    item: Item
+    status: Status
+    title: str = ""
+    text: str = ""
+    source: str | None = None
+    version: str | None = None
+    digest: str | None = None
+    reason: str | None = None
+
+    @property
+    def read(self) -> bool:
+        return self.status in READ
+
+
+def _shown(item: Item, title: str, text: str, source: str | None, version: str | None) -> Resolved:
+    """An item read: its text capped at TEXT_LIMIT characters, with a visible note when cut, and the digest of
+    exactly that text."""
+    status: Status = "ok"
+    if len(text) > TEXT_LIMIT:
+        status = "truncated"
+        text = text[:TEXT_LIMIT] + f"\n\n[truncated at {TEXT_LIMIT} chars]"
+    digest = "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
+    return Resolved(item, status, title, text, source, version, digest)
+
+
+def _gh_error(error: str) -> str:
+    return " ".join(error.split())[:300] or "gh failed"
+
+
+def _resolve_issue(issue: Issue, record: Record, project: config.Config) -> Resolved:
+    """The ticket's number, title, body, URL, state and update time; never its comments, which hold the
+    implementer's reports and land comments the reviewer must not see."""
+    rule = project.tickets
+    try:
+        data, error = github.issue_view(
+            issue.number, json_fields="number,title,body,url,state,updatedAt",
+            common=None if rule.repo else record["common_dir"], repo=rule.repo or None, project=project,
+            timeout=GH_TIMEOUT)
+    except (OSError, subprocess.TimeoutExpired) as failure:
+        return Resolved(issue, "unreadable", reason=f"gh could not run: {failure}")
+    if data is None:
+        status: Status = "missing" if GONE.search(error) else "unreadable"
+        return Resolved(issue, status, reason=f"gh could not read #{issue.number}: {_gh_error(error)}")
+    number = data.get("number")
+    if number is not None and str(number) != issue.number:
+        return Resolved(issue, "missing", reason=f"#{issue.number} now reads as #{number}: moved or renumbered")
+    body = str(data.get("body") or "").strip() or "(empty body)"
+    url = str(data.get("url") or "") or None
+    state = str(data.get("state") or "")
+    title = str(data.get("title") or "") + (f" [{state.lower()}]" if state and state.upper() != "OPEN" else "")
+    return _shown(issue, title, body, url, str(data.get("updatedAt") or "") or None)
+
+
+def _resolve_decision(decision: Decision, project: config.Config) -> Resolved:
+    """The one registered comment: its body, author and update time. A land comment is Lanefather's own report,
+    never a decision."""
+    from .tickets import LAND_MARKER  # tickets reads scope; the marker is needed only here
+
+    try:
+        data, error = github.issue_comment_view(decision.repo, decision.comment, project=project, timeout=GH_TIMEOUT)
+    except (OSError, subprocess.TimeoutExpired) as failure:
+        return Resolved(decision, "unreadable", source=decision.url, reason=f"gh could not run: {failure}")
+    if data is None:
+        status: Status = "missing" if GONE.search(error) else "unreadable"
+        return Resolved(decision, status, source=decision.url,
+                        reason=f"gh could not read the comment: {_gh_error(error)}")
+    issue_url = str(data.get("issue_url") or "").rstrip("/")
+    expected_issue = f"/repos/{decision.repo}/issues/{decision.issue}".lower()
+    if issue_url and not issue_url.lower().endswith(expected_issue):
+        return Resolved(
+            decision, "refused", source=decision.url,
+            reason=f"the comment belongs to another issue or repository than {decision.repo}#{decision.issue}",
+        )
+    body = str(data.get("body") or "")
+    if LAND_MARKER in body:
+        return Resolved(decision, "refused", source=decision.url,
+                        reason="a land comment is Lanefather's report of a merge, not a decision")
+    raw_user: Any = data.get("user")
+    user = cast(dict[str, Any], raw_user) if isinstance(raw_user, dict) else {}
+    login = str(user.get("login") or "unknown")
+    title = f"comment by @{login} on #{decision.issue}"
+    return _shown(decision, title, body.strip() or "(empty comment)", decision.url,
+                  str(data.get("updated_at") or "") or None)
+
+
+def _git_bytes(cwd: str, *args: str) -> subprocess.CompletedProcess[bytes]:
+    return subprocess.run(["git", *args], cwd=cwd, capture_output=True)
+
+
+def _resolve_spec(spec: Spec, record: Record, base: str | None) -> Resolved:
+    """The spec as it stands at the review's base, never at the lane tip or in a worktree: a spec the lane adds or
+    rewrites is part of the change under review, not the scope it answers to."""
+    if not base:
+        return Resolved(spec, "unreadable", reason="no review base to read the spec at")
+    source = f"{spec.path}@{base}"
+    main = main_checkout(record["common_dir"])
+    listed = _git_bytes(main, "--literal-pathspecs", "ls-tree", "-z", "--full-tree", base, "--", spec.path)
+    if listed.returncode:
+        return Resolved(spec, "unreadable", source=source,
+                        reason=f"git could not list {spec.path} at {base[:10]}: "
+                               f"{listed.stderr.decode(errors='replace').strip()}")
+    entry = next((e for e in listed.stdout.split(b"\0") if e.endswith(b"\t" + spec.path.encode())), None)
+    if entry is None:
+        return Resolved(spec, "missing", source=source,
+                        reason=f"{spec.path} is not in the base {base[:10]}: a spec that is not at the base is not "
+                               "accepted scope")
+    mode, kind, blob = entry.split(b"\t", 1)[0].decode().split()
+    if kind != "blob" or mode == "120000":
+        what = {"tree": "a directory", "commit": "a submodule"}.get(kind, "a symbolic link")
+        return Resolved(spec, "unreadable", source=source, version=blob,
+                        reason=f"{spec.path} is {what} at the base, not a file")
+    content = _git_bytes(main, "cat-file", "blob", blob)
+    if content.returncode:
+        return Resolved(spec, "unreadable", source=source, version=blob,
+                        reason=f"git could not read {spec.path}: {content.stderr.decode(errors='replace').strip()}")
+    try:
+        text = content.stdout.decode("utf-8")
+    except UnicodeDecodeError:
+        text = None
+    if text is None or "\0" in text:
+        return Resolved(spec, "unreadable", source=source, version=blob,
+                        reason=f"{spec.path} is not UTF-8 text at the base")
+    return _shown(spec, spec.path, text.strip() or "(empty file)", source, blob)
+
+
+def resolve(record: Record, base: str | None, project: config.Config = config.DEFAULT) -> list[Resolved]:
+    """Read the lane's scope for its review, in scope order: tickets without comments, decisions by their one
+    comment, specs at `base` (the review's merge-base)."""
+    found: list[Resolved] = []
+    for item in of(record):
+        if isinstance(item, Issue):
+            found.append(_resolve_issue(item, record, project))
+        elif isinstance(item, Decision):
+            found.append(_resolve_decision(item, project))
+        else:
+            found.append(_resolve_spec(item, record, base))
+    return found
+
+
+def complete(resolved: Sequence[Resolved]) -> bool:
+    """Whether the reviewer saw every item, whole or truncated."""
+    return all(entry.read for entry in resolved)
+
+
+def receipt_entry(entry: Resolved) -> dict[str, Any]:
+    """One item of the review receipt's `scope`."""
+    return {"item": to_json(entry.item), "status": entry.status, "source": entry.source, "version": entry.version,
+            "digest": entry.digest, **({"reason": entry.reason} if entry.reason else {})}
+
+
+def heading(entry: Resolved) -> str:
+    item = entry.item
+    if isinstance(item, Issue):
+        what = f"Ticket #{item.number}" + (" (partial: the lane does only part of it)" if item.partial
+                                            else " (the lane completes it)")
+    elif isinstance(item, Decision):
+        what = "Decision"
+    else:
+        what = "Spec"
+    return what + (f": {entry.title}" if entry.title else "")
+
+
+def _count(n: int, word: str) -> str:
+    return f"{n} {word}{'' if n == 1 else 's'}"
+
+
+def summary(items: Sequence[Item]) -> str:
+    """`3 items: 2 tickets (1 partial), 1 decision`."""
+    tickets = [item for item in items if isinstance(item, Issue)]
+    partial = sum(1 for item in tickets if item.partial)
+    parts = [_count(len(tickets), "ticket") + (f" ({partial} partial)" if partial else "")] if tickets else []
+    for kind, word in ((Decision, "decision"), (Spec, "spec")):
+        count = sum(1 for item in items if isinstance(item, kind))
+        if count:
+            parts.append(_count(count, word))
+    return f"{_count(len(items), 'item')}: {', '.join(parts)}"
+
+
+def prompt_text(resolved: Sequence[Resolved]) -> str:
+    """What the change is for, as the reviewer reads it: every scope item's text with its source, version and
+    digest, and the items that could not be read under `Unavailable scope`."""
+    if not resolved:
+        return "The lane has no ticket."
+    items = [entry.item for entry in resolved]
+    lines = [f"The lane's accepted scope, {summary(items)}. Review the change against all of it."]
+    if any(isinstance(item, Issue) and item.partial for item in items):
+        lines.append("A partial ticket is done only in part by this lane: review the part the change does, and do "
+                     "not report the ticket's other parts as missing.")
+    if any(isinstance(item, Decision) for item in items):
+        lines.append("A decision is an owner's or coordinator's comment; where it settles what a ticket leaves "
+                     "open, it holds.")
+    if any(isinstance(item, Spec) for item in items):
+        lines.append("A spec is shown as it stands at the review's base; a change the lane makes to it is part of "
+                     "the diff under review.")
+    for number, entry in enumerate(resolved, 1):
+        if not entry.read:
+            continue
+        details = [f"Source: {entry.source or '-'}"]
+        if entry.version:
+            details.append(f"updated {entry.version}" if not isinstance(entry.item, Spec)
+                           else f"blob {entry.version}")
+        details.append(f"digest {entry.digest}")
+        lines += ["", f"### {number}. {heading(entry)}", "", "; ".join(details), "", entry.text]
+    unavailable = [(number, entry) for number, entry in enumerate(resolved, 1) if not entry.read]
+    if unavailable:
+        lines += ["", "### Unavailable scope", "",
+                  "The review could not read the scope below. Report one P3 finding, with no file, that "
+                  "names each of these items and says the review did not see it; do not guess what it says.", ""]
+        lines += [f"- {number}. {label(entry.item)}: {entry.status} ({entry.reason})"
+                  for number, entry in unavailable]
+    return "\n".join(lines)

@@ -1,6 +1,7 @@
 """Tests of the independent review (lanefather.review): replays of orchestration incidents in scratch Git repositories (support.py)."""
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import pathlib
@@ -9,6 +10,8 @@ from typing import Any
 import unittest
 
 from support import NO_FINDINGS, SPREAD_FINDINGS, TWO_FINDINGS, LaneCase
+
+from lanefather import review, scope
 
 
 class LaneReviewTests(LaneCase):
@@ -733,6 +736,199 @@ class ReviewFixRoundTests(ReviewGateCase):
         out = self.lane("promote", tip, "--ship", "--no-push", "--wait", "0")
         self.assertIn("overall review not started (lanefather settings review.start=manual):", out)
         self.assertNotIn("LANEFATHER_REVIEW_START=manual", out)
+
+
+DECISION = "https://github.com/fixture/straylight/issues/161#issuecomment-2541"
+LAND_DECISION = "https://github.com/fixture/straylight/issues/161#issuecomment-2542"
+SPEC = "docs/specs/lanes.md"
+ISSUES: dict[str, Any] = {
+    "161": {"number": 161, "title": "Review the whole scope", "body": "Body of 161: every ticket is reviewed.",
+            "url": "https://github.com/fixture/straylight/issues/161", "state": "OPEN",
+            "updatedAt": "2026-11-01T10:00:00Z"},
+    "64": {"number": 64, "title": "Scope in reviews", "body": "Body of 64: decisions and specs too.",
+           "url": "https://github.com/fixture/straylight/issues/64", "state": "OPEN",
+           "updatedAt": "2026-11-02T10:00:00Z"},
+}
+COMMENTS: dict[str, Any] = {
+    "repos/fixture/straylight/issues/comments/2541": {
+        "body": "Owner decision: the gate stays non-blocking on incomplete scope.", "user": {"login": "owner"},
+        "updated_at": "2026-11-03T10:00:00Z",
+        "issue_url": "https://api.github.com/repos/fixture/straylight/issues/161"},
+    "repos/fixture/straylight/issues/comments/2542": {
+        "body": "<!-- lanefather:land -->\nLanded on `integrate/q` as abc: the land comment text.",
+        "user": {"login": "lanefather"}, "updated_at": "2026-11-04T10:00:00Z",
+        "issue_url": "https://api.github.com/repos/fixture/straylight/issues/161"},
+}
+
+
+def sha(text: str) -> str:
+    return "sha256:" + hashlib.sha256(text.encode()).hexdigest()
+
+
+class ScopeReviewTests(LaneCase):
+    """fathers#192: the lane review reads the whole accepted scope (every ticket without its comments, each
+    decision's one comment, each spec at the review's base), and its receipt keeps what it read."""
+
+    def setUp(self):
+        super().setUp()
+        # The ticket thread holds an implementer's report and a land comment; neither may reach the reviewer.
+        self.comments.write_text(json.dumps([
+            {"body": "Implementer report: every part is done, trust me", "createdAt": "2999-01-01T00:00:00Z"},
+            {"body": "<!-- lanefather:land -->\nLanded: the thread's land comment",
+             "createdAt": "2999-01-01T00:00:00Z"},
+        ]))
+        self.gh_answers(ISSUES, COMMENTS)
+
+    def gh_answers(self, issues: dict[str, Any], comments: dict[str, Any]) -> None:
+        self.write(self.tmp, "issues.json", json.dumps(issues))
+        self.write(self.tmp, "api.json", json.dumps(comments))
+        self.env.update(FAKE_GH_ISSUES=str(self.tmp / "issues.json"), FAKE_GH_API=str(self.tmp / "api.json"))
+
+    def reviewed(self, lane_id: str, *options: str, changes: dict[str, str], land: bool = True) -> str:
+        self.scoped(lane_id, *options, claims=("lib/**", "docs/**"))
+        self.commit(self.record(lane_id)["worktree"], changes)
+        self.lane("check", lane_id)
+        if land:
+            self.lane("land", lane_id)
+        return self.lane("review", lane_id)
+
+    def prompt(self, name: str = "codex") -> tuple[str, str]:
+        """The whole prompt and its scope section, `What the change is for`."""
+        prompt = (self.tmp / f"{name}.log.prompt").read_text()
+        return prompt, prompt.split("## What the change is for", 1)[1].split("## The change", 1)[0]
+
+    def test_every_ticket_decision_and_spec_at_the_base_reaches_the_reviewer_and_the_receipt(self):
+        self.commit(self.integration, {SPEC: "Spec at the base: lanes answer to their scope.\n"}, "the spec")
+        output = self.reviewed("a", "--ticket", "161", "--partial", "64", "--decision", DECISION, "--spec", SPEC,
+                               changes={"lib/api.txt": "foo\nbaz\n", SPEC: "Spec rewritten on the lane.\n"})
+        prompt, part = self.prompt()
+        for text in ("The lane's accepted scope, 4 items: 2 tickets (1 partial), 1 decision, 1 spec.",
+                     "### 1. Ticket #161 (the lane completes it): Review the whole scope",
+                     "Body of 161: every ticket is reviewed.",
+                     "Source: https://github.com/fixture/straylight/issues/161; updated 2026-11-01T10:00:00Z",
+                     "### 2. Ticket #64 (partial: the lane does only part of it): Scope in reviews",
+                     "Body of 64: decisions and specs too.",
+                     "do not report the ticket's other parts as missing",
+                     f"### 3. Decision: comment by @owner on #161\n\nSource: {DECISION}; updated 2026-11-03T10:00:00Z",
+                     "Owner decision: the gate stays non-blocking on incomplete scope.",
+                     f"### 4. Spec: {SPEC}", "Spec at the base: lanes answer to their scope."):
+            self.assertIn(text, part)
+        self.assertNotIn("Spec rewritten on the lane.", part, "the spec is read at the base, not the lane tip")
+        self.assertNotIn("Unavailable scope", part)
+        for leaked in ("Implementer report", "lanefather:land", "land comment"):
+            self.assertNotIn(leaked, prompt, "no ticket comment reaches the reviewer")
+        receipt = self.review("a")
+        base = receipt["base"]
+        blob = self.git(self.repo, "rev-parse", f"{base}:{SPEC}")
+        self.assertEqual(receipt["scope"], [
+            {"item": {"issue": "161"}, "status": "ok", "source": "https://github.com/fixture/straylight/issues/161",
+             "version": "2026-11-01T10:00:00Z", "digest": sha("Body of 161: every ticket is reviewed.")},
+            {"item": {"issue": "64", "partial": True}, "status": "ok",
+             "source": "https://github.com/fixture/straylight/issues/64", "version": "2026-11-02T10:00:00Z",
+             "digest": sha("Body of 64: decisions and specs too.")},
+            {"item": {"decision": DECISION}, "status": "ok", "source": DECISION, "version": "2026-11-03T10:00:00Z",
+             "digest": sha("Owner decision: the gate stays non-blocking on incomplete scope.")},
+            {"item": {"spec": SPEC}, "status": "ok", "source": f"{SPEC}@{base}", "version": blob,
+             "digest": sha("Spec at the base: lanes answer to their scope.")},
+        ])
+        self.assertIs(receipt["scope_complete"], True)
+        for entry in receipt["scope"]:
+            self.assertIn(f"digest {entry['digest']}", part)
+        self.assertIn("Scope reviewed: #161, #64 (partial), 1 decision, 1 spec", output)
+        self.assertNotIn("scope changed", output)
+        gh = (self.tmp / "gh.log").read_text().splitlines()
+        self.assertIn("issue view 161 --json number,title,body,url,state,updatedAt", gh)
+        self.assertIn("issue view 64 --json number,title,body,url,state,updatedAt", gh)
+        self.assertIn("api repos/fixture/straylight/issues/comments/2541", gh)
+
+    def test_scope_it_cannot_read_is_named_for_the_reviewer_and_leaves_the_receipt_incomplete(self):
+        long_body = "x" * 25_000
+        self.gh_answers({"161": {**ISSUES["161"], "body": long_body}, "77": "HTTP 502: Bad Gateway"}, COMMENTS)
+        self.commit(self.integration, {"docs/specs/keep.md": "kept\n", "docs/specs/blob.bin": "\x00\x01\n"}, "specs")
+        output = self.reviewed("a", "--ticket", "161", "--partial", "999", "--partial", "77",
+                               "--decision", LAND_DECISION, "--spec", "docs/specs/new.md",
+                               "--spec", "docs/specs", "--spec", "docs/specs/blob.bin",
+                               changes={"lib/api.txt": "foo\nbaz\n", "docs/specs/new.md": "Spec added on the lane.\n"})
+        prompt, part = self.prompt()
+        shown = "x" * 20_000 + "\n\n[truncated at 20000 chars]"
+        self.assertIn(shown, part)
+        self.assertNotIn("x" * 20_001, part)
+        self.assertNotIn("the land comment text", prompt, "a land comment is never shown as a decision")
+        self.assertNotIn("Spec added on the lane.", part)
+        unavailable = part.split("### Unavailable scope", 1)[1]
+        for text in ("Report one P3 finding", "- 2. ticket #999 (partial): missing",
+                     "Could not resolve to an issue", "- 3. ticket #77 (partial): unreadable",
+                     "HTTP 502", f"- 4. decision {LAND_DECISION}: refused",
+                     "a land comment is Lanefather's report of a merge, not a decision",
+                     "- 5. spec docs/specs/new.md: missing", "a spec that is not at the base is not accepted scope",
+                     "- 6. spec docs/specs: unreadable (docs/specs is a directory at the base, not a file)",
+                     "- 7. spec docs/specs/blob.bin: unreadable (docs/specs/blob.bin is not UTF-8 text at the base)"):
+            self.assertIn(text, unavailable)
+        receipt = self.review("a")
+        self.assertEqual([(e["status"], e["digest"]) for e in receipt["scope"]],
+                         [("truncated", sha(shown)), ("missing", None), ("unreadable", None), ("refused", None),
+                          ("missing", None), ("unreadable", None), ("unreadable", None)])
+        self.assertTrue(all(e.get("reason") for e in receipt["scope"][1:]))
+        self.assertIs(receipt["scope_complete"], False)
+        self.assertEqual(receipt["status"], "finished", "an incomplete scope does not fail the review")
+        self.assertIn("Scope reviewed: #161, #999 (partial), #77 (partial), 1 decision, 3 specs (not seen: ticket "
+                      f"#999 (partial) missing; ticket #77 (partial) unreadable; decision {LAND_DECISION} refused; "
+                      "spec docs/specs/new.md missing; spec docs/specs unreadable; spec docs/specs/blob.bin "
+                      "unreadable)", output)
+
+    def test_a_scope_changed_after_the_review_is_named_beside_it(self):
+        self.reviewed("a", "--ticket", "161", changes={"lib/api.txt": "foo\nbaz\n"}, land=False)
+        self.assertEqual(self.review("a")["scope"][0]["item"], {"issue": "161"})
+        self.lane("scope", "a", "--add-partial", "64")
+        output = self.lane("review", "a")
+        self.assertIn("Scope reviewed: #161", output)
+        self.assertIn("Warning: scope changed since the review: now #161, #64 (partial); lanefather review a "
+                      "--force-reason <why> reviews it again", output)
+        shown = json.loads(self.lane("show", "a", "--json"))
+        self.assertEqual(shown["ticket"]["number"], "161")
+        self.assertEqual(shown["tickets"], [{"number": "161", "url": None, "partial": False},
+                                            {"number": "64", "url": None, "partial": True}])
+        [entry] = [lane for project in json.loads(self.lane("status", "--json"))["projects"]
+                   for lane in project.get("lanes", []) if lane["id"] == "a"]
+        self.assertEqual(entry["tickets"], shown["tickets"])
+
+    def test_a_lane_without_a_ticket_keeps_its_line_and_a_single_ticket_lane_reads_as_before(self):
+        self.assertEqual(scope.prompt_text([]), "The lane has no ticket.")
+        self.gh_answers({}, {})
+        self.env.pop("FAKE_GH_ISSUES")
+        self.reviewed("a", "--ticket", "404", changes={"lib/api.txt": "foo\nbaz\n"})
+        _prompt, part = self.prompt()
+        self.assertIn("### 1. Ticket #404 (the lane completes it): Fixture ticket title", part)
+        self.assertIn("The fixture ticket body.", part)
+        self.assertEqual(self.review("a")["scope"][0]["status"], "ok")
+
+    def test_decision_for_another_issue_or_repo_is_refused_and_corrupt_receipt_scope_is_reported(self):
+        wrong_issue = "https://github.com/fixture/straylight/issues/161#issuecomment-2543"
+        wrong_repo = "https://github.com/fixture/straylight/issues/161#issuecomment-2544"
+        self.gh_answers(ISSUES, {
+            **COMMENTS,
+            "repos/fixture/straylight/issues/comments/2543": {
+                "body": "Decision on another issue.", "user": {"login": "owner"},
+                "updated_at": "2026-11-05T10:00:00Z",
+                "issue_url": "https://api.github.com/repos/fixture/straylight/issues/999"},
+            "repos/fixture/straylight/issues/comments/2544": {
+                "body": "Decision from another repo.", "user": {"login": "owner"},
+                "updated_at": "2026-11-05T10:00:00Z",
+                "issue_url": "https://api.github.com/repos/other/repo/issues/161"},
+        })
+        self.reviewed("a", "--ticket", "161", "--decision", wrong_issue, "--decision", wrong_repo,
+                      changes={"lib/api.txt": "foo\nbaz\n"})
+        prompt, part = self.prompt()
+        self.assertNotIn("Decision on another issue.", prompt)
+        self.assertNotIn("Decision from another repo.", prompt)
+        self.assertIn(f"- 2. decision {wrong_issue}: refused", part)
+        self.assertIn(f"- 3. decision {wrong_repo}: refused", part)
+        receipt = self.review("a")
+        self.assertEqual([e["status"] for e in receipt["scope"]], ["ok", "refused", "refused"])
+        self.assertIs(receipt["scope_complete"], False)
+        self.assertEqual(review.scope_lines({"kind": "lane", "scope": ["bad"]}, None, "a", "lanefather"),
+                         ["Scope reviewed: the receipt's scope is unreadable (entry is not an object)"])
+        self.assertEqual(review.scope_lines({"kind": "lane"}, None, "a", "lanefather"), [])
 
 
 if __name__ == "__main__":

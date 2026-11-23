@@ -344,6 +344,24 @@ if args[:2] == ["issue", "create"]:
     with open(os.environ["FAKE_GH_LOG"]) as log:
         count = len(log.readlines())
     print("https://github.com/fixture/straylight/issues/" + str(900 + count))
+elif args[:1] == ["api"] and os.environ.get("FAKE_GH_API"):
+    # FAKE_GH_API: {"repos/o/r/issues/comments/<id>": object, or a string gh prints as its error}; others 404.
+    with open(os.environ["FAKE_GH_API"]) as handle:
+        answer = json.load(handle).get(args[1])
+    if not isinstance(answer, dict):
+        print(answer or "gh: Not Found (HTTP 404)", file=sys.stderr)
+        sys.exit(1)
+    print(json.dumps(answer))
+elif (args[:2] == ["issue", "view"] and os.environ.get("FAKE_GH_ISSUES")
+      and "comments" not in args[args.index("--json") + 1].split(",")):
+    # FAKE_GH_ISSUES: {"<n>": issue object, or a string gh prints as its error}; an absent number is not found.
+    with open(os.environ["FAKE_GH_ISSUES"]) as handle:
+        issue = json.load(handle).get(args[2])
+    if not isinstance(issue, dict):
+        print(issue or f"GraphQL: Could not resolve to an issue or pull request with the number of {args[2]}. "
+              "(repository.issue)", file=sys.stderr)
+        sys.exit(1)
+    print(json.dumps({key: issue[key] for key in args[args.index("--json") + 1].split(",") if key in issue}))
 elif "--json" in args and "title" in args[args.index("--json") + 1]:
     print(json.dumps({"title": "Fixture ticket title", "body": "The fixture ticket body."}))
 else:

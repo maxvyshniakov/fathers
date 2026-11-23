@@ -1086,7 +1086,7 @@ def _t3_antigravity(home: Path) -> str | None:
 
 
 def _review_prompt(cfg: Config, request: Request, diff: str | None) -> str:
-    """The reviewer gets the diff, the ticket and the coding standards; never the lane's report."""
+    """The reviewer gets the diff, the accepted scope and the coding standards; never the lane's report."""
     standards, subject, base, tip = request.standards, request.subject, request.base, request.tip
     lines = [
         f"You review one change to the {cfg.project} repository before it reaches the owner's machine. Report",
