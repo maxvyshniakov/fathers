@@ -396,13 +396,16 @@ def list_lanes(args: Any, store: state.Store) -> int:
     priorities = slots.priorities(store.project)
     views = [(r, receipts.lane_view(store, r, repository=None, prog=store.prog), admission.gone(r)) for r in shown]
     stale = [r["id"] for r in decision.occupying if admission.gone(r)]
+    pending = list(review_record.ReviewRecord.unmarked(store, mine))
     if args.json:
         print(json.dumps({"lanes": [dict(view.for_list(r), project=state.project_name(r.get("common_dir")),
                                          gone=is_gone) for r, view, is_gone in views],
                           "active": len(decision.occupying), "cap": cap, "cap_source": source,
                           "global": {"active": len(decision.everywhere), "cap": ceiling[0] if ceiling else None,
                                      "cap_source": ceiling[1] if ceiling else None},
-                          "host": machine, "priorities": priorities}, indent=2))
+                          "host": machine, "priorities": priorities,
+                          "pending_reviews": [{"lane": lane["id"], "findings": [finding["n"] for finding in findings]}
+                                              for lane, findings in pending]}, indent=2))
         return 0
     for record, view, is_gone in views:
         print(f"{record['id']}  {record['status']}  #{record['ticket']}  {record['branch']}  "
@@ -425,7 +428,6 @@ def list_lanes(args: Any, store: state.Store) -> int:
     if git_ok(os.getcwd(), "rev-parse", "--git-dir"):
         for line in ahead_lines(os.getcwd(), project=store.project):
             print(line)
-    pending = list(review_record.ReviewRecord.unmarked(store, records))
     label = "review" if len(pending) == 1 else "reviews"
     references = [f"{lane['id']}#{finding['n']}" for lane, findings in pending for finding in findings]
     summary = f"{len(pending)} finished {label} with unmarked findings"

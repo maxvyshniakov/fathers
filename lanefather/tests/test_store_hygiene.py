@@ -49,6 +49,28 @@ class SharedStoreTests(LaneCase):
         self.assertEqual(sorted((lane["id"], lane["project"]) for lane in lanes),
                          [("here", "straylight"), ("sk-1", "sid-kit")])
 
+    def test_list_counts_this_repositorys_pending_reviews_and_puts_them_in_json(self):
+        """Review of fathers#172, finding 5: the summary was text-only and counted every repository's reviews."""
+        from lanefather import review_record
+        self.start("here", "lib/**")
+        self.foreign("sk-1")
+        findings = {"here": ({"n": 1},), "sk-1": ({"n": 2}, {"n": 3})}
+
+        def unmarked(_store: Any, records: Any) -> Any:
+            return ((r, list(findings[r["id"]])) for r in records if r["id"] in findings)
+
+        with mock.patch.object(review_record.ReviewRecord, "unmarked", side_effect=unmarked):
+            here = self.lane("list")
+            here_json = json.loads(self.lane("list", "--json"))
+            everything = self.lane("list", "--all-projects")
+            everything_json = json.loads(self.lane("list", "--all-projects", "--json"))
+        self.assertEqual(here.splitlines()[-1], "1 finished review with unmarked findings: here#1")
+        self.assertEqual(here_json["pending_reviews"], [{"lane": "here", "findings": [1]}])
+        self.assertEqual(everything.splitlines()[-1],
+                         "2 finished reviews with unmarked findings: here#1, sk-1#2, sk-1#3")
+        self.assertEqual(sorted(everything_json["pending_reviews"], key=lambda p: p["lane"]),
+                         [{"lane": "here", "findings": [1]}, {"lane": "sk-1", "findings": [2, 3]}])
+
     def test_a_lane_command_refuses_another_repositorys_lane_and_names_where_to_run_it(self):
         self.foreign("sk-1")
         before = self.record("sk-1")

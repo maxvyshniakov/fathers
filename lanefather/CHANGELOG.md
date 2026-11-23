@@ -287,6 +287,9 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
 
 ### Fixed
 
+- `list`'s count of finished reviews with unmarked findings covers the repository it runs in, like its lanes and its
+  cap line (`--all-projects` the whole Store), and `list --json` gives it as `pending_reviews` (each lane with its
+  finding numbers); before, it counted every repository's reviews and was text-only (review of fathers#172).
 - `drop`'s list of the paths a lane changes beyond its base, `land`'s merge conflict paths and
   `promote --ship`'s refused-directory check read paths with non-ASCII or unusual bytes as they are, not as Git's
   quoted escapes (`"caf\303\251.txt"`).
