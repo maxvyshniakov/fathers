@@ -8,6 +8,8 @@ checks from the changed paths.
   python3 tools/checks.py steps            the selected checks as Repo-Kit steps (JSON); FATHERS_CHECKS=all selects
                                            every check, FATHERS_CHECK_BASE names the base (default origin/main)
   python3 tools/checks.py run NAME         run one check (the steps' command, through `bun run check NAME`)
+  python3 tools/checks.py verify [--keep-going] [--fresh]
+                                           the selected checks through tools/verify.py, without Repo-Kit (fathers#235)
   python3 tools/checks.py plan BASE        Lanefather's plan for the changes since BASE (tools/lane-check answers it)
 
 A change under a package selects its lint gate and tests, except package documentation (GLOSSARY.md, docs/**); one
@@ -30,6 +32,10 @@ import subprocess
 import sys
 import time
 from urllib.parse import quote
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import verify as runner  # tools/verify.py: the step runner, its lease and cache
 
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGES = ("slotfather", "lanefather", "spawnfather", "godfather", "tokenfather")
@@ -170,8 +176,9 @@ def plan(root: Path, base: str) -> dict[str, object]:
                        for name, chosen in selection.checks.items()]}
 
 
-def steps(environment: dict[str, str]) -> list[dict[str, object]]:
-    """The Repo-Kit steps to run: every check, or those the changes since the base select."""
+def selected(environment: Mapping[str, str]) -> list[Check]:
+    """The checks to run, in CHECKS order: every one (FATHERS_CHECKS=all), or those the changes since the merge-base
+    with FATHERS_CHECK_BASE (default origin/main) select; everything when nothing changed or there is no such base."""
     wanted = environment.get("FATHERS_CHECKS", "")
     if wanted not in ("", "all"):
         raise ValueError(f"FATHERS_CHECKS must be 'all' or unset, not {wanted!r}")
@@ -185,6 +192,35 @@ def steps(environment: dict[str, str]) -> list[dict[str, object]]:
             paths = []  # no such base here: verify everything
         if paths:
             names = list(select(paths).checks)
+    return [check for check in CHECKS if check.name in names]
+
+
+def step(check: Check) -> runner.Step:
+    """A check as the runner's step: `checks.py run NAME` in the root, with its memory and timeout."""
+    return runner.Step(check.name, [sys.executable, str(ROOT / "tools/checks.py"), "run", check.name], check.memory,
+                       check.timeout or 15, ROOT)
+
+
+def verify(arguments: list[str]) -> int:
+    """`checks.py verify [--keep-going] [--fresh]`: the selected checks under one lease, skipping those this tree
+    passed already (--fresh runs them again)."""
+    unknown = [argument for argument in arguments if argument not in ("--keep-going", "--fresh")]
+    if unknown:
+        raise ValueError(f"verify takes --keep-going and --fresh, not {' '.join(unknown)}")
+    environment = dict(os.environ)
+    checks = selected(environment)
+    slots = environment.get("FATHERS_VERIFY_SLOTS") or "2"
+    leased = runner.lease_self(slots, "verify", [sys.executable, str(ROOT / "tools/checks.py"), "verify", *arguments],
+                               root=ROOT, environment=environment)
+    if leased is not None:
+        return leased
+    return runner.gate([step(check) for check in checks], root=ROOT, keep_going="--keep-going" in arguments,
+                       use_cache="--fresh" not in arguments, env=environment)
+
+
+def steps(environment: dict[str, str]) -> list[dict[str, object]]:
+    """The Repo-Kit steps to run: every check, or those the changes since the base select."""
+    names = [check.name for check in selected(environment)]
     rows: list[dict[str, object]] = []
     for check in CHECKS:
         if check.name in names:
@@ -215,6 +251,10 @@ def commands(name: str) -> tuple[Path, list[list[str]]]:
         return ROOT, [lint_tools("ruff", "check", "common", "install.py"), lint_tools("pyright", "-p", "common")]
     if name == "common tests":  # the CLI convention's helper (docs/cli.md)
         return ROOT, [[sys.executable, "-m", "unittest", "discover", "-s", "common/tests"]]
+    if name == "test hygiene":
+        return ROOT, [[sys.executable, "tools/hygiene.py"]]
+    if name == "kit":
+        return ROOT, [["bun", "run", "check:kit"]]
     if name == "tools":
         return ROOT, [[sys.executable, "-m", "unittest", "discover", "-s", "tools", "-p", "test_*.py"],
                       lint_tools("ruff", "check", "--config", "tools/ruff.toml", "tools", "tools/lane-check")]
@@ -389,6 +429,8 @@ def main(argv: list[str]) -> int:
             return 0
         if argv[:1] == ["run"] and len(argv) == 2:
             return run(argv[1])
+        if argv[:1] == ["verify"]:
+            return verify(argv[1:])
         if argv[:1] == ["plan"] and len(argv) == 2:
             print(json.dumps(plan(Path(git(Path.cwd(), "rev-parse", "--show-toplevel").strip()), argv[1])))
             return 0
