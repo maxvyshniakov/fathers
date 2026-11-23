@@ -15,6 +15,8 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
   gone lanes it counted and the `lanefather drop A B` that frees them; refused by a claim overlap with a gone lane,
   it names the `drop` instead of `--after`. `drop` takes several ids. `gc` drops this repository's gone lanes, and
   `gc --dry-run` reports them; `start` never drops one itself.
+  `drop` (and so `gc`) refuses a lane whose review has unmarked findings: a dropped lane is done and gets no fix
+  round, while its findings go on holding lands.
 
 - A lane can name all of its accepted scope (fathers#192, fathers#64): `start` takes `--ticket N` more than once for
   the tickets it completes and `--partial N` for those it does only part of, kept in the order given, and

@@ -6,8 +6,10 @@ import json
 import os
 import pathlib
 import shutil
+import types
 from typing import Any
 import unittest
+from unittest import mock
 
 from support import LaneCase, template_repository
 
@@ -127,6 +129,16 @@ class GoneLaneTests(LaneCase):
         self.assertIn("dropped lane g: its branch and worktree are gone", self.lane("gc"))
         self.assertEqual(self.record("g")["status"], "done")
         self.start("next", "lib/**")
+
+    def test_drop_and_gc_keep_a_gone_lane_whose_review_has_unmarked_findings(self):
+        from lanefather import review_record
+        self.gone("g", "lib/**")
+        reviewed = types.SimpleNamespace(open_findings=({"n": 1}, {"n": 2}))
+        with mock.patch.object(review_record.ReviewRecord, "load", return_value=reviewed):
+            output = self.lane("drop", "g", ok=False)
+            self.assertIn("drop refused: lane g's review has 2 unmarked findings, which hold lands", output)
+            self.assertIn("lane g: drop refused", self.lane("gc", "--json", ok=None))
+        self.assertEqual(self.record("g")["status"], "active")
 
     def test_a_lane_whose_branch_or_worktree_exists_is_not_gone(self):
         branch_only = self.created("branch-only", "a/**")

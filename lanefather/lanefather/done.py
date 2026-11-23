@@ -678,6 +678,12 @@ def drop_lane(lane_id: str, store: state.Store) -> str:
             raise LaneError(f"drop refused: lane {lane_id} is {record['status']}: {prog} done {lane_id} finishes it")
         if not lifecycle.occupying(record):
             raise LaneError(f"drop refused: lane {lane_id} is already {record['status']}")
+        unmarked = review_record.ReviewRecord.load(store, lane_id).open_findings
+        if unmarked:
+            # A dropped lane is done, and a done lane gets no fix round, while its findings go on holding lands.
+            raise LaneError(f"drop refused: lane {lane_id}'s review has {len(unmarked)} unmarked "
+                            f"finding{'s' if len(unmarked) != 1 else ''}, which hold lands: mark each first "
+                            f"({prog} review {lane_id}); a dropped lane gets no fix round")
         common = record.get("common_dir")
         if not common or not os.path.isdir(common):
             raise LaneError(f"lane {lane_id} names no repository that exists ({common or 'none'})")
