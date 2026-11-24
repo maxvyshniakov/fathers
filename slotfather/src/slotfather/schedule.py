@@ -79,10 +79,12 @@ def deferring(entry: Entry, settings: dict[str, Any] | None = None, moment: floa
 
 
 def others_wait(waiters: list[Entry], entry: Entry, grants: list[Entry], settings: dict[str, Any] | None = None,
-                moment: float | None = None) -> bool:
-    """Whether a normal or interactive waiter other than `entry` waits in `waiters` and is not among `grants`: work
-    that a deferring() waiter lets go first."""
-    return any(other is not entry and not any(other is g for g in grants) and not deferring(other, settings, moment)
+                moment: float | None = None, excluded: set[int] | None = None) -> bool:
+    """Whether a normal or interactive waiter other than `entry` waits in `waiters` and is not among `grants`
+    (nor excluded, e.g. held by a group cap): work that a deferring() waiter lets go first."""
+    return any(other is not entry and not any(other is g for g in grants)
+               and (excluded is None or id(other) not in excluded)
+               and not deferring(other, settings, moment)
                for other in waiters)
 
 
@@ -350,12 +352,13 @@ def plan(waiters: list[Entry], held: list[Entry], slots: int, moment: float, ord
         deadline = began + limit if limit else math.inf
         return spare
 
+    first_cap_reason: str | None = None
     for entry in waiters:
         if group_caps:
             cap_reason = _group_cap_wait(entry, active_groups, group_caps)
             if cap_reason is not None:
                 found.group_capped[id(entry)] = cap_reason
-                found.reason = found.reason or cap_reason
+                first_cap_reason = first_cap_reason or cap_reason
                 continue
         free = max(0, slots - used)
         if found.head is not None:
@@ -387,8 +390,13 @@ def plan(waiters: list[Entry], held: list[Entry], slots: int, moment: float, ord
             continue
         # A batch waiter defers while normal or interactive work waits (#5): it is no head then, and one for the
         # whole machine does not take it either, since that would shut the waiting work out for its whole run.
+        # Waiters held by a per-group cap cannot start either, so they do not make uncapped batch work defer.
+        capped_excluded = (
+            {id(w) for w in waiters if id(w) in found.group_capped or _group_cap_wait(w, active_groups, group_caps) is not None}
+            if group_caps else None
+        )
         defers = order == "backfill" and deferring(entry, settings, moment) and \
-            others_wait(waiters, entry, found.grants, settings, moment)
+            others_wait(waiters, entry, found.grants, settings, moment, excluded=capped_excluded)
         if defers and entry["count"] <= free and _entry.whole_machine(entry, slots):
             found.reason = found.reason or quiet(free, entry)
             continue
@@ -464,6 +472,8 @@ def plan(waiters: list[Entry], held: list[Entry], slots: int, moment: float, ord
         until = time.strftime("%H:%M:%S", time.localtime((queued or moment) + window))
         found.reason = found.reason or (f"{free} of {slots} slots free; requests that fit may pass "
                                         f"{entry.get('label')} until {until}")
+    if found.reason is None and first_cap_reason is not None:
+        found.reason = first_cap_reason
     return found
 
 
@@ -707,6 +717,7 @@ class GrantOutcome(NamedTuple):
     started: list[StartedGrant]
     gated: list[tuple[Entry, GateBlock]]
     reason: str | None
+    capped: list[tuple[Entry, GateBlock]] = []  # type: ignore[assignment]
 
 
 class DashboardRoom(NamedTuple):
@@ -735,7 +746,8 @@ class AdviseBlock(NamedTuple):
 
 def entry_groups(entry: Entry) -> tuple[str, ...]:
     """Concurrency-cap groups matching `entry` (fathers#251): explicit metadata (`group`, `suite`, `kind`) plus
-    browser-suite detection across metadata (`suite`, `kind`, `phase`, `step`), `label`, and `cmd`."""
+    browser-suite detection on `label`/metadata (`browser`/`control`/`story checks`/`playwright`) and explicit
+    `playwright` / `story-checks` commands on `cmd`."""
     groups: set[str] = set()
     meta = _entry.meta_of(entry)
     raw_group = meta.get("group")
@@ -751,16 +763,18 @@ def entry_groups(entry: Entry) -> tuple[str, ...]:
         name = val.strip().lower()
         if _config.GROUP_NAME.fullmatch(name):
             groups.add(name)
-        if _config.BROWSER_SUITE_RE.search(val):
+        if _config.BROWSER_LABEL_RE.search(val):
             groups.add("browser")
     for key in ("phase", "step"):
         val = meta.get(key)
-        if val and _config.BROWSER_SUITE_RE.search(val):
+        if val and _config.BROWSER_LABEL_RE.search(val):
             groups.add("browser")
-    for field in ("label", "cmd"):
-        text = entry.get(field)
-        if isinstance(text, str) and _config.BROWSER_SUITE_RE.search(text):
-            groups.add("browser")
+    label = entry.get("label")
+    if isinstance(label, str) and _config.BROWSER_LABEL_RE.search(label):
+        groups.add("browser")
+    cmd = entry.get("cmd")
+    if isinstance(cmd, str) and _config.BROWSER_CMD_RE.search(cmd):
+        groups.add("browser")
     return tuple(sorted(groups))
 
 
@@ -800,7 +814,7 @@ def _group_cap_wait(entry: Entry, active_groups: dict[str, int], group_caps: dic
         if cap is not None:
             running = active_groups.get(group, 0)
             if running >= cap:
-                return f'group "{group}" cap {cap} reached ({running} running)'
+                return f"group {group} cap {cap} reached ({running} running)"
     return None
 
 
@@ -1197,14 +1211,15 @@ class Admission:
                     )
                 else:
                     gated.append((orig, block))
+        capped: list[tuple[Entry, GateBlock]] = []
         for copy in self._waiters:
             cap_reason = found.group_capped.get(id(copy))
             if cap_reason is not None:
-                gated.append((self._original(copy), GateBlock("group_cap", cap_reason)))
+                capped.append((self._original(copy), GateBlock("group_cap", cap_reason)))
         reason = gated[0][1].reason if gated else found.reason
         mapped_plan = self._remap_plan(found)
         mapped_keeper = mapped_plan if keeper is found else self._remap_plan(keeper)
-        return GrantOutcome(mapped_plan, mapped_keeper, started, gated, reason)
+        return GrantOutcome(mapped_plan, mapped_keeper, started, gated, reason, capped)
 
     def _gate_with_clamp(
         self,
@@ -1366,7 +1381,8 @@ class Admission:
         return result
 
     def room(self, label: str = "", command: str = "", *, gated: bool = False) -> int:
-        """Largest request size admitted now: by queue order alone (`gated=False`) or through _gate() (`gated=True`)."""
+        """Largest request size admitted now: by queue order alone (`gated=False`) or through _gate() (`gated=True`).
+        Probes by `label` and `command` only (without `--meta`)."""
         free = max(0, self._slots - self._used)
         if free <= 0:
             return 0
@@ -1490,7 +1506,8 @@ class Admission:
         )
 
     def advise_block(self, label: str = "", command: str = "") -> AdviseBlock:
-        """Queue room, waiting state, run estimate, and machine gates for `advise`."""
+        """Queue room, waiting state, run estimate, and machine gates for `advise`.
+        Probes by `label` and `command` only (without `--meta`)."""
         queue_room = self.room(label, command, gated=False)
         waiting = bool(self._waiters) and queue_room == 0
         run_estimate = self._estimate({"label": label, "cmd": command}) if command else None

@@ -590,13 +590,16 @@ def advise(maximum: int | None = None, exclusive: bool = False, cores_now: int |
         measured_gib = _platform.memory_gib()
         ram_gib = None if measured_gib is None else round(measured_gib, 1)
     gib_per_slot = basis["gib_per_slot"]
+    gib_per_slot_source: str | None = "configured" if gib_per_slot is not None else None
     if gib_per_slot is None and ram_gib is not None and slots > 0:
         gib_per_slot = round(ram_gib / slots, 2)
+        gib_per_slot_source = "derived"
     recommended_gib: float | None = None
-    with contextlib.suppress(Exception):
+    with contextlib.suppress(OSError, ValueError, TypeError):
         from . import estimates as _estimates
         recommended_gib = _estimates.cached_estimates(found_look.directory).recommended_gib_per_slot()
-    found.update(capacity_mode=basis["mode"], gib_per_slot=gib_per_slot, memory_gib=ram_gib,
+    found.update(capacity_mode=basis["mode"], gib_per_slot=gib_per_slot,
+                 gib_per_slot_source=gib_per_slot_source, memory_gib=ram_gib,
                  recommended_gib_per_slot=recommended_gib,
                  memory_budget_mb=block.memory_budget_mb, memory_expected_mb=block.memory_expected_mb,
                  memory_short=block.memory_short, memory_level=block.memory_level,

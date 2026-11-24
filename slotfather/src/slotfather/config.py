@@ -148,7 +148,7 @@ ESTIMATE_BYTES = 1 << 20  # of the history's end (and of its rotated part) read 
 UNFINISHED = ("reaped", "left", "refused")  # history outcomes whose time is no run of their kind: left out of the estimates
 
 
-ESTIMATES_VERSION = 3  # estimates.json: 3 adds peak memory estimates beside run times; older files are rebuilt
+ESTIMATES_VERSION = 4  # estimates.json: 4 adds per-slot peak memory samples; older files are rebuilt
 
 
 HISTORY_MAX = 4 << 20  # bytes of history.jsonl; past it the file becomes history.jsonl.1, replacing the older one
@@ -197,8 +197,15 @@ META_KEY = re.compile(r"[a-z][a-z0-9_.-]{0,31}")
 GROUP_NAME = re.compile(r"[a-z][a-z0-9_.-]{0,31}")
 
 
-BROWSER_SUITE_RE = re.compile(
-    r"(?<![a-z0-9])(browser|browsers|control|story[-_\s]+checks?|playwright)(?![a-z0-9])",
+BROWSER_LABEL_RE = re.compile(
+    r"(?:(?:^|[:/\s])(?:browser|browsers|control)(?:$|[:/\s]|[-_](?:checks?|suite|tests?|e2e|\d+)(?:$|[^a-z0-9]))"
+    r"|(?<![a-z0-9])(?:story[-_\s]+checks?|playwright)(?![a-z0-9]))",
+    re.IGNORECASE,
+)
+
+
+BROWSER_CMD_RE = re.compile(
+    r"(?<![a-z0-9-])(?:playwright|story[-_\s]+checks?)(?![a-z0-9])",
     re.IGNORECASE,
 )
 

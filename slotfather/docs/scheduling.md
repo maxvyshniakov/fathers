@@ -89,19 +89,22 @@ Likewise for the expected-peak memory budget (`memory_share` of the memory, fath
 `slotfather order --memory-budget-mb MB` / `SLOTFATHER_MEMORY_BUDGET_MB`, fathers#251): the dashboard's admission is 0
 beside running leases whose expected peak memory and a new request's exceed it, its block says why
 (`memory_budget_block`), and so does `advise` for the request it is asked about (fathers#206), along with effective
-`memory_gib`, `gib_per_slot`, `recommended_gib_per_slot`, `memory_budget_mb`, and `memory_expected_mb` even in `fixed`
-capacity mode on macOS.
+`memory_gib`, `gib_per_slot` (`gib_per_slot_source`: `"configured"` or `"derived"`), `recommended_gib_per_slot`,
+`memory_budget_mb`, and `memory_expected_mb` even in `fixed` capacity mode on macOS.
+`SLOTFATHER_LOADAVG` replaces the host's load averages for tests. A Slotfather before this rule grants regardless
+of the load, so until every client is updated an older client's look may start a request the newer ones hold back.
 
 ### Per-group concurrency caps
 
 `slotfather order --group-cap GROUP=N` (and `SLOTFATHER_GROUP_CAPS=GROUP=N`, tightening only; fathers#251) caps how
 many leases belonging to `GROUP` may run concurrently across the machine (`N >= 1`; `GROUP=off` or `GROUP=0` removes
 the cap). A lease's groups come from explicit `meta` tags (`group`, `suite`, `kind`) and built-in `browser` detection
-across `label`, `cmd`, and `meta` (`browser`, `control`, `story checks`, `playwright`). When a group is at its cap,
-excess matching waiters wait without holding back non-matching work, with `group-wait="..."` in `status`, `group_wait`
-and `group_caps` in `status --json`, a `group caps` status row in `settings --json`, and `group_cap_block` in `advise`.
-`SLOTFATHER_LOADAVG` replaces the host's load averages for tests. A Slotfather before this rule grants regardless
-of the load, so until every client is updated an older client's look may start a request the newer ones hold back.
+on `label`/`meta` (`browser`, `control`, `story checks`, `playwright`) and explicit `playwright` / `story-checks`
+commands on `cmd`. When a group is at its cap, excess matching waiters wait without holding back non-matching work
+(including batch work and yield requests), with `group-wait="..."` in `status`, `group_wait` and `group_caps` in
+`status --json`, a `group caps` status row in `settings --json`, and `group_cap_block` in `advise`. An older client
+that does not know `group_caps` rejects the unknown key in `order.json`, falls back to window order, and grants
+without per-group caps until updated.
 
 ### Core-weighted requests
 

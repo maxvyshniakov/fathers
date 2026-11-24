@@ -861,8 +861,9 @@ def order_command(values: dict[str, Any], positionals: list[str], after_dash: li
         except ValueError:
             kind = "seconds, or a duration such as 30m or 1.5h" if knob in _config.DURATION_KNOBS else "a number"
             raise UsageError(f"{flag} takes {kind}, not {raw!r}", "order") from None
+    merge_group_caps = False
     if "--group-cap" in values:
-        saved_caps = dict(_settings.order_settings(directory, environment=False).get("group_caps") or {})
+        cap_patch: dict[str, int | None] = {}
         for raw_item in values["--group-cap"]:
             text = str(raw_item)
             if "=" not in text:
@@ -873,16 +874,18 @@ def order_command(values: dict[str, Any], positionals: list[str], after_dash: li
             if not _config.GROUP_NAME.fullmatch(group):
                 raise UsageError(f"--group-cap group must be a lowercase identifier, not {group!r}", "order")
             if raw_val in ("0", "off", "none"):
-                saved_caps.pop(group, None)
+                cap_patch[group] = None
             elif raw_val.isascii() and raw_val.isdigit() and int(raw_val) >= 1:
-                saved_caps[group] = int(raw_val)
+                cap_patch[group] = int(raw_val)
             else:
                 raise UsageError(f"--group-cap {group} takes an integer >= 1 or off, not {raw_val!r}", "order")
-        changes["group_caps"] = dict(sorted(saved_caps.items()))
+        changes["group_caps"] = cap_patch
+        merge_group_caps = True
     if reset and changes:
         raise UsageError("order reset takes nothing else", "order")
     if changes or reset:
-        _settings.configure({"order.json": None if reset else changes}, granted=_leases.grant_now)
+        _settings.configure({"order.json": None if reset else changes}, granted=_leases.grant_now,
+                            merge_group_caps=merge_group_caps)
     saved = _settings.order_settings(directory, environment=False)
     moved = _settings.order_extension_keys(saved)
     if (changes or reset) and moved:

@@ -16,6 +16,7 @@ import hashlib
 import json
 import math
 from pathlib import Path
+import sys
 from typing import Any, Callable, Mapping, cast
 
 from . import config as _config
@@ -165,28 +166,35 @@ def checked_group_caps(value: Any) -> dict[str, int]:
 
 
 def parse_group_caps_env(raw: str) -> dict[str, int]:
-    """Parse SLOTFATHER_GROUP_CAPS as JSON object or comma-separated GROUP=N pairs; ignores malformed entries."""
+    """Parse SLOTFATHER_GROUP_CAPS as JSON object or comma-separated GROUP=N pairs (strict lowercase group names,
+    integer >= 1); warns on stderr for malformed input."""
     text = raw.strip()
     if not text:
         return {}
     if text.startswith("{"):
         try:
             return checked_group_caps(json.loads(text))
-        except (ValueError, TypeError):
+        except (ValueError, TypeError) as error:
+            print(f"slotfather: warning: ignoring invalid SLOTFATHER_GROUP_CAPS: {error}", file=sys.stderr)
             return {}
     found: dict[str, int] = {}
+    bad: list[str] = []
     for item in text.split(","):
         part = item.strip()
-        if not part or "=" not in part:
+        if not part:
+            continue
+        if "=" not in part:
+            bad.append(part)
             continue
         group, _, raw_cap = part.partition("=")
-        group = group.strip().lower()
+        group = group.strip()
         raw_cap = raw_cap.strip()
-        if not _config.GROUP_NAME.fullmatch(group) or not (raw_cap.isascii() and raw_cap.isdigit()):
+        if not _config.GROUP_NAME.fullmatch(group) or not (raw_cap.isascii() and raw_cap.isdigit()) or int(raw_cap) < 1:
+            bad.append(part)
             continue
-        cap = int(raw_cap)
-        if cap >= 1:
-            found[group] = cap
+        found[group] = int(raw_cap)
+    if bad:
+        print(f"slotfather: warning: ignoring invalid SLOTFATHER_GROUP_CAPS entry: {', '.join(bad)}", file=sys.stderr)
     return dict(sorted(found.items()))
 
 
@@ -421,7 +429,7 @@ class Conflict(_config.SlotError):
 def configure(changes: Mapping[str, Mapping[str, Any] | None], *,
               expected: Mapping[str, bytes | None] | None = None, revisions: Mapping[str, str] | None = None,
               granted: Callable[[Path], None] | None = None, what: str = "a settings change",
-              directory: Path | None = None) -> None:
+              directory: Path | None = None, merge_group_caps: bool = False) -> None:
     """The one write path of capacity.json, order.json and sweep.json, shared by the CLI and the dashboard:
     validation, ownership, conflict checking and the queue lock. A change applies at once, also while requests run
     or wait. order.json and sweep.json changes merge over the saved values (a sweep.json that cannot be read is
@@ -458,7 +466,16 @@ def configure(changes: Mapping[str, Mapping[str, Any] | None], *,
                 saved = dict(_config.ORDER_DEFAULTS, group_caps={})
                 with contextlib.suppress(OSError, ValueError, TypeError, AttributeError):
                     saved.update(checked_order(json.loads(before["order.json"] or b"{}")))
-                values["order.json"] = order_bytes(checked_order({**saved, **values["order.json"]}))
+                incoming = dict(values["order.json"])
+                if merge_group_caps and isinstance(incoming.get("group_caps"), dict):
+                    merged_caps = dict(cast(dict[str, int], saved["group_caps"]))
+                    for group, cap in cast(dict[Any, Any], incoming["group_caps"]).items():
+                        if cap is None:
+                            merged_caps.pop(group, None)
+                        else:
+                            merged_caps[group] = cap
+                    incoming["group_caps"] = merged_caps
+                values["order.json"] = order_bytes(checked_order({**saved, **incoming}))
             if values.get("sweep.json") is not None:
                 current = sweep_defaults() if "sweep.json" in unreadable else sweep_from(before["sweep.json"])
                 if "error" in current:  # a broken file is replaced by the defaults and these changes

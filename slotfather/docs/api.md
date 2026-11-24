@@ -49,6 +49,20 @@ line's `count` is the slots it took. `advise [--cores C|auto]` adds `weight`:
 
 The dashboard block's `advice` has no `weight`.
 
+**Advice memory and group fields** (fathers#251). `slotfather advise [--json]` (`contract.AdviseReply`, `v: 1`) also
+reports:
+
+- `gib_per_slot`, `gib_per_slot_source`, `memory_gib`: GiB per slot (`"configured"` in `automatic`/`memory`/`lower`
+  modes, `"derived"` as `memory_gib / total` in `fixed` mode when RAM is known, or `null` when RAM is unknown) and host
+  RAM in GiB.
+- `recommended_gib_per_slot`: 90th-percentile per-slot peak RSS (`rss_peak_mb / count`) across labels from history,
+  rounded up to 0.5 GiB (at least 1.0 GiB), or `null` without recorded peaks.
+- `memory_budget_mb`, `memory_expected_mb`, `memory_budget_block`: effective expected-peak memory budget in MB (lower
+  of `memory_share × RAM` and `memory_budget_mb`), currently held expected peak memory in MB, and why the request would
+  wait for the budget (or `null`).
+- `group_cap_block`: why a per-group concurrency cap would hold the request back (probed by `label` and `cmd`), or
+  `null`.
+
 **Lease metadata.**
 
 - Set via repeatable `run --meta key=value` (library: `acquire(..., meta={...})`) for caller context (`lane`, `phase`, `model`, `session`, and custom tags).
