@@ -935,5 +935,118 @@ class ScopeReviewTests(LaneCase):
         self.assertEqual(review.scope_lines({"kind": "lane"}, None, "a", "lanefather"), [])
 
 
+class ReusedLaneIdReviewTests(LaneCase):
+    """fathers#54: a reused lane id after `done` never inherits the previous incarnation's receipts, review or gate."""
+
+    def test_reused_lane_id_does_not_inherit_receipts_review_or_gate(self):
+        # Generation 1: clean review and done.
+        self.review_text.write_text(NO_FINDINGS)
+        wt1 = self.created("a", "lib/api.txt")
+        self.commit(wt1, {"lib/api.txt": "foo\ngen1\n"})
+        self.lane("check", "a")
+        created1 = self.record("a")["created"]
+        self.assertEqual(json.loads((self.state / "a.receipt.json").read_text())["lane_created"], created1)
+        self.assertEqual(json.loads((self.state / "a.first.json").read_text())["lane_created"], created1)
+        self.lane("land", "a")
+        self.assertEqual(json.loads((self.state / "a.post-merge.json").read_text())["lane_created"], created1)
+        self.lane("review", "a")
+        self.assertEqual(self.review("a")["lane_created"], created1)
+        calls_after_gen1 = len(self.codex_calls())
+        # Auto-done finishes the lane after a clean review and green smoke.
+        self.assertEqual(self.record("a")["status"], "done")
+
+        # Generation 2: re-register the same lane id.
+        wt2 = self.created("a", "lib/api.txt")
+        created2 = self.record("a")["created"]
+        self.assertNotEqual(created2, created1)
+
+        # Before gen 2 runs check/review, list/show/status must report no receipt and no review.
+        listed = next(lane for lane in json.loads(self.lane("list", "--json"))["lanes"] if lane["id"] == "a")
+        self.assertEqual(listed["receipt"], "no receipt")
+        shown = json.loads(self.lane("show", "a", "--json"))
+        self.assertEqual(shown["checks"]["status"], "not run")
+        self.assertEqual(shown["review"], {"status": "not started", "findings": 0, "unresolved": 0})
+        status_lane = next(
+            lane
+            for project in json.loads(self.lane("status", "--json", cwd=self.tmp))["projects"]
+            for lane in project.get("lanes", [])
+            if lane["id"] == "a"
+        )
+        self.assertEqual(status_lane["receipt"]["status"], "not run")
+        self.assertIsNone(status_lane["receipt"]["path"])
+        self.assertEqual(status_lane["review"], {"status": "not started", "open": 0, "findings": 0})
+
+        # Commit, check and land gen 2 with findings; gen 1's clean review must NOT be kept.
+        self.review_text.write_text(TWO_FINDINGS)
+        self.commit(wt2, {"lib/api.txt": "foo\ngen2\n"})
+        self.lane("check", "a")
+        self.assertEqual(json.loads((self.state / "a.receipt.json").read_text())["lane_created"], created2)
+        self.assertEqual(json.loads((self.state / "a.first.json").read_text())["lane_created"], created2)
+        land_out = self.lane("land", "a")
+        self.assertNotIn("review kept", land_out)
+        self.assertEqual(json.loads((self.state / "a.post-merge.json").read_text())["lane_created"], created2)
+
+        # Review gate must wait for gen 2's review instead of passing on gen 1's clean review.
+        sha = self.tip()
+        gate_before = json.loads(self.lane("findings", sha, "--json", ok=None))
+        self.assertTrue(gate_before["held"])
+        self.assertEqual([u["lane"] for u in gate_before["unfinished"]], ["a"])
+
+        # Running review on gen 2 executes a new review and records gen 2's findings.
+        rev_out = self.lane("review", "a")
+        self.assertGreater(len(self.codex_calls()), calls_after_gen1)
+        self.assertIn("2 findings", rev_out)
+        rev2 = self.review("a")
+        self.assertEqual(rev2["lane_created"], created2)
+        self.assertEqual(len(rev2["findings"]), 2)
+
+    def test_reused_lane_id_does_not_inherit_exempt_review(self):
+        # Generation 1: docs-only lane lands with an exempt review and auto-finishes to done.
+        wt1 = self.created("a", "docs/note.md")
+        self.commit(wt1, {"docs/note.md": "doc only\n"})
+        self.lane("check", "a")
+        out1 = self.lane("land", "a")
+        self.assertIn("review exempt", out1)
+        self.assertEqual(self.review("a")["lane_created"], self.record("a")["created"])
+        self.assertEqual(self.record("a")["status"], "done")
+
+        # Generation 2: code change with same id must NOT inherit gen 1's exempt review.
+        wt2 = self.created("a", "lib/api.txt")
+        self.commit(wt2, {"lib/api.txt": "foo\ncode change\n"})
+        self.lane("check", "a")
+        out2 = self.lane("land", "a")
+        self.assertNotIn("review kept", out2)
+        self.assertNotIn("review exempt", out2)
+        gate = json.loads(self.lane("findings", self.tip(), "--json", ok=None))
+        self.assertTrue(gate["held"])
+        self.assertEqual([u["lane"] for u in gate["unfinished"]], ["a"])
+
+    def test_reused_lane_id_fix_parent_lookup_ignores_previous_generation_findings(self):
+        # Generation 1: landed with findings, then finished; leave a gen-1 review with unmarked findings on disk.
+        self.review_text.write_text(TWO_FINDINGS)
+        wt1 = self.created("a", "lib/api.txt")
+        self.commit(wt1, {"lib/api.txt": "foo\ngen1\n"})
+        self.lane("check", "a")
+        self.lane("land", "a")
+        self.lane("review", "a")
+        gen1_review = self.review("a")
+        self.lane("review", "a", "--mark", "1", "rejected:ok", "--mark", "2", "rejected:ok")
+        self.assertEqual(self.record("a")["status"], "done")
+        # Restore gen-1's unmarked review receipt (stamped with gen-1's lane_created) on disk.
+        (self.state / "a.review.json").write_text(json.dumps(gen1_review, indent=2) + "\n")
+
+        # Generation 2: re-register "a" and land it without running its review yet.
+        wt2 = self.created("a", "lib/api.txt")
+        self.commit(wt2, {"lib/api.txt": "foo\ngen2\n"})
+        self.lane("check", "a")
+        self.lane("land", "a", "--keep")
+
+        # start --fix-of a and review a --fix-lane must refuse (ignore gen-1's unmarked findings).
+        out_start = self.lane("start", "b", "--fix-of", "a", "--ticket", "404", "--claims", "lib/api.txt", ok=False)
+        self.assertIn("no finished review with unmarked findings", out_start)
+        out_fix = self.lane("review", "a", "--fix-lane", ok=False)
+        self.assertIn("no finished review with unmarked findings", out_fix)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -293,6 +293,31 @@ def of_project(records: list[Record], common: str | None) -> list[Record]:
     return [r for r in records if common is None or r.get("common_dir") in (None, common)]
 
 
+def lane_created_of(record: Record | None) -> str | None:
+    """The non-empty string `created` timestamp of a lane record, or `None` when absent or invalid."""
+    if not isinstance(record, dict):
+        return None
+    raw = record.get("created")
+    return raw if isinstance(raw, str) and raw else None
+
+
+def receipt_matches_lane(receipt: dict[str, Any] | None, lane_created: str | None) -> bool:
+    """Whether `receipt` belongs to the lane incarnation created at `lane_created` (fathers#54).
+
+    A legacy receipt without `lane_created` (or with `lane_created: None`) matches for backward compatibility.
+    When `lane_created` is absent or empty, any receipt matches.
+    When both are present, `receipt["lane_created"]` must be a string equal to `lane_created`.
+    """
+    if receipt is None:
+        return False
+    if not isinstance(lane_created, str) or not lane_created:
+        return True
+    if "lane_created" not in receipt or receipt["lane_created"] is None:
+        return True
+    raw = receipt["lane_created"]
+    return isinstance(raw, str) and raw == lane_created
+
+
 def project_name(common: str | None) -> str:
     """The repository a Git common directory belongs to, by its main checkout's directory name."""
     if not common:

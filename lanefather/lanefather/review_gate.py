@@ -43,7 +43,7 @@ def gate_report(store: state.Store, cwd: str, common: str, sha: str,
         if base and git_ok(cwd, "merge-base", "--is-ancestor", merge, base):
             continue
         known += 1
-        rev = review_record.ReviewRecord.load(store, record["id"])
+        rev = review_record.ReviewRecord.load(store, record["id"], record=record)
         verdict = rev.verdict
         _, words = rev.summary(prog=store.prog)
         if isinstance(verdict, review_record.Exempt):

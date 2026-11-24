@@ -294,6 +294,11 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
 
 ### Fixed
 
+- Reusing a lane id after `done` no longer inherits the previous incarnation's check receipt, first receipt, review,
+  post-merge smoke or recheck receipt (fathers#54): every lane receipt is stamped with `lane_created` from the lane
+  record's `created` timestamp, and readers (`list`, `show`, `status`, `check`, `land`, `review`, `done`, the review
+  gate, and `start --fix-of` / `review --fix-lane` parent lookups) treat a `lane_created` mismatch as absent while
+  continuing to read legacy receipts written without `lane_created`.
 - A land forced past other lanes' unmarked review findings with `--force-reason` prints each finding it overrides
   (`lane: overridden: <finding>`, worded as the refusal) before merging; before, they reached only the override
   record and the ledger (review of fathers#172).

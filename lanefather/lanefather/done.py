@@ -141,7 +141,7 @@ def evaluate_completion(
     lane_id = str(record["id"])
     prog = store.project.command
     pm = postmerge.PostMergeRecord.load(store, record, integration=integration)
-    rev = review_record.ReviewRecord.load(store, lane_id)
+    rev = review_record.ReviewRecord.load(store, lane_id, record=record)
     is_kept = bool(keep_override or kept(record))
     done_auto = store.project.done_auto
     needs_lock_probe = (
@@ -186,7 +186,7 @@ def done_readiness(
     lane_id = str(record["id"])
     prog = store.project.command
     pm = postmerge.PostMergeRecord.load(store, record, integration=integration)
-    rev = review_record.ReviewRecord.load(store, lane_id)
+    rev = review_record.ReviewRecord.load(store, lane_id, record=record)
     is_kept = False if allow_kept else kept(record)
     mode = (
         postmerge.CompletionMode.INTERACTIVE
@@ -676,7 +676,7 @@ def drop_lane(lane_id: str, store: state.Store) -> str:
             raise LaneError(f"drop refused: lane {lane_id} is {record['status']}: {prog} done {lane_id} finishes it")
         if not lifecycle.occupying(record):
             raise LaneError(f"drop refused: lane {lane_id} is already {record['status']}")
-        unmarked = review_record.ReviewRecord.load(store, lane_id).open_findings
+        unmarked = review_record.ReviewRecord.load(store, lane_id, record=record).open_findings
         if unmarked:
             # A dropped lane is done, and a done lane gets no fix round, while its findings go on holding lands.
             raise LaneError(f"drop refused: lane {lane_id}'s review has {len(unmarked)} unmarked "

@@ -383,7 +383,7 @@ def _resolve_fix_merge(store: state.Store, common: str, value: str) -> str:
         landed_info = cast(dict[str, Any], raw_landed) if isinstance(raw_landed, dict) else {}
         if landed_info.get("merge"):
             return str(landed_info["merge"])
-        if lifecycle.active(target) and ReviewRecord.load(store, value).pre_land_fix(target) is not None:
+        if lifecycle.active(target) and ReviewRecord.load(store, value, record=target).pre_land_fix(target) is not None:
             tip = gitops.git(
                 main_checkout(common),
                 "rev-parse",
@@ -518,9 +518,14 @@ class ReviewRecord:
         label: str,
         *,
         panel_required: bool | None = None,
+        lane_created: str | None = None,
+        record: Record | None = None,
     ) -> ReviewRecord:
         required = store.project.review_panel_required if panel_required is None else panel_required
+        expected = lane_created if lane_created is not None else state.lane_created_of(record)
         raw = state.read_json(store.receipt_path(label, "review"))
+        if not state.receipt_matches_lane(raw, expected):
+            raw = None
         return cls.from_raw(label, raw, panel_required=required, prog=store.project.command)
 
     @classmethod
@@ -549,7 +554,7 @@ class ReviewRecord:
     ) -> Iterator[tuple[Record, list[dict[str, Any]]]]:
         """Open findings in each finished lane review, in record order."""
         for record in records:
-            rev = cls.load(store, str(record["id"]))
+            rev = cls.load(store, str(record["id"]), record=record)
             if rev.open_findings:
                 yield record, list(rev.open_findings)
 
@@ -574,7 +579,7 @@ class ReviewRecord:
             )
         if parent_record.get("common_dir") != common:
             raise LaneError(f"{refusal}: lane {lane_id} is from another repository")
-        rev = cls.load(store, lane_id)
+        rev = cls.load(store, lane_id, record=parent_record)
         if not rev.open_findings or rev.raw is None:
             raise LaneError(f"{refusal}: lane {lane_id} has no finished review with unmarked findings")
         return rev
@@ -593,21 +598,27 @@ class ReviewRecord:
         *,
         force: bool = False,
         owner_pid: int | None = None,
+        lane_created: str | None = None,
     ) -> ReviewRecord:
         """The single writer of `<label>.review.json`."""
         with store.locked(f"review-{label}"):
-            existing = state.read_json(store.receipt_path(label, "review"))
-            phase = receipt_phase(existing)
+            raw_existing = state.read_json(store.receipt_path(label, "review"))
             if (
                 event in (ReviewEvent.FINISH, ReviewEvent.FAIL)
                 and owner_pid is not None
-                and existing is not None
-                and existing.get("pid") != owner_pid
+                and raw_existing is not None
+                and raw_existing.get("pid") != owner_pid
             ):
                 raise StaleReviewRunError(
                     f"review {label}: stale worker pid {owner_pid} cannot {event.value} receipt owned by "
-                    f"pid {existing.get('pid')}"
+                    f"pid {raw_existing.get('pid')}"
                 )
+            existing = (
+                raw_existing
+                if state.receipt_matches_lane(raw_existing, lane_created)
+                else None
+            )
+            phase = receipt_phase(existing)
             if (force and event is ReviewEvent.START) or (
                 phase is ReceiptPhase.RUNNING
                 and event is ReviewEvent.START
@@ -649,6 +660,8 @@ class ReviewRecord:
         force: bool = False,
     ) -> ReviewRecord:
         started_at = started or journal.now()
+        raw_created = fields.get("lane_created")
+        lane_created = raw_created if isinstance(raw_created, str) and raw_created else None
         return cls._transition(
             store,
             label,
@@ -665,6 +678,7 @@ class ReviewRecord:
             },
             force=force,
             owner_pid=pid,
+            lane_created=lane_created,
         )
 
     @classmethod
@@ -704,7 +718,9 @@ class ReviewRecord:
                 "effort": effort,
             }
 
-        return cls._transition(store, label, ReviewEvent.START, _build)
+        raw_created = fields.get("lane_created")
+        lane_created = raw_created if isinstance(raw_created, str) and raw_created else None
+        return cls._transition(store, label, ReviewEvent.START, _build, lane_created=lane_created)
 
     @classmethod
     def finish(
@@ -764,6 +780,8 @@ class ReviewRecord:
         fields: dict[str, Any] | None = None,
         finished: str | None = None,
     ) -> ReviewRecord:
+        raw_created = fields.get("lane_created") if fields else None
+        lane_created = raw_created if isinstance(raw_created, str) and raw_created else None
         return cls._transition(
             store,
             label,
@@ -776,6 +794,7 @@ class ReviewRecord:
                 "exempt": reason,
                 "finished": finished or journal.now(),
             },
+            lane_created=lane_created,
         )
 
     @classmethod
@@ -788,8 +807,9 @@ class ReviewRecord:
         lane_id = str(record["id"])
         common = str(record["common_dir"])
         applied: list[MarkApplication] = []
+        lane_created = state.lane_created_of(record)
         with store.locked(f"review-{lane_id}"):
-            loaded = cls.load(store, lane_id)
+            loaded = cls.load(store, lane_id, record=record)
             if not loaded.has_finished_receipt or loaded.raw is None:
                 raise LaneError(f"lane {lane_id} has no finished review to mark ({loaded.summary()[1]})")
             pre_land = loaded.pre_land_fix(record)
@@ -843,7 +863,7 @@ class ReviewRecord:
                     by_number[app.finding_n]["mark"] = app.to_dict()
                 return {**existing, "findings": findings_copy}
 
-            updated_rev = cls._transition(store, lane_id, ReviewEvent.MARK, _build)
+            updated_rev = cls._transition(store, lane_id, ReviewEvent.MARK, _build, lane_created=lane_created)
         return MarkResult(review=updated_rev, applied=tuple(applied))
 
     @classmethod
@@ -856,8 +876,9 @@ class ReviewRecord:
         """Open one truthful pre-land fix round on `.review.json` without writing `<id>.json`."""
         lane_id = str(record["id"])
         common = str(record["common_dir"])
+        lane_created = state.lane_created_of(record)
         with store.locked(f"review-{lane_id}"):
-            loaded = cls.load(store, lane_id)
+            loaded = cls.load(store, lane_id, record=record)
             open_items = loaded.open_findings
             if not open_items or loaded.raw is None:
                 raise LaneError(f"hand-over refused: lane {lane_id} has no finished review with unmarked findings")
@@ -887,16 +908,27 @@ class ReviewRecord:
                 lane_id,
                 ReviewEvent.PRE_LAND_FIX,
                 lambda existing: {**(existing or {}), "pre_land_fix": fix_round.to_dict()},
+                lane_created=lane_created,
             )
         return updated_rev, fix_round
 
     @classmethod
-    def attach_fix_lane(cls, store: state.Store, lane_id: str, fix_id: str) -> ReviewRecord:
+    def attach_fix_lane(
+        cls,
+        store: state.Store,
+        lane_id: str,
+        fix_id: str,
+        *,
+        record: Record | None = None,
+        lane_created: str | None = None,
+    ) -> ReviewRecord:
+        expected = lane_created if lane_created is not None else state.lane_created_of(record)
         return cls._transition(
             store,
             lane_id,
             ReviewEvent.FIX_LANE,
             lambda existing: {**(existing or {}), "fix_lane": fix_id},
+            lane_created=expected,
         )
 
     @classmethod

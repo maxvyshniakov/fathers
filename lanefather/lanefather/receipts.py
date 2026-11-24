@@ -58,9 +58,24 @@ def path(store: state.Store, name: str, kind: ReceiptKind = "receipt") -> Path:
     raise ValueError(f"unknown receipt kind: {kind!r}")
 
 
-def read(store: state.Store, name: str, kind: ReceiptKind = "receipt") -> Receipt | None:
-    """Read a receipt from `store` without creating directories; `None` when absent or unreadable."""
-    return state.read_json(path(store, name, kind))
+def read(
+    store: state.Store,
+    name: str,
+    kind: ReceiptKind = "receipt",
+    *,
+    lane_created: str | None = None,
+    record: Record | None = None,
+) -> Receipt | None:
+    """Read a receipt from `store` without creating directories; `None` when absent, unreadable, or from an older
+    lane incarnation (fathers#54)."""
+    data = state.read_json(path(store, name, kind))
+    if data is None:
+        return None
+    if kind in ("check", "receipt", "first", "post-merge", "recheck", "review"):
+        expected = lane_created if lane_created is not None else state.lane_created_of(record)
+        if not state.receipt_matches_lane(data, expected):
+            return None
+    return data
 
 
 def write(store: state.Store, name: str, data: Receipt, kind: ReceiptKind = "receipt") -> Path:
@@ -184,9 +199,12 @@ def ensure_first(
 ) -> Receipt:
     """Return `<id>.first.json` for `record`'s incarnation, creating or replacing an older incarnation's file."""
     lane_id = str(record["id"])
+    created = state.lane_created_of(record)
     existing = read(store, lane_id, "first")
     if existing and existing.get("lane_created") == record.get("created"):
         return existing
+    if previous is not None and not state.receipt_matches_lane(previous, created):
+        previous = None
     prior_first: Any = (previous or {}).get("first")
     if not isinstance(prior_first, dict):
         prior_tree = tree_of(previous)
@@ -229,13 +247,19 @@ def reusable_checks(receipt: Receipt, delta: dict[str, Any]) -> dict[str, dict[s
     return reused
 
 
-def lane_ran(store: state.Store, lane_id: str) -> tuple[set[str], set[str], set[str]]:
+def lane_ran(
+    store: state.Store,
+    lane_id: str,
+    *,
+    lane_created: str | None = None,
+    record: Record | None = None,
+) -> tuple[set[str], set[str], set[str]]:
     """Checks, suites, and whole-run suites recorded in `lane_id`'s check and post-merge receipts."""
     ran_checks: set[str] = set()
     suites: set[str] = set()
     whole: set[str] = set()
     for kind in ("receipt", "post-merge"):
-        found = read(store, lane_id, kind) or {}
+        found = read(store, lane_id, kind, lane_created=lane_created, record=record) or {}
         raw_rows: Any = found.get("results")
         if not isinstance(raw_rows, list):
             continue
@@ -381,7 +405,7 @@ def check_verdict(
     project: config.Config = config.DEFAULT,
 ) -> CheckVerdict:
     """Evaluate a lane check receipt against `tip_tree` and, when given, `toolchain` and `platform`."""
-    if not receipt:
+    if not receipt or not state.receipt_matches_lane(receipt, state.lane_created_of(record)):
         return NoReceipt()
     raw_status = receipt.get("status")
     status_str = str(raw_status) if raw_status is not None else None
@@ -477,7 +501,11 @@ def smoke_basis(
 ) -> str | None:
     """Why `receipt` cannot stand for part of its merge's smoke (#640), or `None` when it can."""
     effective_record: Record | None = (
-        {"worktree": worktree} if worktree is not None else record
+        {**record, "worktree": worktree}
+        if worktree is not None and record is not None
+        else {"worktree": worktree}
+        if worktree is not None
+        else record
     )
     verdict = check_verdict(effective_record, receipt, str(landed["tree"]), toolchain,
                             platform=platform, project=project)
@@ -687,7 +715,7 @@ def lane_view(
     branch = record.get("branch")
     branch_str = str(branch) if isinstance(branch, str) else None
 
-    check_rec = read(store, lane_id, "receipt")
+    check_rec = read(store, lane_id, "receipt", record=record)
     if tip_tree is UNCHECKED:
         resolved_tree = (
             _git_read(root, "rev-parse", "--verify", "--quiet", f"{branch_str}^{{tree}}") or None
@@ -707,7 +735,7 @@ def lane_view(
     check_v = check_verdict(record, check_rec, resolved_tree)
     check_path = str(path(store, lane_id, "receipt")) if check_rec else None
 
-    rev = review_record.ReviewRecord.load(store, lane_id)
+    rev = review_record.ReviewRecord.load(store, lane_id, record=record)
     review_v = rev.verdict
     _, words = rev.summary(prog=prog or store.project.command)
     findings = rev.findings
