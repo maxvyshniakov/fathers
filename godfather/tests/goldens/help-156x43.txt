@@ -1,20 +1,20 @@
-╭─ SLOTS ───────────────────────────────────────────────────── 12 cores · 6 slots (manual) ─╮ ╭─ LEASE DETAILS ────────────────────────────────────────────╮
-│╭─ HELP ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮│
+ Godfather
+╭╭─ HELP ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮╮
 ││                                                                                                                                                        ││
 ││  KEYS                                                Normal has no mark.                               ▲ ↗ ↘           outlier · type slower/faster    ││
-╰│    ↑ ↓         select a row · scroll a panel                                                                                                           ││
-┏│    pgup pgdn   a page                              SLOTS                                             PAGES                                             ││
-┃│    home end    first · last row, top · bottom        One block per slot; the colour is its owner.      2 · 3        lanes · spawns (SLOTS' border)     ││
-▌│    tab         next panel, by columns                Slots budget scheduling, not CPU or memory.       ▶️ 🗓️ ✅ 💤  active planned landed parked       ││
-┃│                (shift-tab: back)                     manual · auto  saved or computed capacity         👻 ⌛        owner gone · past its TTL          ││
+││    ↑ ↓         select a row · scroll a panel                                                                                                           ││
+╰│    pgup pgdn   a page                              SLOTS                                             PAGES                                             ││
+┏│    home end    first · last row, top · bottom        One block per slot; the colour is its owner.      2 · 3        lanes · spawns (SLOTS' border)     ││
+┃│    tab         next panel, by columns                Slots budget scheduling, not CPU or memory.       ▶️ 🗓️ ✅ 💤  active planned landed parked       ││
+▌│                (shift-tab: back)                     manual · auto  saved or computed capacity         👻 ⌛        owner gone · past its TTL          ││
 ┃│    click       a row, a panel, a footer hint (as     draining N     held above a lowered capacity      ❔ ◌ 📦      unowned · gone · resource          ││
 ┃│                its key)                                                                                Links in DETAILS open a page.                   ││
 ┃│    wheel       scroll the panel under the          QUEUE                                                                                               ││
 ┃│                pointer                               slots  cells held or asked for                  MACHINE                                           ││
 ┃│    ← → · f     events: next log (or its title)       cpu    cores used / cores its slots stand for     load       the 1-minute load average / cores    ││
-┗│    r           events: every event as logged                (a soft limit)                                        (not CPU %)                          ││
-╭│    /           events: text filter (esc clears)      time   running or waiting for                     mem        the kernel's memory pressure:        ││
-││    1 2 3       overview · lanes · spawns             pid    lease owner                                           normal, warning, critical (Linux:    ││
+┃│    r           events: every event as logged                (a soft limit)                                        (not CPU %)                          ││
+┗│    /           events: text filter (esc clears)      time   running or waiting for                     mem        the kernel's memory pressure:        ││
+╭│    1 2 3       overview · lanes · spawns             pid    lease owner                                           normal, warning, critical (Linux:    ││
 ││    enter · a   the row's actions (right-click)       The bar turns red above 1.5× its share and                   used / total)                        ││
 ││    s           settings                              yellow when idle.                                 swap       used / total, in GB                  ││
 ││    ?           help                                  An idle lease that can yield is asked to when     Admission follows memory pressure, not used     ││
@@ -40,4 +40,4 @@
 ││                                                                                                                                                        ││
 ││                                                             ↑↓ scroll   esc close   q quit                                                             ││
 ╰╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯╯
- Godfather what's new?                            ↑↓ select   tab panel   s settings   ? help   q quit                             updated 11:59:39  ● live
+ what's new?                                 ↑↓ select   tab panel   s settings   ? help   q quit                                  updated 11:59:39  ● live

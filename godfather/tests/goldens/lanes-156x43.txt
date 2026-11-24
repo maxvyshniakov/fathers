@@ -1,3 +1,4 @@
+ Godfather   1 Overview   2 Lanes (4 · 1 review · 🔥 gate red)   3 Spawns
 ┏━ LANES ━━━━━━━━━━━━━ ticket╺╸stage ━━━━━━━ receipt ━━━━━━ review ━━━━━━━━ claims ━━━ age ━┓ ╭─ LANE DETAILS ─────────────────────────────────────────────╮
 ┃                                                                                           ┃ │                                                            │
 ┃  Straylight · 3 of 4 lanes                                                                ┃ │  lane      644-build-once                                  │
@@ -38,6 +39,5 @@
 │                                                                                           │ │                                                            │
 │                                                                                           │ │                                                            │
 │                                                                                           │ │                                                            │
-│                                                                                           │ │                                                            │
 ╰───────────────────────────────────────────────────────────────────────────────────────────╯ ╰────────────────────────────────────────────────────────────╯
- Godfather what's new?                     ↑↓ select   tab panel   1 2 3 pages   s settings   ? help   q quit                      updated 11:59:39  ● live
+ what's new?                          ↑↓ select   tab panel   1 2 3 pages   s settings   ? help   q quit                           updated 11:59:39  ● live

@@ -40,15 +40,17 @@ class OnceTests(LiveCase):
         for height in (5, 7):
             with self.subTest(height=height):
                 text = self.snapshot(width=40, height=height)
-                self.assertIn("Godfather", text.splitlines()[-1])
+                self.assertIn("Godfather", text.splitlines()[0])
+                self.assertIn("what's new?", text.splitlines()[-1])
                 self.assertIn("live", text.splitlines()[-1])
 
     def test_an_idle_queue_reads_open_with_every_slot_free(self) -> None:
         text = self.snapshot()
-        self.assertIn("SLOTS", text.splitlines()[0])
+        self.assertIn("Godfather", text.splitlines()[0])
+        self.assertIn("SLOTS", text.splitlines()[1])
         self.assertIn("free", text)
-        self.assertIn("Godfather", text.splitlines()[-1])
-        self.assertNotIn("Godfather", "\n".join(text.splitlines()[:-1]))
+        self.assertIn("what's new?", text.splitlines()[-1])
+        self.assertNotIn("Godfather", "\n".join(text.splitlines()[1:]))
         self.assertNotIn("/fake/state", text)
         self.assertIn("No requests · all 4 slots free", text)
         self.assertNotIn("\x1b[", text, "a snapshot to a pipe is plain text")
@@ -120,7 +122,7 @@ class ClickTests(LiveCase):
         screen.until(lambda text: re.search(r"label\s+click-owner", text) and re.search(r"status\s+running", text),
                      what="the holder's details")
         mark = screen.mark()
-        screen.click(10, 10)  # QUEUE starts at row 6: holder at 8, the gap at 9, the waiter at 10 (1-based)
+        screen.click(10, 11)  # header at 1, SLOTS 2-6, QUEUE at 7: holder at 9, gap at 10, waiter at 11 (1-based)
         screen.until(lambda text: re.search(r"label\s+click-target", text) and re.search(r"status\s+waiting", text),
                      what="the waiter selected", since=mark)
         granted = dict(target, kind="held", granted=target["since"], cpu=10.0, rss=1024, procs=1,

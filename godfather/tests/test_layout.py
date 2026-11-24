@@ -22,62 +22,62 @@ def natural(width: int) -> int:
 class OverviewTests(unittest.TestCase):
     # (width, height, queue rows): {panel: (y, x, height, width)}, Tab order
     CASES: list[tuple[tuple[int, int, int], dict[str, tuple[int, int, int, int]], tuple[str, ...]]] = [
-        # wide: QUEUE and EVENTS on the left, DETAILS and MACHINE on the right (2/5, at least 52)
-        ((156, 43, 1), {"slots": (0, 0, 5, 93), "requests": (5, 0, 5, 93), "events": (10, 0, 32, 93),
-                        "details": (0, 94, 35, 62), "machine": (35, 94, 7, 62)}, ("requests", "events", "details")),
-        ((110, 40, 1), {"slots": (0, 0, 5, 57), "requests": (5, 0, 5, 57), "events": (10, 0, 29, 57),
-                        "details": (0, 58, 28, 52), "machine": (28, 58, 11, 52)}, ("requests", "events", "details")),
-        ((156, 43, 12), {"slots": (0, 0, 5, 93), "requests": (5, 0, 16, 93), "events": (21, 0, 21, 93),
-                         "details": (0, 94, 35, 62), "machine": (35, 94, 7, 62)}, ("requests", "events", "details")),
+        # wide: QUEUE and EVENTS on the left, DETAILS and MACHINE on the right (2/5, at least 52); row 0 is the header
+        ((156, 43, 1), {"slots": (1, 0, 5, 93), "requests": (6, 0, 5, 93), "events": (11, 0, 31, 93),
+                        "details": (1, 94, 34, 62), "machine": (35, 94, 7, 62)}, ("requests", "events", "details")),
+        ((110, 40, 1), {"slots": (1, 0, 5, 57), "requests": (6, 0, 5, 57), "events": (11, 0, 28, 57),
+                        "details": (1, 58, 27, 52), "machine": (28, 58, 11, 52)}, ("requests", "events", "details")),
+        ((156, 43, 12), {"slots": (1, 0, 5, 93), "requests": (6, 0, 16, 93), "events": (22, 0, 20, 93),
+                         "details": (1, 94, 34, 62), "machine": (35, 94, 7, 62)}, ("requests", "events", "details")),
         # wide and short: MACHINE needs 16 rows on the right; QUEUE gives way where EVENTS keeps its 5
-        ((156, 20, 1), {"slots": (0, 0, 5, 93), "requests": (5, 0, 5, 93), "events": (10, 0, 9, 93),
-                        "details": (0, 94, 12, 62), "machine": (12, 94, 7, 62)}, ("requests", "events", "details")),
-        ((156, 17, 1), {"slots": (0, 0, 5, 93), "requests": (5, 0, 5, 93), "events": (10, 0, 6, 93),
-                        "details": (0, 94, 10, 62), "machine": (10, 94, 6, 62)}, ("requests", "events", "details")),
-        ((156, 16, 1), {"slots": (0, 0, 5, 93), "requests": (5, 0, 5, 93), "events": (10, 0, 5, 93),
-                        "details": (0, 94, 15, 62)}, ("requests", "events", "details")),
+        ((156, 20, 1), {"slots": (1, 0, 5, 93), "requests": (6, 0, 5, 93), "events": (11, 0, 8, 93),
+                        "details": (1, 94, 11, 62), "machine": (12, 94, 7, 62)}, ("requests", "events", "details")),
+        ((156, 18, 1), {"slots": (1, 0, 5, 93), "requests": (6, 0, 5, 93), "events": (11, 0, 6, 93),
+                        "details": (1, 94, 10, 62), "machine": (11, 94, 6, 62)}, ("requests", "events", "details")),
+        ((156, 17, 1), {"slots": (1, 0, 5, 93), "requests": (6, 0, 5, 93), "events": (11, 0, 5, 93),
+                        "details": (1, 94, 15, 62)}, ("requests", "events", "details")),
         # wide and too short for EVENTS under QUEUE (fathers#140): QUEUE at its rows less what MACHINE's three-row
         # compact form needs, MACHINE under it, DETAILS the whole right column; never a padded QUEUE
-        ((156, 14, 1), {"slots": (0, 0, 5, 93), "requests": (5, 0, 5, 93), "machine": (10, 0, 3, 93),
-                        "details": (0, 94, 13, 62)}, ("requests", "details")),
-        ((156, 20, 6), {"slots": (0, 0, 5, 93), "requests": (5, 0, 10, 93), "machine": (15, 0, 4, 93),
-                        "details": (0, 94, 19, 62)}, ("requests", "details")),
-        ((156, 19, 6), {"slots": (0, 0, 5, 93), "requests": (5, 0, 10, 93), "machine": (15, 0, 3, 93),
-                        "details": (0, 94, 18, 62)}, ("requests", "details")),
-        ((156, 18, 6), {"slots": (0, 0, 5, 93), "requests": (5, 0, 9, 93), "machine": (14, 0, 3, 93),
-                        "details": (0, 94, 17, 62)}, ("requests", "details")),
-        ((156, 21, 6), {"slots": (0, 0, 5, 93), "requests": (5, 0, 10, 93), "events": (15, 0, 5, 93),
-                        "details": (0, 94, 13, 62), "machine": (13, 94, 7, 62)}, ("requests", "events", "details")),
-        ((110, 14, 8), {"slots": (0, 0, 5, 57), "requests": (5, 0, 5, 57), "machine": (10, 0, 3, 57),
-                        "details": (0, 58, 13, 52)}, ("requests", "details")),
+        ((156, 14, 1), {"slots": (1, 0, 5, 93), "requests": (6, 0, 4, 93), "machine": (10, 0, 3, 93),
+                        "details": (1, 94, 12, 62)}, ("requests", "details")),
+        ((156, 20, 6), {"slots": (1, 0, 5, 93), "requests": (6, 0, 10, 93), "machine": (16, 0, 3, 93),
+                        "details": (1, 94, 18, 62)}, ("requests", "details")),
+        ((156, 19, 6), {"slots": (1, 0, 5, 93), "requests": (6, 0, 9, 93), "machine": (15, 0, 3, 93),
+                        "details": (1, 94, 17, 62)}, ("requests", "details")),
+        ((156, 18, 6), {"slots": (1, 0, 5, 93), "requests": (6, 0, 8, 93), "machine": (14, 0, 3, 93),
+                        "details": (1, 94, 16, 62)}, ("requests", "details")),
+        ((156, 22, 6), {"slots": (1, 0, 5, 93), "requests": (6, 0, 10, 93), "events": (16, 0, 5, 93),
+                        "details": (1, 94, 13, 62), "machine": (14, 94, 7, 62)}, ("requests", "events", "details")),
+        ((110, 14, 8), {"slots": (1, 0, 5, 57), "requests": (6, 0, 4, 57), "machine": (10, 0, 3, 57),
+                        "details": (1, 58, 12, 52)}, ("requests", "details")),
         # one column from 83 columns (fathers#169): QUEUE, EVENTS the whole width, then MACHINE on the left and
         # DETAILS on the right, the row as tall as DETAILS' key fields (13); below 83 QUEUE, DETAILS and MACHINE alone
-        ((109, 40, 1), {"slots": (0, 0, 5, 109), "requests": (5, 0, 5, 109), "events": (10, 0, 16, 109),
+        ((109, 40, 1), {"slots": (1, 0, 5, 109), "requests": (6, 0, 5, 109), "events": (11, 0, 15, 109),
                         "machine": (26, 0, 13, 54), "details": (26, 55, 13, 54)}, ("requests", "events", "details")),
-        ((100, 40, 1), {"slots": (0, 0, 5, 100), "requests": (5, 0, 5, 100), "events": (10, 0, 16, 100),
+        ((100, 40, 1), {"slots": (1, 0, 5, 100), "requests": (6, 0, 5, 100), "events": (11, 0, 15, 100),
                         "machine": (26, 0, 13, 49), "details": (26, 50, 13, 50)}, ("requests", "events", "details")),
-        ((83, 40, 1), {"slots": (0, 0, 5, 83), "requests": (5, 0, 5, 83), "events": (10, 0, 16, 83),
+        ((83, 40, 1), {"slots": (1, 0, 5, 83), "requests": (6, 0, 5, 83), "events": (11, 0, 15, 83),
                        "machine": (26, 0, 13, 44), "details": (26, 45, 13, 38)}, ("requests", "events", "details")),
-        ((82, 40, 1), {"slots": (0, 0, 5, 82), "requests": (5, 0, 5, 82), "details": (10, 0, 22, 82),
+        ((82, 40, 1), {"slots": (1, 0, 5, 82), "requests": (6, 0, 5, 82), "details": (11, 0, 21, 82),
                        "machine": (32, 0, 7, 82)}, ("requests", "details")),
-        ((76, 40, 1), {"slots": (0, 0, 5, 76), "requests": (5, 0, 5, 76), "details": (10, 0, 22, 76),
+        ((76, 40, 1), {"slots": (1, 0, 5, 76), "requests": (6, 0, 5, 76), "details": (11, 0, 21, 76),
                        "machine": (32, 0, 7, 76)}, ("requests", "details")),
-        ((60, 40, 1), {"slots": (0, 0, 5, 60), "requests": (5, 0, 5, 60), "details": (10, 0, 18, 60),
+        ((60, 40, 1), {"slots": (1, 0, 5, 60), "requests": (6, 0, 5, 60), "details": (11, 0, 17, 60),
                        "machine": (28, 0, 11, 60)}, ("requests", "details")),
         # one column, short (fathers#169): the bottom row gives way first (DETAILS' 13, MACHINE's 11, its 7 without
         # the chart, its 6), then EVENTS (7, then 5); QUEUE keeps its least; without a bottom row the band is DETAILS'
-        ((100, 34, 3), {"slots": (0, 0, 5, 100), "requests": (5, 0, 7, 100), "events": (12, 0, 8, 100),
+        ((100, 34, 3), {"slots": (1, 0, 5, 100), "requests": (6, 0, 7, 100), "events": (13, 0, 7, 100),
                         "machine": (20, 0, 13, 49), "details": (20, 50, 13, 50)}, ("requests", "events", "details")),
-        ((100, 33, 3), {"slots": (0, 0, 5, 100), "requests": (5, 0, 7, 100), "events": (12, 0, 7, 100),
-                        "machine": (19, 0, 13, 49), "details": (19, 50, 13, 50)}, ("requests", "events", "details")),
-        ((100, 30, 12), {"slots": (0, 0, 5, 100), "requests": (5, 0, 10, 100), "events": (15, 0, 7, 100),
-                         "machine": (22, 0, 7, 49), "details": (22, 50, 7, 50)}, ("requests", "events", "details")),
-        ((100, 25, 12), {"slots": (0, 0, 5, 100), "requests": (5, 0, 14, 100), "details": (19, 0, 5, 100)},
+        ((100, 33, 3), {"slots": (1, 0, 5, 100), "requests": (6, 0, 7, 100), "events": (13, 0, 7, 100),
+                        "machine": (20, 0, 12, 49), "details": (20, 50, 12, 50)}, ("requests", "events", "details")),
+        ((100, 30, 12), {"slots": (1, 0, 5, 100), "requests": (6, 0, 10, 100), "events": (16, 0, 7, 100),
+                         "machine": (23, 0, 6, 49), "details": (23, 50, 6, 50)}, ("requests", "events", "details")),
+        ((100, 25, 12), {"slots": (1, 0, 5, 100), "requests": (6, 0, 13, 100), "details": (19, 0, 5, 100)},
          ("requests", "details")),
-        ((100, 20, 3), {"slots": (0, 0, 5, 100), "requests": (5, 0, 7, 100), "details": (12, 0, 7, 100)},
+        ((100, 20, 3), {"slots": (1, 0, 5, 100), "requests": (6, 0, 7, 100), "details": (13, 0, 6, 100)},
          ("requests", "details")),
-        ((60, 14, 8), {"slots": (0, 0, 5, 60), "details": (5, 0, 8, 60)}, ("requests", "details")),
-        ((50, 14, 1), {"slots": (0, 0, 5, 50), "requests": (5, 0, 8, 50)}, ("requests",)),
+        ((60, 14, 8), {"slots": (1, 0, 5, 60), "details": (6, 0, 7, 60)}, ("requests", "details")),
+        ((50, 14, 1), {"slots": (1, 0, 5, 50), "requests": (6, 0, 7, 50)}, ("requests",)),
     ]
 
     def test_each_arrangement_and_threshold(self) -> None:
@@ -95,8 +95,8 @@ class OverviewTests(unittest.TestCase):
                 self.assertEqual("small", found.arrangement)
                 self.assertEqual({}, found.panels)
                 self.assertEqual(("requests",), found.order)
-                self.assertEqual(Rect(min(2, height - 4), 3, 2, width - 6), found.slots)
-                self.assertEqual(6 if 6 < height - 1 else None, found.note_row)
+                self.assertEqual(Rect(min(3, max(1, height - 4)), 3, 2, width - 6), found.slots)
+                self.assertEqual(7 if 7 < height - 1 else None, found.note_row)
 
     def test_the_thresholds_in_one_place(self) -> None:
         self.assertEqual((110, 50, 14), (layout.WIDE, layout.SMALL_WIDTH, layout.SMALL_HEIGHT))
@@ -124,7 +124,7 @@ class ShortWideTests(unittest.TestCase):
                     self.assertEqual(not shown, left, "MACHINE is under QUEUE exactly while EVENTS is not shown")
                     self.assertLessEqual(panels["requests"].height, layout.queue_height(rows), "no padded QUEUE")
                     if not shown:
-                        self.assertEqual(height - 1, panels["details"].height, "DETAILS the whole column")
+                        self.assertEqual(height - 2, panels["details"].height, "DETAILS the whole column")
 
 
 class OneColumnTests(unittest.TestCase):
@@ -156,26 +156,26 @@ class AllocateTests(unittest.TestCase):
 
     CASES: list[tuple[tuple[int, int, int, int], dict[str, int]]] = [
         # tall, few queue rows: QUEUE its rows, the bottom row DETAILS' key fields, EVENTS the rest
-        ((100, 50, 6, 13), {"requests": 10, "events": 21, "machine": 13}),
-        ((100, 40, 6, 13), {"requests": 10, "events": 11, "machine": 13}),
+        ((100, 50, 6, 13), {"requests": 10, "events": 20, "machine": 13}),
+        ((100, 40, 6, 13), {"requests": 10, "events": 10, "machine": 13}),
         # nothing to show in DETAILS: the bottom row is MACHINE's natural height, EVENTS gets the rows
-        ((100, 40, 6, 5), {"requests": 10, "events": 13, "machine": 11}),
+        ((100, 40, 6, 5), {"requests": 10, "events": 12, "machine": 11}),
         # many queue rows: the floors first (QUEUE 10, EVENTS 7, the row 13), then QUEUE takes what is left
-        ((100, 40, 17, 13), {"requests": 14, "events": 7, "machine": 13}),
-        ((100, 60, 30, 13), {"requests": 34, "events": 7, "machine": 13}),
+        ((100, 40, 17, 13), {"requests": 13, "events": 7, "machine": 13}),
+        ((100, 60, 30, 13), {"requests": 33, "events": 7, "machine": 13}),
         # short: the row gives way before EVENTS' three rows, EVENTS before QUEUE's least
-        ((100, 30, 6, 13), {"requests": 10, "events": 7, "machine": 7}),
-        ((100, 29, 6, 13), {"requests": 10, "events": 7, "machine": 6}),
-        ((100, 28, 6, 13), {"requests": 10, "events": 5, "machine": 7}),
-        ((100, 27, 6, 13), {"requests": 10, "events": 5, "machine": 6}),
-        ((100, 26, 6, 13), {"requests": 10, "details": 10}),  # no bottom row: DETAILS has the band
+        ((100, 31, 6, 13), {"requests": 10, "events": 7, "machine": 7}),
+        ((100, 30, 6, 13), {"requests": 10, "events": 7, "machine": 6}),
+        ((100, 29, 6, 13), {"requests": 10, "events": 5, "machine": 7}),
+        ((100, 28, 6, 13), {"requests": 10, "events": 5, "machine": 6}),
+        ((100, 27, 6, 13), {"requests": 10, "details": 10}),  # no bottom row: DETAILS has the band
         # 83 columns, the narrowest with the bottom row; 82, DETAILS' band over MACHINE alone, as before
-        ((83, 40, 6, 13), {"requests": 10, "events": 11, "machine": 13}),
-        ((82, 40, 6, 13), {"requests": 10, "details": 17, "machine": 7}),
-        ((60, 40, 6, 13), {"requests": 10, "details": 13, "machine": 11}),
+        ((83, 40, 6, 13), {"requests": 10, "events": 10, "machine": 13}),
+        ((82, 40, 6, 13), {"requests": 10, "details": 16, "machine": 7}),
+        ((60, 40, 6, 13), {"requests": 10, "details": 13, "machine": 10}),
         # wide: unchanged, QUEUE over EVENTS beside DETAILS over MACHINE at its natural height
-        ((156, 43, 6, 13), {"requests": 10, "events": 27, "details": 35, "machine": 7}),
-        ((156, 43, 6, 5), {"requests": 10, "events": 27, "details": 35, "machine": 7}),
+        ((156, 43, 6, 13), {"requests": 10, "events": 26, "details": 34, "machine": 7}),
+        ((156, 43, 6, 5), {"requests": 10, "events": 26, "details": 34, "machine": 7}),
     ]
 
     def test_floors_then_priorities(self) -> None:

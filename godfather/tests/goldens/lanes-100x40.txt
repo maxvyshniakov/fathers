@@ -1,3 +1,4 @@
+ Godfather   1 Overview   2 Lanes (4 · 1 review · 🔥 gate red)   3 Spawns
 ┏━ LANES ━━━━━━━━━━━━━━━━━━━━ ticket╺╸stage ━━━━━━━ receipt ━━━━━━ review ━━━━━━━━ claims ━━━ age ━┓
 ┃                                                                                                  ┃
 ┃  Straylight · 3 of 4 lanes                                                                       ┃
@@ -23,9 +24,8 @@
 │            src/part6/**, src/part7/**, src/part8/**, src/part9/**, src/part10/**                ┃│
 │  after     —                                                                                    ┃│
 │  receipt   in progress                                                                          ┃│
-│  review    not started                                                                          ┃│
-│  log       check · /fixture/straylight/lanes/logs/lane-644-build-once-20261104T0950110.log      ┃│
-│                                                                                                  │
+│  review    not started                                                                          ╹│
+│  log       check · /fixture/straylight/lanes/logs/lane-644-build-once-20261104T0950110.log       │
 │                                                                                                  │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
 ╭─ LANES LOG ───────── lane ───────────────────────────────────────────── result ───────── ticket ─╮
@@ -37,4 +37,4 @@
 │                                                                                                  │
 │                                                                                                  │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
- Godfather what's new?      ↑↓ select   1 2 3 pages   ? help   q quit      updated 11:59:39  ● live
+ what's new?    ↑↓ select   1 2 3 pages   s settings   ? help   q quit     updated 11:59:39  ● live

@@ -91,7 +91,7 @@ def draw_footer(canvas: Canvas, model: Optional[Model], error: Optional[str], me
         note = ("no actions", "dim")
     else:
         note = ("", "")
-    Footer(canvas).draw([(_version.NAME, "title"), (" " + WHATS_NEW + (" ↻" if installed else ""), "dim")],
+    Footer(canvas).draw([(WHATS_NEW + (" ↻" if installed else ""), "dim")],
                         footer_hints(canvas.focus, pages, bool(actions) and not message and not error),
                         ("● stale", "bad") if error else ("● live", "ok"),
                         clock(model["updated"], moment) if model else "", note)
@@ -116,6 +116,7 @@ def dashboard_draw(canvas: Canvas, model: Optional[Model], selected: int = 0, ov
     canvas.scroll = scroll if scroll is not None else {}
     if moment is None and model is not None:
         moment = cast(Optional[datetime.datetime], model.get("updated"))
+    _pages.draw_header(canvas, page, tools or {}, _version.NAME)
     draw_footer(canvas, model, error, message, moment, page_keys(tools), message_style,
                 proc_actions(page, page_row, tools))
     if notice:
@@ -142,7 +143,6 @@ def draw_panels(canvas: Canvas, model: Model, selected: int, cwd: Optional[str],
     canvas.order = screen.order
     if "slots" in panels:
         Panel(canvas, panels["slots"]).frame("SLOTS", _queue.slots_note(model))
-        _pages.draw_summaries(canvas, panels["slots"], tools or {}, SUMMARIES)
     _queue.draw_slots(canvas, screen.slots, model)
     if screen.note_row is not None:
         canvas.put(screen.note_row, screen.slots.x, "Enlarge the terminal for leases and the queue", "dim",
@@ -176,9 +176,6 @@ def details_wanted(canvas: Canvas, model: Model, moment: datetime.datetime, even
         if 0 <= event < len(found):
             rows = len(_details.event_facts(found[event], moment, _common.marks_of(canvas)))
     return _layout.framed(rows) if rows else _layout.DETAILS_MIN
-
-
-SUMMARIES = {"lanes": _pages.lanes_summary, "spawns": _pages.spawns_summary}  # SLOTS' bottom border, by page
 
 
 def readable(tools: Optional[dict[str, Any]], name: str) -> Optional[dict[str, Any]]:
@@ -219,8 +216,8 @@ def draw_overlay(canvas: Canvas, overlay: Any, model: Optional[Model], news: Any
 
 
 def dim_panels(canvas: Canvas) -> None:
-    """Every cell above the footer in the muted token: a stale snapshot's picture."""
-    for row in canvas.cells[:canvas.height - 1]:
+    """Every cell between the header and footer in the muted token: a stale snapshot's picture."""
+    for row in canvas.cells[_layout.HEADER_HEIGHT:canvas.height - 1]:
         for cell in row:
             cell[1] = "dim"
 
@@ -229,7 +226,7 @@ def draw_notice(canvas: Canvas, lines: list[str]) -> None:
     """One panel instead of the overview: the tools Godfather looked for, or why Slotfather cannot be shown."""
     width, height = canvas.width, canvas.height
     if width < _layout.NOTICE_WIDTH or height < _layout.NOTICE_HEIGHT:
-        canvas.put(0, 1, lines[0], "bad", max(0, width - 2))
+        canvas.put(_layout.HEADER_HEIGHT, 1, lines[0], "bad", max(0, width - 2))
         return
     panel = Panel(canvas, _layout.notice(width, height, len(lines))).frame("GODFATHER")
     for row, line in enumerate(lines[:panel.inner.height]):

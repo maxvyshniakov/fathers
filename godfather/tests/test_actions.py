@@ -474,7 +474,7 @@ class LiveTests(unittest.TestCase):
         env = {key: value for key, value in os.environ.items() if not key.startswith(("GODFATHER_", "SLOTFATHER_"))}
         env.update(GODFATHER_FIXTURES=str(PROCS), GODFATHER_FIXTURES_RECORD=str(record), TZ="UTC")
         screen = terminal.Terminal(self, env, 43, 156, [sys.executable, str(terminal.ENTRY), "--interval", "0.5"])
-        screen.receive("3 spawns 5")
+        screen.receive("3 Spawns (1 orphan")
         at = screen.mark()
         screen.write("3")
         screen.receive("SPAWN DETAILS", since=at)
@@ -553,7 +553,7 @@ class EveryRowTests(unittest.TestCase):
                 env.update(GODFATHER_FIXTURES=str(PROCS), GODFATHER_FIXTURES_RECORD=str(record), TZ="UTC")
                 screen = terminal.Terminal(self, env, 43, 156,
                                            [sys.executable, str(terminal.ENTRY), "--interval", "0.5"])
-                screen.receive("3 spawns 5", "2 lanes")
+                screen.receive("3 Spawns (1 orphan", "2 Lanes (4", "LEASE DETAILS")
                 for key in to_row:
                     at = screen.mark()
                     screen.write(key)

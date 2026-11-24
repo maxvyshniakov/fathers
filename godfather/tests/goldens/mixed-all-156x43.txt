@@ -1,43 +1,43 @@
+ Godfather   1 Overview   2 Lanes   3 Spawns
 ╭─ SLOTS ───────────────────────────────────────────────────── 12 cores · 6 slots (manual) ─╮ ╭─ LEASE DETAILS ────────────────────────────────────────────╮
 │                                                                                           │ │                                                            │
-│  🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅  🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅  🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅  🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅  ╭───────────╮  ╭──────────╮  │ │  label      lane-644-build-once                            │
-│  lane-644-bui…  lane-465-sta…  desktop                                              free  │ │  status     running · 1 slot                               │
-╰───────────────────────────────────────────────────────────────────────────────────────────╯ │  priority   normal                                         │
-┏━ QUEUE ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ slots ━ cpu use/share ━━━━ time ━━━ pid ━┓ │  ticket     #644                                           │
-┃                                                                                           ┃ │  phase      check                                          │
-▌  ▶️    lane-644-build-once                       ▪       ■■░░░ 0.9/2      35m10s   10000  ▐ │  cpu        ■■■■░░░░░░ 0.9 of 2 cores                      │
-┃  ▶️    lane-465-state-definitions-review-fixes   ▪       ■░░░░ 0.5/2      17m00s   10001  ┃ │  granted    11:24:29 · waited 19m34s · running 35m10s      │
-┃  ▶️    desktop                                   ▪▪      ■■░░░ 1.3/4       3m55s   10002  ┃ │  memory     20 MB in 1 processes                           │
-┃                                                                                           ┃ │  owner pid  10000                                          │
-┃  ⏸️    prof51                                    ▪▪▪▪▪▪  waiting #1       23m17s   10003  ┃ │  worktree   ~/straylight/.claude/worktrees/agent-afa3816b  │
-┃  ⏸️    lane-555-host-rename-names                ▪       waiting #2          10s   10004  ┃ │             08f8cf012                                      │
-┃                                                                                           ┃ │  command    ~/straylight/.claude/worktrees/agent-afa3816b  │
-┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛ │             08f8cf012/verify.sh --checks desktop-tests     │
-╭─ ❮ FULL LOG ❯ ───────────── description ──────────────────────────────────────────────────╮ │             --keep-going --jobs 1                          │
-│                                                                                           │ │  cwd        ~/straylight                                   │
-│  11:59:35  slot run         agent-ae72d94beb6f08961 · ok 5m41s · 1 slot                  ┃│ │                                                            │
-│  11:59:20  spawn extended   vite dev · ttl 4h00m                                         ┃│ │  lane       644-build-once                                 │
-│  11:59:02  lane reviewed    644-build-once · 2 findings · 9m                             ┃│ │  project    Straylight                                     │
-│  11:58:33  slot run         agent-a1c75285bdf2cd615 · ok 1m13s · 1 slot                  ┃│ │  stage      active                                         │
-│  11:58:10  lane gate        Straylight cedf8b972d · red · 19m                            ┃│ │  branch     lane/644-build-once                            │
-│  11:57:48  lane post-merge  710-speech-paste-phase · green · narrowed                    ┃│ │  base       integrate/queue-347                            │
-│  11:57:15  slot run         agent-a1c75285bdf2cd615 · ok 1m34s · 1 slot                  ┃│ │  receipt    in progress                                    │
-│  11:57:00  spawn reaped     simulator · ttl expired                                       │ │  review     not started                                    │
-│  11:56:05  lane landed      710-speech-paste-phase · onto integrate/queue-347             │ │  claims     tools/verification_plan.py, tools/verify.py,   │
-│  11:55:44  slot run         desktop · running 3m55s · 2 slots                             │ │             build-domain-module.sh, tools/test-build-      │
-│  11:55:31  slot run         desktop · exit 1 · 7s · 1 slot                                │ │             domain-module.py, tools/app-build.py,          │
-│  11:55:26  slot run         agent-a1c75285bdf2cd615 · ok 1m20s · 1 slot                   │ │             tools/test-app-build.py, tools/cargo-test.py,  │
-│  11:55:00  slot run         desktop · ok 6s · 1 slot                                      │ │             docs/development.md, tools/test-cargo-build-   │
-│  11:54:20  spawn unowned    node storybook dev · orphan                                   │ │             cache.py, tools/test-heavy.py,                 │
+│  🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅  🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅  🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅  🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅  ╭───────────╮  ╭──────────╮  │ │  label      lane-644-build-once                           ┃│
+│  lane-644-bui…  lane-465-sta…  desktop                                              free  │ │  status     running · 1 slot                              ┃│
+╰───────────────────────────────────────────────────────────────────────────────────────────╯ │  priority   normal                                        ┃│
+┏━ QUEUE ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ slots ━ cpu use/share ━━━━ time ━━━ pid ━┓ │  ticket     #644                                          ┃│
+┃                                                                                           ┃ │  phase      check                                         ┃│
+▌  ▶️    lane-644-build-once                       ▪       ■■░░░ 0.9/2      35m10s   10000  ▐ │  cpu        ■■■■░░░░░░ 0.9 of 2 cores                     ┃│
+┃  ▶️    lane-465-state-definitions-review-fixes   ▪       ■░░░░ 0.5/2      17m00s   10001  ┃ │  granted    11:24:29 · waited 19m34s · running 35m10s     ┃│
+┃  ▶️    desktop                                   ▪▪      ■■░░░ 1.3/4       3m55s   10002  ┃ │  memory     20 MB in 1 processes                          ┃│
+┃                                                                                           ┃ │  owner pid  10000                                         ┃│
+┃  ⏸️    prof51                                    ▪▪▪▪▪▪  waiting #1       23m17s   10003  ┃ │  worktree   ~/straylight/.claude/worktrees/agent-afa3816b ┃│
+┃  ⏸️    lane-555-host-rename-names                ▪       waiting #2          10s   10004  ┃ │             08f8cf012                                     ┃│
+┃                                                                                           ┃ │  command    ~/straylight/.claude/worktrees/agent-afa3816b ┃│
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛ │             08f8cf012/verify.sh --checks desktop-tests    ┃│
+╭─ ❮ FULL LOG ❯ ───────────── description ──────────────────────────────────────────────────╮ │             --keep-going --jobs 1                         ┃│
+│                                                                                           │ │  cwd        ~/straylight                                  ┃│
+│  11:59:35  slot run         agent-ae72d94beb6f08961 · ok 5m41s · 1 slot                  ┃│ │                                                           ┃│
+│  11:59:20  spawn extended   vite dev · ttl 4h00m                                         ┃│ │  lane       644-build-once                                ┃│
+│  11:59:02  lane reviewed    644-build-once · 2 findings · 9m                             ┃│ │  project    Straylight                                    ┃│
+│  11:58:33  slot run         agent-a1c75285bdf2cd615 · ok 1m13s · 1 slot                  ┃│ │  stage      active                                        ┃│
+│  11:58:10  lane gate        Straylight cedf8b972d · red · 19m                            ┃│ │  branch     lane/644-build-once                           ┃│
+│  11:57:48  lane post-merge  710-speech-paste-phase · green · narrowed                    ┃│ │  base       integrate/queue-347                           ┃│
+│  11:57:15  slot run         agent-a1c75285bdf2cd615 · ok 1m34s · 1 slot                  ╹│ │  receipt    in progress                                   ┃│
+│  11:57:00  spawn reaped     simulator · ttl expired                                       │ │  review     not started                                   ┃│
+│  11:56:05  lane landed      710-speech-paste-phase · onto integrate/queue-347             │ │  claims     tools/verification_plan.py, tools/verify.py,  ┃│
+│  11:55:44  slot run         desktop · running 3m55s · 2 slots                             │ │             build-domain-module.sh, tools/test-build-     ┃│
+│  11:55:31  slot run         desktop · exit 1 · 7s · 1 slot                                │ │             domain-module.py, tools/app-build.py,         ┃│
+│  11:55:26  slot run         agent-a1c75285bdf2cd615 · ok 1m20s · 1 slot                   │ │             tools/test-app-build.py, tools/cargo-test.py, ┃│
+│  11:55:00  slot run         desktop · ok 6s · 1 slot                                      │ │             docs/development.md, tools/test-cargo-build-  ┃│
+│  11:54:20  spawn unowned    node storybook dev · orphan                                   │ │             cache.py, tools/test-heavy.py,                ┃│
 │  11:54:02  slot run         agent-a1c75285bdf2cd615 · ok 54s · 1 slot                     │ │             tools/cargo_build_cache.py                     │
-│  11:53:40  lane checked     710-speech-paste-phase · green · 2 suites                     │ │  after      —                                              │
-│  11:52:53  slot run         agent-a1c75285bdf2cd615 · ok 1m13s · 1 slot                   │ │                                                            │
-│  11:52:30  slot run         desktop · ok 5s · 1 slot                                      │ ╰────────────────────────────────────────────────────────────╯
-│  11:51:40  slot run         post-merge-456-rename-compat-review-fixes · ok 14m38s · 1 s…  │ ╭─ MACHINE ───────── unleased 0.4 · queue ahead · 2 waiting ─╮
-│  11:51:30  spawn owned      vite dev · ttl 2h00m                                          │ │                               slots held  avg 4.4/6        │
-│  11:51:24  slot run         agent-a1c75285bdf2cd615 · ok 4m46s · 1 slot                   │ │  🆗 load ■■■■■■■■■░░░ 9.3/12  ▂▂▂▂▂       ▂▄▂▂▂▄▄▂▂  ▂ ▂   │
-│  11:50:12  lane started     710-speech-paste-phase · on integrate/queue-347 · 2 claims    │ │  🆗 mem  ■■■■░░░░░░░░ normal  █████▇▄▇▄▄▄▇█████████▇▇█▇█▇  │
-│  11:49:34  slot run         data-grid · ok 1m03s · 2 slots                                │ │  🆗 swap ■■■■■■■■■░░░ 4.4/6G  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  │
+│  11:53:40  lane checked     710-speech-paste-phase · green · 2 suites                     │ │                                                            │
+│  11:52:53  slot run         agent-a1c75285bdf2cd615 · ok 1m13s · 1 slot                   │ ╰────────────────────────────────────────────────────────────╯
+│  11:52:30  slot run         desktop · ok 5s · 1 slot                                      │ ╭─ MACHINE ───────── unleased 0.4 · queue ahead · 2 waiting ─╮
+│  11:51:40  slot run         post-merge-456-rename-compat-review-fixes · ok 14m38s · 1 s…  │ │                               slots held  avg 4.4/6        │
+│  11:51:30  spawn owned      vite dev · ttl 2h00m                                          │ │  🆗 load ■■■■■■■■■░░░ 9.3/12  ▂▂▂▂▂       ▂▄▂▂▂▄▄▂▂  ▂ ▂   │
+│  11:51:24  slot run         agent-a1c75285bdf2cd615 · ok 4m46s · 1 slot                   │ │  🆗 mem  ■■■■░░░░░░░░ normal  █████▇▄▇▄▄▄▇█████████▇▇█▇█▇  │
+│  11:50:12  lane started     710-speech-paste-phase · on integrate/queue-347 · 2 claims    │ │  🆗 swap ■■■■■■■■■░░░ 4.4/6G  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  │
 │                                                                                           │ │                               −80s                    now  │
 ╰───────────────────────────────────────────────────────────────────────────────────────────╯ ╰────────────────────────────────────────────────────────────╯
- Godfather what's new?                     ↑↓ select   tab panel   1 2 3 pages   s settings   ? help   q quit                      updated 11:59:39  ● live
+ what's new?                          ↑↓ select   tab panel   1 2 3 pages   s settings   ? help   q quit                           updated 11:59:39  ● live

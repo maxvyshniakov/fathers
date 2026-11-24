@@ -230,8 +230,10 @@ class PageTests(Case):
 
     def test_3_opens_on_the_linked_entry_and_the_summary(self) -> None:
         state = self.screen([self.lease()])
-        self.assertIn("3 spawns 5 · 1 orphan · 1 expired · 1 unowned", self.text())
-        self.assertNotIn("3 unowned", self.text())
+        header = self.text().splitlines()[0]
+        self.assertIn("3 Spawns (1 orphan · 1 expired · 1 unowned)", header)
+        self.assertNotIn("3 unowned", header)
+        self.assertNotIn("resource", header)
         state = self.keys(state, "3")
         self.assertEqual(("entry", "j5e6f7a"), self.picked_proc(state))
         self.assertIn("SPAWN DETAILS", self.text())
@@ -242,10 +244,10 @@ class PageTests(Case):
         )
         state = self.keys(state, "1")
         self.assertEqual("overview", state.ui.page)
-        state = self.click(state, *self.at("3 spawns"))
+        state = self.click(state, *self.at("3 Spawns"))
         self.assertEqual("spawns", state.ui.page)
 
-    def test_summary_separates_resources_excludes_dead_and_drops_resources_first(self) -> None:
+    def test_summary_shows_only_anomalies_and_drops_gracefully_when_narrow(self) -> None:
         raw = snapshot()
         raw["entries"] = []
         raw["unowned"] = [
@@ -257,27 +259,19 @@ class PageTests(Case):
         self.tools["spawnfather"] = state_module.Tool("spawnfather", "ok", None, spawnfather.decode(raw),
                                                       actions=("reap", "extend"))
         self.screen([self.lease()])
-        self.assertIn("3 spawns 0 · 75 resources", self.text())
-        self.assertNotIn("unowned", self.text().splitlines()[4])
-        raw["unowned_resources"] = raw["unowned_resources"][:1]
-        self.tools["spawnfather"] = state_module.Tool("spawnfather", "ok", None, spawnfather.decode(raw),
-                                                      actions=("reap", "extend"))
-        self.screen([self.lease()])
-        self.assertIn("3 spawns 0 · 1 resource", self.text())
-        self.assertNotIn("1 resources", self.text())
-        # With lanefather absent, all spawns parts including resources fit on a wide border
-        self.tools = {"spawnfather": state_module.Tool("spawnfather", "ok", None, decoded(), actions=("reap", "extend"))}
-        self.screen([self.lease()])
-        self.assertIn("3 spawns 5 · 1 orphan · 1 expired · 1 unowned · 2 resources", self.text())
-        # Without lanes everything fits at 76; with lanes, resources drops first
-        self.screen([self.lease()], width=76, height=40)
-        border = self.text().splitlines()[4]
-        self.assertIn("3 spawns 5 · 1 orphan · 1 expired · 1 unowned · 2 resources", border)
+        header = self.text().splitlines()[0]
+        self.assertIn("3 Spawns", header)
+        self.assertNotIn("resource", header)
+        self.assertNotIn("unowned", header)
+        # Narrow screen drops badge items in order and keeps the bare tab labels
+        self.tools["spawnfather"] = state_module.Tool("spawnfather", "ok", None, decoded(), actions=("reap", "extend"))
         self.tools["lanefather"] = state_module.Tool("lanefather", "ok", None, lanes_decoded())
         self.screen([self.lease()], width=76, height=40)
-        narrow = self.text().splitlines()[4]
-        self.assertIn("3 spawns 5", narrow)
-        self.assertNotIn("resources", narrow)
+        narrow = self.text().splitlines()[0]
+        self.assertIn("1 Overview", narrow)
+        self.assertIn("2 Lanes", narrow)
+        self.assertIn("3 Spawns", narrow)
+        self.assertNotIn("unowned", narrow)
 
     def test_dead_entries_are_dimmed_and_actions_availability_is_clear(self) -> None:
         raw = snapshot()
@@ -429,7 +423,7 @@ class LiveTests(unittest.TestCase):
         env = {key: value for key, value in os.environ.items() if not key.startswith(("GODFATHER_", "SLOTFATHER_"))}
         env.update(GODFATHER_FIXTURES=str(PROCS), TZ="UTC")
         screen = terminal.Terminal(self, env, 43, 156, [sys.executable, str(terminal.ENTRY), "--interval", "0.5"])
-        screen.receive("3 spawns 5", "storybook · running")
+        screen.receive("3 Spawns (1 orphan", "storybook · running")
         at = screen.mark()
         screen.write("3")
         screen.receive("SPAWN DETAILS", "booted, no owner", since=at)

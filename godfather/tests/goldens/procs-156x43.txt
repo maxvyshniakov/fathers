@@ -1,3 +1,4 @@
+ Godfather   1 Overview   2 Lanes (4 · 1 review · 🔥 gate red)   3 Spawns (1 orphan · 1 expired · 1 unowned)
 ┏━ SPAWNS ━━━━━━━━━━━ id ━━━━━━ owner ━━━━━━━━━━━ lane ━━━━━━━━━━━━━ age╺╸ttl left ━━━ pid ━┓ ╭─ SPAWN DETAILS ────────────────────────────────────────────╮
 ┃                                                                                           ┃ │                                                            │
 ┃  ▶️  vite dev       j3f9a1c   claude 4bceaaaf…  710-speech-pa…     30m     1h06m   90412  ┃ │  label      storybook                                      │
@@ -38,6 +39,5 @@
 │                                                                                           │ │                                                            │
 │                                                                                           │ │                                                            │
 │                                                                                           │ │                                                            │
-│                                                                                           │ │                                                            │
 ╰───────────────────────────────────────────────────────────────────────────────────────────╯ ╰────────────────────────────────────────────────────────────╯
- Godfather what's new?               ↑↓ select   a actions   tab panel   1 2 3 pages   s settings   ? help   q quit                updated 11:59:39  ● live
+ what's new?                    ↑↓ select   a actions   tab panel   1 2 3 pages   s settings   ? help   q quit                     updated 11:59:39  ● live

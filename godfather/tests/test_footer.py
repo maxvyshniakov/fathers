@@ -21,7 +21,7 @@ def judged(memory: dict[str, Any]) -> dict[str, Any]:
 
 HINTS = ["↑↓ select", "tab panel", "s settings", "? help", "q quit"]
 DROPS = ["tab panel", "s settings", "↑↓ select", "? help"]  # the order a narrow footer drops them in
-LABEL = "Godfather what's new?"
+LABEL = "what's new?"
 
 
 def model() -> dict[str, Any]:
@@ -70,22 +70,21 @@ class FooterTests(unittest.TestCase):
                     self.assertEqual(HINTS, shown)
 
     def test_help_stays_at_medium_widths(self) -> None:
-        self.assertIn("↑↓ select   s settings   ? help   q quit", self.footer(100))
+        self.assertIn("↑↓ select   tab panel   s settings   ? help   q quit", self.footer(100))
         self.assertIn("↑↓ select   ? help   q quit", self.footer(76))
         self.assertIn("updated", self.footer(100))
 
     def test_whats_new_looks_the_same_read_or_unread_muted_like_the_key_hints(self) -> None:
         from godfather import news as _news
         news = _news.News((), (_news.Item("slotfather", "0.2.0", "2026-11-12", "Added", "x"),))
-        name, after = len("Godfather"), len(" what's new?")
+        after = len(LABEL)
         for read in ({}, {"slotfather": "0.1.0"}, {"slotfather": "0.2.0"}, None):
             with self.subTest(read=read):
                 cells = self.styled(120, news=news, read=read) if read is not None else self.styled(120)
-                self.assertEqual({"title"}, {cell[1] for cell in cells[1:1 + name]}, "the name, as before fathers#102")
-                self.assertEqual({"dim"}, {cell[1] for cell in cells[1 + name:1 + name + after]}, "one constant style")
+                self.assertEqual({"dim"}, {cell[1] for cell in cells[1:1 + after]}, "one constant style")
                 line = "".join(cell[0] for cell in cells)
-                self.assertEqual(cells[line.index("? help") + 2][1], cells[1 + name + 1][1], "like the key hints")
-                self.assertEqual(" what's new?", line[1 + name:1 + name + after], "one space after the name")
+                self.assertEqual(cells[line.index("? help") + 2][1], cells[1][1], "like the key hints")
+                self.assertEqual(LABEL, line[1:1 + after])
 
     def test_no_counter_and_the_restart_mark_after_it(self) -> None:
         self.assertNotRegex(self.footer(120)[:30], r"\d")

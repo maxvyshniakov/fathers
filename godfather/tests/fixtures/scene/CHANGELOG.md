@@ -6,6 +6,16 @@ Versions and release rules: [README.md](README.md#versions).
 
 ### Added
 
+- Settings contract tests and fake tool updated for Lanefather's move from exit 4 to exit 5 on read-only settings
+  (fathers#130); `SettingsClient` continues to accept both 4 and 5 for compatibility with older Lanefather releases.
+
+- EVENTS formats Spawnfather's `entry.gone` event (`gone`, with log line count when present; fathers#245).
+
+- LANE DETAILS lists everything a lane owns through Spawnfather (fathers#171): its worktree, scratch and build
+  folders, wherever they are, first, then what its agents started inside its worktree. On SPAWNS their `lane`
+  column names the lane and SPAWN DETAILS links it. A lane is matched by its project and its id, so a lane of the
+  same id in another project never takes another's spawns.
+
 - MACHINE says in red when sustained CPU load or the expected-peak memory budget closes admission (fathers#206):
   `CPU load high` and `memory budget full` in its border, beside `memory short`, from Slotfather's `load_block` and
   `memory_budget_block`, and a waiting request's details list the reason under `blocked`. An older Slotfather sends
@@ -42,6 +52,8 @@ Versions and release rules: [README.md](README.md#versions).
   the command runs in the background with no shell, a 30 s timeout and `GODFATHER_ACTOR=godfather/<version>`; the
   footer shows its first stdout line, or its first stderr line in red, and the source is polled at once. Land,
   promote, done, sync, review and sweep are never offered. Under `GODFATHER_FIXTURES` actions are recorded, never run.
+  A request of another user (its `uid` in Slotfather's `status --json`) offers no actions, which Slotfather would
+  refuse.
 
 - Junkfather is a source (fathers#86): its `junkfather status --json` (versions 1 and 2) is polled like
   Lanefather's. SLOTS' bottom border sums it up on the right, `3 procs 7 · 1 orphan · 1 expired · 2 unowned` (a
@@ -106,6 +118,11 @@ Versions and release rules: [README.md](README.md#versions).
   change is a row of its own, `Straylight gate · slower +32% · same plan`, read from Slotfather's event log.
 
 ### Changed
+
+- Moved page navigation and tool status out of SLOTS' bottom border into a 1-line top header bar (`Godfather`,
+  clickable `1 Overview` / `2 Lanes` / `3 Spawns` tabs with active highlight). The Spawns tab shows only actionable
+  anomalies (`orphan`, `expired`, `unowned`) instead of total/resource counts, and the footer keeps `what's new?`
+  without repeating `Godfather`.
 
 - The third source is now Spawnfather (`spawnfather`, formerly Junkfather): SLOTS' right-hand summary and page `3`
   become `3 spawns` and `SPAWNS` (`SPAWN DETAILS`, `godfather --once --page spawns`), the event log view becomes

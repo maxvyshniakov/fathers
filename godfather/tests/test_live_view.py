@@ -114,7 +114,7 @@ class LiveTests(LiveCase):
         screen.write(b"\x1b[B\x1b[B")
 
         def top_row(_: str) -> bool:  # the details' first row, as last drawn, is now their third fact
-            cells = re.split("[│┃]", screen.rows().get(3, ""))  # row 2 is the blank padding row
+            cells = re.split("[│┃]", screen.rows().get(4, ""))  # row 1 header, 2 border, 3 blank padding
             return len(cells) >= 3 and "priority" in cells[-2]
 
         screen.until(top_row, 3, "the details scrolled two lines")
@@ -196,7 +196,7 @@ class LiveTests(LiveCase):
         fcntl.ioctl(screen.master, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 80, 0, 0))
         screen.raw_until(lambda data: b"\x1b[2J" in data[mark:], 3, "the screen cleared after the resize")
         screen.until(lambda _: (rows := screen.rows(mark)) and len(rows) >= 40
-                     and len(rows[1]) == 80 and rows[1].endswith("╮")  # SLOTS' border: the new width, all narrow glyphs
+                     and len(rows[2]) == 80 and rows[2].endswith("╮")  # SLOTS' border: the new width, all narrow glyphs
                      and not any("SLOTS" in line and "DETAILS" in line for line in rows.values()), 3,
                      "every row again, in one column at 80")
         self.assertEqual(0, screen.quit())
@@ -249,7 +249,7 @@ class VersionTests(LiveCase):
         entry(first)
         command = [sys.executable, str(root / "godfather"), "--interval", "0.3"]
         screen = self.start(rows=30, columns=140, argv=command)
-        screen.until(lambda _: "Godfather what's new? " in screen.rows().get(30, ""), 8, "the footer's what's new")
+        screen.until(lambda _: "what's new? " in screen.rows().get(30, ""), 8, "the footer's what's new")
         self.assertNotIn("↻", screen.rows().get(30, ""))
         entry(second)  # a reinstall replaces the entry point; this process keeps its release
         screen.until(lambda _: "what's new? ↻" in screen.rows().get(30, ""), 8, "↻ after the reinstall")

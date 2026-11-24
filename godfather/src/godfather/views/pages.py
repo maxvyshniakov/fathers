@@ -40,62 +40,110 @@ TOOL_NAMES = {"lanes": "Lanefather", "spawns": "Spawnfather"}
 Row = TypeVar("Row", LaneTableRow, ProcessTableRow)
 
 
-# The summaries in SLOTS' bottom border (SPEC 13)
+# The top header bar: app name and clickable tool tabs (row 0)
 
-def lanes_summary(tool: Any, marks: _common.Marks) -> list[tuple[str, list[Part]]]:
-    """The lanes summary as (what it is, its parts): the count first, then what a narrow border drops in order."""
+TAB_META: tuple[tuple[str, str, str, Optional[str]], ...] = (
+    ("overview", "1", "Overview", None),
+    ("lanes", "2", "Lanes", "lanefather"),
+    ("spawns", "3", "Spawns", "spawnfather"),
+)
+HEADER_DROPS = ("reviews", "unowned", "expired", "orphan", "red", "active")
+TAB_GAP = 3
+
+
+def lanes_badge(tool: Any, marks: _common.Marks) -> list[tuple[str, list[Part]]]:
+    """The Lanes tab badge parts: active count, open reviews, red gate — each only when non-zero."""
     found = _lanefather.summary(tool.snapshot)
-    parts: list[tuple[str, list[Part]]] = [("count", [("2", "key"), (" lanes ", "dim"),
-                                                      (f"{found['active']} active", "text")])]
-    if found["planned"]:
-        parts.append(("planned", [(" · ", "dim"), (f"{found['planned']} planned", "text")]))
+    parts: list[tuple[str, list[Part]]] = []
+    if found["active"]:
+        parts.append(("active", [(str(found["active"]), "text")]))
     if found["reviews"]:
-        parts.append(("reviews", [(" · ", "dim"),
-                                  (f"{found['reviews']} review{'s' if found['reviews'] != 1 else ''}", "text")]))
+        parts.append(("reviews", [(f"{found['reviews']} review{'s' if found['reviews'] != 1 else ''}", "text")]))
     if found["red"]:
-        parts.append(("red", [(" · ", "dim"), (marks.health["hot"] + " gate red", "bad")]))
+        parts.append(("red", [(marks.health["hot"] + " gate red", "bad")]))
     return parts
 
 
-DROPS = ("planned", "reviews", "resources", "unowned", "expired")  # what a narrow border gives way, in order (SPEC 13)
+def spawns_badge(tool: Any, marks: _common.Marks) -> list[tuple[str, list[Part]]]:
+    """The Spawns tab badge parts: only actionable anomalies (orphan, expired, live unowned), never total or
+    resource counts."""
+    del marks
+    found = _spawnfather.summary(tool.snapshot)
+    parts: list[tuple[str, list[Part]]] = []
+    for name, style in (("orphan", "warn"), ("expired", "warn"), ("unowned", "text")):
+        if found[name]:
+            parts.append((name, [(f"{found[name]} {name}", style)]))
+    return parts
 
 
-def draw_summaries(canvas: Canvas, rect: Rect, tools: dict[str, Any],
-                   summaries: dict[str, Callable[[Any, _common.Marks], list[tuple[str, list[Part]]]]]) -> None:
-    """Each present, readable tool's summary in the bottom border of `rect` (SLOTS): lanes on the left, spawns on the
-    right, the parts DROPS names going first where they do not fit; a stale one dimmed; each a click target that
-    opens its page."""
-    marks = _common.marks_of(canvas)
-    found: dict[str, list[tuple[str, list[Part]]]] = {}
-    for page, build in summaries.items():
-        tool = tools.get("lanefather" if page == "lanes" else "spawnfather")
-        if tool is not None and tool.readable:
-            found[page] = build(tool, marks)
-    if not found:
+def _tab_parts(key: str, label: str, active: bool, badge: list[tuple[str, list[Part]]],
+               dropped: tuple[str, ...], stale: bool) -> list[Part]:
+    """Styled segments for one header tab, with any surviving badge items in parentheses."""
+    parts: list[Part] = [(key, "accent" if active else "key"), (f" {label}", "title" if active else "dim")]
+    kept = [items for name, items in badge if name not in dropped]
+    if kept:
+        parts.append((" (", "dim"))
+        for index, items in enumerate(kept):
+            if index:
+                parts.append((" · ", "dim"))
+            parts.extend((text, "dim" if stale else style) for text, style in items)
+        parts.append((")", "dim"))
+    return parts
+
+
+def draw_header(canvas: Canvas, page: str, tools: dict[str, Any], name: str) -> None:
+    """Row 0: `Godfather` on the left, followed by clickable page tabs when Lanefather or Spawnfather is present.
+    Badge items drop in HEADER_DROPS order on narrow screens; clicking a tab switches to that page."""
+    if canvas.height < 2 or canvas.width < 4:
         return
-    room = rect.width - 4 - 2  # the corners and a rule each side, and two cells between the two
+    marks = _common.marks_of(canvas)
+    x = canvas.put(0, 1, name, "title", max(0, canvas.width - 2))
+    present_extra = [meta for meta in TAB_META[1:] if meta[3] and tools.get(meta[3]) is not None
+                     and tools[meta[3]].present]
+    if not present_extra:
+        return
+    tabs = [TAB_META[0], *present_extra]
+    badges: dict[str, list[tuple[str, list[Part]]]] = {}
+    stales: dict[str, bool] = {}
+    for tab_page, _, _, tool_name in tabs:
+        tool = tools.get(tool_name) if tool_name else None
+        stales[tab_page] = bool(tool is not None and tool.state == "stale")
+        if tool is not None and tool.readable:
+            badges[tab_page] = lanes_badge(tool, marks) if tab_page == "lanes" else spawns_badge(tool, marks)
+        else:
+            badges[tab_page] = []
 
-    def width(page: str, dropped: tuple[str, ...]) -> int:
-        return sum(text_width(text) for name, parts in found.get(page, []) if name not in dropped
-                   for text, _ in parts) + 2 * bool(found.get(page))
+    room = canvas.width - 1 - (x + TAB_GAP)
+    if room <= 0:
+        return
 
-    dropped: tuple[str, ...] = ()
-    for step in range(len(DROPS) + 1):
-        dropped = DROPS[:step]
-        if width("lanes", dropped) + width("spawns", dropped) <= room:
+    def render_tabs(dropped: tuple[str, ...]) -> tuple[list[tuple[str, list[Part], int]], int]:
+        built: list[tuple[str, list[Part], int]] = []
+        for tab_page, key, label, _ in tabs:
+            parts = _tab_parts(key, label, tab_page == page, badges[tab_page], dropped, stales[tab_page])
+            size = sum(text_width(text) for text, _ in parts)
+            built.append((tab_page, parts, size))
+        total = sum(size for _, _, size in built) + TAB_GAP * max(0, len(built) - 1)
+        return built, total
+
+    chosen: list[tuple[str, list[Part], int]] = []
+    for step in range(len(HEADER_DROPS) + 1):
+        chosen, total = render_tabs(HEADER_DROPS[:step])
+        if total <= room:
             break
-    y = rect.y + rect.height - 1
-    for page, parts in found.items():
-        tool = tools["lanefather" if page == "lanes" else "spawnfather"]
-        shown: list[Part] = [(" ", "text")] + [(text, "dim" if tool.state == "stale" else style)
-                                               for name, items in parts if name not in dropped
-                                               for text, style in items] + [(" ", "text")]
-        size = width(page, dropped)
-        start = rect.x + 2 if page == "lanes" else rect.x + rect.width - 2 - size
-        if size > rect.width - 4:
-            continue
-        canvas.segments(y, start, shown, size)
-        canvas.target(y, start, start + size, (page,))
+
+    cursor = x + TAB_GAP
+    limit = canvas.width - 1
+    for tab_page, parts, _ in chosen:
+        if cursor >= limit:
+            break
+        end = canvas.segments(0, cursor, parts, limit - cursor)
+        pill_start = max(0, cursor - 1)
+        pill_end = min(canvas.width, end + 1)
+        if tab_page == page and end > cursor:
+            canvas.select(0, pill_start, pill_end)
+        canvas.target(0, pill_start, pill_end, (tab_page,))
+        cursor = end + TAB_GAP
 
 
 # The page frame
@@ -107,9 +155,10 @@ def stale_note(tool: Any) -> str:
 
 def draw_notice(canvas: Canvas, page: str, lines: list[str]) -> None:
     """A page that cannot be drawn: its tool is unsupported, or has not answered yet."""
-    rect = Rect(0, 0, min(canvas.height - 1, len(lines) + 4), canvas.width)
+    top = _layout.HEADER_HEIGHT
+    rect = Rect(top, 0, min(max(0, canvas.height - top - 1), len(lines) + 4), canvas.width)
     if rect.height < 3 or rect.width < 12:
-        canvas.put(0, 1, lines[0], "bad", max(0, canvas.width - 2))
+        canvas.put(top, 1, lines[0], "bad", max(0, canvas.width - 2))
         return
     panel = Panel(canvas, rect, PAGE_TABLE[page]).frame(TITLES[page])
     canvas.tables[PAGE_TABLE[page]] = dict(x=rect.x, y=rect.y, width=rect.width, height=rect.height,
@@ -285,9 +334,9 @@ def draw_lanes(canvas: Canvas, tool: Any, selected: Optional[int], model: Option
             draw_strip(canvas, rect, model, "lanefather", "lane",
                        lambda row: lane is not None and lane_event_of(row, lane), moment)
     if screen.arrangement == "small":
-        canvas.put(0, 1, "Enlarge the terminal for the Lanes page", "dim", max(0, canvas.width - 2))
+        canvas.put(_layout.HEADER_HEIGHT, 1, "Enlarge the terminal for the Lanes page", "dim", max(0, canvas.width - 2))
     if tool.state == "stale":
-        for row in canvas.cells[:canvas.height - 1]:
+        for row in canvas.cells[_layout.HEADER_HEIGHT:canvas.height - 1]:
             for cell in row:
                 cell[1] = "dim"
 
@@ -304,25 +353,6 @@ def lane_event_of(row: dict[str, Any], lane: Lane) -> bool:
 
 
 # The Spawns page (fathers#86, fathers#170)
-
-def spawns_summary(tool: Any, marks: _common.Marks) -> list[tuple[str, list[Part]]]:
-    """The spawns summary: owned entries running, then orphan, expired, live unowned processes and unowned resources,
-    each only when not zero (dead sweep leftovers excluded)."""
-    found = _spawnfather.summary(tool.snapshot)
-    parts: list[tuple[str, list[Part]]] = [
-        ("count", [("3", "key"), (" spawns ", "dim"), (str(found["count"]), "text")])
-    ]
-    for name, style in (("orphan", "warn"), ("expired", "warn"), ("unowned", "text")):
-        if found[name]:
-            parts.append((name, [(" · ", "dim"), (f"{found[name]} {name}", style)]))
-    if found["resources"]:
-        label = f"{found['resources']} resource{'s' if found['resources'] != 1 else ''}"
-        parts.append(("resources", [(" · ", "dim"), (label, "dim")]))
-    return parts
-
-
-procs_summary = spawns_summary
-
 
 PROCESS_COLUMNS: list[Spec] = [("state", "", 2, False, 0), ("label", "label", 0, False, 0), ("id", "id", 8, False, 4),
                                ("owner", "owner", 16, False, 3), ("lane", "lane", 14, False, 5),
@@ -514,9 +544,9 @@ def draw_spawns(canvas: Canvas, tool: Any, selected: Optional[int], model: Optio
             draw_strip(canvas, rect, model, "spawnfather", "spwn", lambda event: row is not None and
                        process_event_of(event, row), moment)
     if screen.arrangement == "small":
-        canvas.put(0, 1, "Enlarge the terminal for the Spawns page", "dim", max(0, canvas.width - 2))
+        canvas.put(_layout.HEADER_HEIGHT, 1, "Enlarge the terminal for the Spawns page", "dim", max(0, canvas.width - 2))
     if tool.state == "stale":
-        for line in canvas.cells[:canvas.height - 1]:
+        for line in canvas.cells[_layout.HEADER_HEIGHT:canvas.height - 1]:
             for cell in line:
                 cell[1] = "dim"
 

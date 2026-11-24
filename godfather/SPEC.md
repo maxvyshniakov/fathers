@@ -108,16 +108,15 @@ full pages one key away.
       gives its place, rows and axis line to the top unleased processes: name, pid, cpu and memory, the busiest
       first, read with `ps` (at most every 5 s, only while the load is high) less the running leases' processes and
       their descendants. A lower load or a failed `ps` keeps the chart.
-13. SLOTS' bottom border carries the summaries of the other tools, each led by its page key:
-    `2 lanes 3 active · 2 reviews · 🔥 gate red` on the left and `3 spawns 7 · 1 orphan` on the right.
-    - lanes: `N active` (lanes in status active), `N planned` when any, `N reviews` (lanes whose review runs or has
-      unresolved findings), `🔥 gate red` when the newest batch gate of any project is red.
-    - spawns: `N` running owned entries, then `N orphan` (owner gone), `N expired` (TTL passed, not reaped yet),
-      `N unowned` (live unowned processes from the last sweep; entries already gone since the sweep are excluded),
-      `N resources` (unowned non-process resources from the last sweep), each only when not zero.
-    - A narrow border drops, in order: planned, reviews, resources, unowned, expired; the leading count and any 🔥
-      stay. An absent tool's summary is not drawn; a stale one is dimmed.
-    - A click on a summary opens its page.
+13. Row 0 is a top header bar showing `Godfather` on the left and, whenever Lanefather or Spawnfather is present,
+    clickable page tabs (`1 Overview`, `2 Lanes`, `3 Spawns`) with the active tab highlighted and compact badges:
+    - Lanes: active count, open reviews, and `🔥 gate red` (when any project's newest batch gate is red), each only
+      when non-zero.
+    - Spawns: only actionable anomalies (`N orphan`, `N expired`, `N unowned` for live unowned processes), each only
+      when non-zero; total owned and resource counts stay on the Spawns page.
+    - A narrow header drops badge items in order (reviews, unowned, expired, orphan, red, active), keeping the tab
+      labels. An absent tool's tab is not drawn; a stale tool's badge is dimmed.
+    - A click on a tab switches to its page; SLOTS keeps a clean bottom border.
 14. DETAILS for a selected request keeps today's rows and lane context, and adds:
     - `lane` with the lane id and project, a link to the Lanes page with that lane selected;
     - `spawns`: one row per Spawnfather entry that belongs to the lease (below), with label, state and TTL left,

@@ -247,14 +247,14 @@ class PageTests(Case):
         state = self.keys(self.screen(), "2")
         self.assertEqual("lanes", state.ui.page)
         self.assertIn("update lanefather", self.text())
-        self.assertNotIn("2 lanes", self.text().split("\n")[4], "no summary")
+        self.assertNotIn("(", self.text().split("\n")[0], "no badge for unsupported tool")
 
     def test_stale_is_dimmed_with_its_time(self) -> None:
         since = datetime.datetime(2026, 11, 4, 9, 0, tzinfo=datetime.UTC)
         self.tools = {"lanefather": state_module.Tool("lanefather", "stale", "timed out", decoded(), since)}
         self.keys(self.screen(), "2")
         self.assertRegex(self.text(), r"stale since \d\d:\d\d")
-        self.assertEqual({"dim"}, {cell[1] for row in self.canvas.cells[:self.canvas.height - 1] for cell in row
+        self.assertEqual({"dim"}, {cell[1] for row in self.canvas.cells[1:self.canvas.height - 1] for cell in row
                                    if str(cell[0]).strip()})
 
     def test_the_error_project_shows_and_the_rest_works(self) -> None:
@@ -266,9 +266,12 @@ class PageTests(Case):
 class LinkTests(Case):
     def test_the_summary_counts_and_opens_the_page(self) -> None:
         state = self.screen()
-        self.assertIn("2 lanes 4 active · 1 planned · 1 review · 🔥 gate red", self.text())
-        state = self.click(state, *self.at("2 lanes"))
+        header = self.text().splitlines()[0]
+        self.assertIn("Godfather   1 Overview   2 Lanes (4 · 1 review · 🔥 gate red)", header)
+        state = self.click(state, *self.at("2 Lanes"))
         self.assertEqual("lanes", state.ui.page)
+        state = self.click(state, *self.at("1 Overview"))
+        self.assertEqual("overview", state.ui.page)
 
     def test_the_lane_row_in_details_opens_the_page_on_that_lane(self) -> None:
         state = self.screen([entry(1), request("644-build-once", GRID)])
@@ -317,7 +320,7 @@ class LiveTests(unittest.TestCase):
         env = {key: value for key, value in os.environ.items() if not key.startswith(("GODFATHER_", "SLOTFATHER_"))}
         env.update(GODFATHER_FIXTURES=str(LANES), TZ="UTC")
         screen = terminal.Terminal(self, env, 43, 156, [sys.executable, str(terminal.ENTRY), "--interval", "0.5"])
-        screen.receive("2 lanes 4 active", "644-build-once · Straylight")
+        screen.receive("2 Lanes (4", "644-build-once · Straylight")
         at = screen.mark()
         screen.write("2")
         screen.receive("LANE DETAILS", "sid-kit · config not found", since=at)

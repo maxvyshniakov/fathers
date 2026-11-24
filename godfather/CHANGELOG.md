@@ -119,6 +119,11 @@ Versions and release rules: [README.md](README.md#versions).
 
 ### Changed
 
+- Moved page navigation and tool status out of SLOTS' bottom border into a 1-line top header bar (`Godfather`,
+  clickable `1 Overview` / `2 Lanes` / `3 Spawns` tabs with active highlight). The Spawns tab shows only actionable
+  anomalies (`orphan`, `expired`, `unowned`) instead of total/resource counts, and the footer keeps `what's new?`
+  without repeating `Godfather`.
+
 - The third source is now Spawnfather (`spawnfather`, formerly Junkfather): SLOTS' right-hand summary and page `3`
   become `3 spawns` and `SPAWNS` (`SPAWN DETAILS`, `godfather --once --page spawns`), the event log view becomes
   `SPAWNS LOG` (`spwn`, `spawn` in `FULL LOG`), lease and lane detail links say `spawns`, and the Settings section is

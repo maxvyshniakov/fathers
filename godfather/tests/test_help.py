@@ -102,7 +102,8 @@ class HelpTests(unittest.TestCase):
                 text = canvas.render(False)
                 self.assertIn("HELP", text)
                 self.assertRegex(text, r"[┃╻╹]│", "the scrollbar shows there is more")
-                self.assertIn("Godfather", text.splitlines()[-1])
+                self.assertIn("Godfather", text.splitlines()[0])
+                self.assertIn("what's new?", text.splitlines()[-1])
 
     def test_modal_keyboard_and_wheel_do_not_change_underlying_tables_or_selection(self) -> None:
         canvas = view.Canvas(80, 20)

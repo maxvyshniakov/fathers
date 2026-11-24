@@ -957,12 +957,12 @@ class MemoryBarTests(unittest.TestCase):
                 self.assertGreaterEqual(queue["height"],tool.QUEUE_FLOOR)
                 if width<tool.WIDE:  # one column (fathers#169): QUEUE grows first, EVENTS keeps its three rows
                     self.assertGreaterEqual(canvas.tables["events"]["height"],tool.EVENTS_LEAST)
-                    self.assertEqual(height-1-5-tool.EVENTS_LEAST-tool.MACHINE_HEIGHT>=21,
+                    self.assertEqual(height-2-5-tool.EVENTS_LEAST-tool.MACHINE_HEIGHT>=21,
                                      queue["visible"]==queue["count"],"QUEUE scrolls only short of rows")
                 else:  # wide: the details have their own column, the whole right side above MACHINE
                     self.assertGreater(details["height"],20)
         self.assertEqual(dict(requests=10,events=7,machine=7,details=7),{name:rect.height for name,rect in
-                         tool.overview(100,30,17,tool.machine_height).panels.items() if name!="slots"},
+                         tool.overview(100,31,17,tool.machine_height).panels.items() if name!="slots"},
                          "too short for the floors: the bottom row gives way first, then EVENTS")
 
     def test_one_column_details_fit_every_key_field_up_to_owner_pid(self):

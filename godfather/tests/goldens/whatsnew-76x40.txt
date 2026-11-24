@@ -1,40 +1,40 @@
-╭─ SLOTS ──────────────────────────────────── 12 cores · 6 slots (manual) ─╮
-│╭─ WHAT'S NEW ────────────── All · Godfather · Slotfather · Spawnfather ─╮│
+ Godfather
+╭╭─ WHAT'S NEW ────────────── All · Godfather · Slotfather · Spawnfather ─╮╮
 ││                                                                        ││
 ││  Godfather · unreleased · installed 9f600e1                           ┃││
-╰│                                                                       ┃│╯
-┏│  ADDED                                                                 │┓
+││                                                                       ┃││
+╰│  ADDED                                                                 │╯
+┏│                                                                        │┓
+┃│  • Settings contract tests and fake tool updated for Lanefather's      │┃
+▌│    move from exit 4 to exit 5 on read-only settings (fathers#130);     │▐
+┃│    SettingsClient continues to accept both 4 and 5 for compatibility   │┃
+┃│    with older Lanefather releases.                                     │┃
 ┃│                                                                        │┃
-▌│  • MACHINE says in red when sustained CPU load or the expected-peak    │▐
-┃│    memory budget closes admission (fathers#206): CPU load high and     │┃
-┃│    memory budget full in its border, beside memory short, from         │┃
-┃│    Slotfather's load_block and memory_budget_block, and a waiting      │┃
-┃│    request's details list the reason under blocked. An older           │┃
-┃│    Slotfather sends neither and MACHINE reads as before.               │┃
+┃│  • EVENTS formats Spawnfather's entry.gone event (gone, with log       │┃
+┃│    line count when present; fathers#245).                              │┃
 ┃│                                                                        │┃
-┗│  • MACHINE names what drives a high load outside leases                │┛
-╭│    (fathers#203): while Slotfather's unleased load is at least half    │╮
-││    the cores, the chart's place lists the top unleased processes,      ││
+┗│  • LANE DETAILS lists everything a lane owns through Spawnfather       │┛
+╭│    (fathers#171): its worktree, scratch and build folders, wherever    │╮
+││    they are, first, then what its agents started inside its            ││
+││    worktree. On SPAWNS their lane column names the lane and SPAWN      ││
+││    DETAILS links it. A lane is matched by its project and its id, so   ││
+││    a lane of the same id in another project never takes another's      ││
+││    spawns.                                                             ││
+││                                                                        ││
+││  • MACHINE says in red when sustained CPU load or the expected-peak    ││
+││    memory budget closes admission (fathers#206): CPU load high and     ││
+││    memory budget full in its border, beside memory short, from         ││
+││    Slotfather's load_block and memory_budget_block, and a waiting      ││
+││    request's details list the reason under blocked. An older           ││
+││    Slotfather sends neither and MACHINE reads as before.               ││
+││                                                                        ││
+││  • MACHINE names what drives a high load outside leases                ││
+╰│    (fathers#203): while Slotfather's unleased load is at least half    │╯
+╭│    the cores, the chart's place lists the top unleased processes,      │╮
 ││    top unleased with each one's name, pid, cpu (yellow over one        ││
 ││    core) and memory, the busiest first. Running leases' processes      ││
 ││    and their descendants are left out; a waiting request's are not,    ││
-││    as Slotfather's unleased load counts them. Godfather reads the      ││
-││    machine's process table with ps only while the load is high, at     ││
-││    most every 5 s, off the screen's thread; at a lower load, or when   ││
-││    ps fails, the slots-held chart is shown as before.                  ││
-││                                                                        ││
-││  • Settings lets you edit the reservation timeout when Slotfather      ││
-││    advertises it. It shows when older Slotfather clients may use       ││
-││    Arrival order after a change.  fathers#178                          ││
-││                                                                        ││
-││  • EVENTS describes Slotfather's lock waits and blocked head           ││
-││    reservations. LEASE DETAILS and EVENT DETAILS wrap long lock        ││
-╰│    paths, show whether a lease holds slots, and list each blocking     │╯
-╭│    lease on its own row with its label, id and pid. Lock waiters are   │╮
-││    excluded from admission rank.  fathers#162, fathers#182             ││
-││                                                                        ││
-││  • Row actions (fathers#88): Enter, a or a right-click on a QUEUE      ││
 ││                                                                        ││
 ││                    ←→ tool   ↑↓ scroll   esc close                  6% ││
 ╰╰────────────────────────────────────────────────────────────────────────╯╯
- Godfather what's new?     ↑↓ select   ? help   q quit     11:59:39  ● live
+ what's new?      ↑↓ select   ? help   q quit      updated 11:59:39  ● live
