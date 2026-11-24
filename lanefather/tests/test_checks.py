@@ -1334,5 +1334,48 @@ class SlotRangeWorkerTests(LaneCase):
         self.assertEqual(wrapped[wrapped.index("-n") + 1], "2")
 
 
+class MissingVerifierTests(LaneCase):
+    """fathers#244: a missing verifier refuses cleanly instead of crashing with a FileNotFoundError traceback."""
+
+    def test_check_refuses_cleanly_when_verifier_is_missing(self):
+        worktree = self.created("a", "lib/**")
+        (pathlib.Path(worktree) / "verify.sh").unlink()
+        self.commit(worktree, {"lib/a.txt": "change\n"}, "drop verify.sh")
+        output = self.lane("check", "a", ok=False)
+        self.assertNotIn("Traceback", output)
+        self.assertNotIn("FileNotFoundError", output)
+        self.assertIn("lane: verifier not found:", output)
+        self.assertIn("verify.sh", output)
+        self.assertIn("[checks].verify", output)
+        self.assertIn(".lanefather.toml", output)
+
+    def test_check_refuses_cleanly_when_configured_verifier_is_missing(self):
+        self.commit(
+            self.integration,
+            {".lanefather.toml": '[checks]\nverify = "./scripts/missing-verify.sh"\n'},
+            "point checks.verify to missing script",
+        )
+        worktree = self.created("a", "lib/**")
+        self.commit(worktree, {"lib/a.txt": "change\n"})
+        output = self.lane("check", "a", ok=False)
+        self.assertNotIn("Traceback", output)
+        self.assertNotIn("FileNotFoundError", output)
+        self.assertIn("lane: verifier not found:", output)
+        self.assertIn("scripts/missing-verify.sh", output)
+        self.assertIn("[checks].verify", output)
+        self.assertIn(".lanefather.toml", output)
+
+    def test_check_refuses_cleanly_when_verifier_is_not_executable(self):
+        worktree = self.created("a", "lib/**")
+        (pathlib.Path(worktree) / "verify.sh").chmod(0o644)
+        self.commit(worktree, {"lib/a.txt": "change\n"}, "chmod verify.sh non-executable")
+        output = self.lane("check", "a", ok=False)
+        self.assertNotIn("Traceback", output)
+        self.assertNotIn("PermissionError", output)
+        self.assertIn("lane: cannot run verifier", output)
+        self.assertIn("verify.sh", output)
+        self.assertIn("[checks].verify", output)
+
+
 if __name__ == "__main__":
     unittest.main()
