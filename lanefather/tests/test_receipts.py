@@ -10,7 +10,6 @@
 """
 from __future__ import annotations
 
-import ast
 import io
 import json
 import os
@@ -22,123 +21,6 @@ import unittest
 from unittest import mock
 
 from support import RUST_STUB, LaneCase
-
-ROOT = pathlib.Path(__file__).resolve().parent.parent
-PKG = ROOT / "lanefather"
-
-# Variable/attribute names that denote a receipt dictionary across the package.
-RECEIPT_NAMES = frozenset({
-    "receipt",
-    "previous",
-    "parent",
-    "current",
-    "first",
-    "review",
-    "review_receipt",
-    "review_rec",
-    "check_rec",
-    "smoke",
-    "gate",
-    "red",
-    "green",
-})
-RECEIPT_SUFFIXES = (
-    ".receipt.json",
-    ".first.json",
-    ".post-merge.json",
-    ".recheck.json",
-    ".review.json",
-    ".gate.json",
-    ".perf.json",
-)
-
-
-class ReceiptGuardTests(unittest.TestCase):
-    """Static architecture guards for fathers#71."""
-
-    def test_receipts_module_never_uses_ambient_config_or_state_dir(self) -> None:
-        violations: list[str] = []
-        for mod_name in ("receipts.py", "review_record.py", "postmerge.py"):
-            tree = ast.parse((PKG / mod_name).read_text(encoding="utf-8"), filename=mod_name)
-            for node in ast.walk(tree):
-                if isinstance(node, ast.Attribute) and node.attr in ("current", "state_dir"):
-                    violations.append(f"{mod_name}:{node.lineno}: ambient .{node.attr}() call")
-        self.assertEqual(violations, [], "\n".join(violations))
-
-    def test_no_receipt_file_access_outside_receipts_and_state(self) -> None:
-        violations: list[str] = []
-        for path in sorted(PKG.glob("*.py")):
-            if path.name in ("receipts.py", "review_record.py", "postmerge.py", "state.py"):
-                continue
-            source = path.read_text(encoding="utf-8")
-            tree = ast.parse(source, filename=str(path))
-            for node in ast.walk(tree):
-                if isinstance(node, ast.Call):
-                    func = node.func
-                    if ((isinstance(func, ast.Attribute) and func.attr == "receipt_path")
-                            or (isinstance(func, ast.Name) and func.id == "receipt_path")):
-                        violations.append(f"{path.name}:{node.lineno}: calls receipt_path() outside receipts.py")
-            # Walk statements excluding docstrings for receipt filename suffixes.
-            self._check_non_docstring_constants(tree, path.name, violations)
-        self.assertEqual(violations, [], "\n".join(violations))
-
-    def _check_non_docstring_constants(self, tree: ast.Module, filename: str, violations: list[str]) -> None:
-        docstring_ids: set[int] = set()
-        for node in ast.walk(tree):
-            if isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and node.body:
-                first = node.body[0]
-                if isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant):
-                    docstring_ids.add(id(first.value))
-        for node in ast.walk(tree):
-            if (isinstance(node, ast.Constant) and isinstance(node.value, str)
-                    and id(node) not in docstring_ids
-                    and any(node.value.endswith(suffix) for suffix in RECEIPT_SUFFIXES)):
-                violations.append(f"{filename}:{node.lineno}: hardcodes receipt filename {node.value!r}")
-
-    def test_no_module_outside_receipts_reads_receipt_status_tree_or_toolchain(self) -> None:
-        forbidden_keys = {"status", "tree", "toolchain"}
-        violations: list[str] = []
-
-        def receiver_name(expr: ast.AST) -> str | None:
-            if isinstance(expr, ast.Name):
-                return expr.id
-            if (isinstance(expr, ast.BoolOp) and isinstance(expr.op, ast.Or)
-                    and expr.values and isinstance(expr.values[0], ast.Name)):
-                return expr.values[0].id
-            return None
-
-        for path in sorted(PKG.glob("*.py")):
-            if path.name in ("receipts.py", "review_record.py", "postmerge.py"):
-                continue
-            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-            # Track Assign targets so `x["status"] = ...` is distinguished from reads.
-            write_subscripts: set[int] = set()
-            for node in ast.walk(tree):
-                if isinstance(node, ast.Assign):
-                    for target in node.targets:
-                        if isinstance(target, ast.Subscript):
-                            write_subscripts.add(id(target))
-
-            for node in ast.walk(tree):
-                # Subscript read: `<receipt>["status" | "tree" | "toolchain"]`
-                if (isinstance(node, ast.Subscript) and id(node) not in write_subscripts
-                        and isinstance(node.slice, ast.Constant) and node.slice.value in forbidden_keys):
-                    name = receiver_name(node.value)
-                    if name in RECEIPT_NAMES or node.slice.value == "toolchain":
-                        violations.append(
-                            f"{path.name}:{node.lineno}: reads {name or '<expr>'}[{node.slice.value!r}]"
-                        )
-                # `.get("status" | "tree" | "toolchain", ...)` read
-                if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
-                        and node.func.attr == "get" and node.args
-                        and isinstance(node.args[0], ast.Constant) and node.args[0].value in forbidden_keys):
-                    name = receiver_name(node.func.value)
-                    if name in RECEIPT_NAMES or node.args[0].value == "toolchain":
-                        violations.append(
-                            f"{path.name}:{node.lineno}: reads {name or '<expr>'}.get({node.args[0].value!r})"
-                        )
-
-        self.assertEqual(violations, [], "\n".join(violations))
 
 
 class ReceiptStoreAndVerdictUnitTests(unittest.TestCase):

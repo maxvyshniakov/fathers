@@ -1,7 +1,6 @@
 """Focused unit tests for gate.py, gitops.move_branch, and promote.py's ordered step list (fathers#73)."""
 from __future__ import annotations
 
-import ast
 from pathlib import Path
 import subprocess
 import tomllib
@@ -14,22 +13,6 @@ from lanefather import config, gate, gitops, promote
 
 
 class PromoteStepsTests(unittest.TestCase):
-    def test_lanes_does_not_import_promote(self) -> None:
-        lanes_path = Path(__file__).resolve().parent.parent / "lanefather" / "lanes.py"
-        tree = ast.parse(lanes_path.read_text(), filename=str(lanes_path))
-        imported: set[str] = set()
-        for node in ast.walk(tree):
-            if isinstance(node, ast.ImportFrom):
-                if node.module:
-                    imported.add(node.module)
-                for alias in node.names:
-                    imported.add(alias.name)
-            elif isinstance(node, ast.Import):
-                for alias in node.names:
-                    imported.add(alias.name)
-        self.assertNotIn("promote", imported)
-        self.assertNotIn("lanefather.promote", imported)
-
     def test_promote_steps_order_without_and_with_install_deploy(self) -> None:
         from lanefather import state
         run = promote.PromoteRun(

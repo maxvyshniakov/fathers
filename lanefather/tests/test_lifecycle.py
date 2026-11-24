@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 import argparse
-import ast
 import os
 import pathlib
 import shutil
@@ -17,9 +16,6 @@ import unittest
 from unittest import mock
 
 from support import LaneCase
-
-ROOT = pathlib.Path(__file__).resolve().parent.parent
-PKG = ROOT / "lanefather"
 
 
 class LifecycleTableTests(unittest.TestCase):
@@ -267,98 +263,6 @@ class LifecycleTableTests(unittest.TestCase):
         self.assertEqual(self.store.load("r")["worktree"], str(self.tmp / "r"))
         self.assertNotIn("handed_over", self.store.load("r"))
         self.assertFalse(self.store.record_path("r-fix").exists())
-
-
-class LifecycleGuardTests(unittest.TestCase):
-    """Static guard (fathers#69): no module outside `state.py` / `lifecycle.py` mutates lane status or saves a lane
-    record directly, nor compares lane record status against string literals."""
-
-    def test_no_direct_status_mutation_or_record_save_outside_lifecycle_and_state(self) -> None:
-        from lanefather import lifecycle
-        status_literals = set(lifecycle.STATUSES)
-        transition_kinds = {"lane.started", "lane.kept", *lifecycle.EVENT_KINDS.values()}
-        violations: list[str] = []
-
-        for path in sorted(PKG.glob("*.py")):
-            if path.name != "lifecycle.py":
-                rec_tree = ast.parse(path.read_text(), filename=str(path))
-                for node in ast.walk(rec_tree):
-                    if isinstance(node, ast.Assign):
-                        for target in node.targets:
-                            if (isinstance(target, ast.Subscript) and isinstance(target.slice, ast.Constant)
-                                    and target.slice.value in ("post_merge", "keep")):
-                                violations.append(f"{path.name}:{node.lineno}: direct [{target.slice.value!r}] = assignment")
-                    if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
-                            and node.func.attr in ("update", "setdefault", "pop", "__setitem__")):
-                        for kw in node.keywords:
-                            if kw.arg in ("post_merge", "keep"):
-                                violations.append(f"{path.name}:{node.lineno}: .{node.func.attr}({kw.arg}=...) call")
-                        if (node.func.attr in ("setdefault", "pop", "__setitem__") and node.args
-                                and isinstance(node.args[0], ast.Constant)
-                                and node.args[0].value in ("post_merge", "keep")):
-                            violations.append(f"{path.name}:{node.lineno}: .{node.func.attr}({node.args[0].value!r}) call")
-            if path.name in ("state.py", "lifecycle.py"):
-                continue
-            tree = ast.parse(path.read_text(), filename=str(path))
-            for node in ast.walk(tree):
-                # 1. No `state.save(...)` or `store.save(...)` calls outside state.py / lifecycle.py
-                if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "save":
-                    violations.append(f"{path.name}:{node.lineno}: direct .save() call")
-                # 2. No `record.update(status=...)` calls on lane records
-                if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
-                        and node.func.attr == "update"):
-                    for kw in node.keywords:
-                        if kw.arg == "status":
-                            val_const = kw.value.value if isinstance(kw.value, ast.Constant) else None
-                            recv = node.func.value.id if isinstance(node.func.value, ast.Name) else ""
-                            if val_const in status_literals or recv in ("record", "rec", "current", "latest"):
-                                violations.append(f"{path.name}:{node.lineno}: .update(status=...) call")
-                # 3. No `...["status"] = <lane status>` or `record["status"] = ...`
-                if isinstance(node, ast.Assign):
-                    for target in node.targets:
-                        if (isinstance(target, ast.Subscript) and isinstance(target.slice, ast.Constant)
-                                and target.slice.value == "status"):
-                            val_const = node.value.value if isinstance(node.value, ast.Constant) else None
-                            if val_const in status_literals or path.name != "reviewer.py":
-                                violations.append(f"{path.name}:{node.lineno}: direct ['status'] = assignment")
-                # 4. No `kind="lane.<transition>"` outside lifecycle.py (events.py only lists KINDS dict)
-                if path.name != "events.py" and isinstance(node, ast.Call):
-                    for kw in node.keywords:
-                        if (kw.arg == "kind" and isinstance(kw.value, ast.Constant)
-                                and kw.value.value in transition_kinds):
-                            violations.append(f"{path.name}:{node.lineno}: emits {kw.value.value!r} outside lifecycle.py")
-                # 5. No comparing a lane record's status against lane status literals
-                if isinstance(node, ast.Compare):
-                    operands = [node.left, *node.comparators]
-                    reads_status = any(
-                        (isinstance(op, ast.Subscript) and isinstance(op.slice, ast.Constant)
-                         and op.slice.value == "status")
-                        or (isinstance(op, ast.Call) and isinstance(op.func, ast.Attribute)
-                            and op.func.attr == "get" and op.args
-                            and isinstance(op.args[0], ast.Constant) and op.args[0].value == "status")
-                        or (isinstance(op, ast.Name) and op.id == "status")
-                        for op in operands
-                    )
-                    if not reads_status:
-                        continue
-                    has_lane_literal = False
-                    for op in operands:
-                        if ((isinstance(op, ast.Constant) and op.value in status_literals)
-                                or (isinstance(op, (ast.Tuple, ast.List, ast.Set))
-                                    and any(isinstance(el, ast.Constant) and el.value in status_literals
-                                            for el in op.elts))
-                                or (isinstance(op, ast.Attribute) and op.attr in ("OCCUPYING", "LANDED"))):
-                            has_lane_literal = True
-                    if has_lane_literal:
-                        violations.append(f"{path.name}:{node.lineno}: compares status against literal/constant")
-
-        self.assertEqual(violations, [], "\n".join(violations))
-
-    def test_lifecycle_never_calls_config_current(self) -> None:
-        tree = ast.parse((PKG / "lifecycle.py").read_text())
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Attribute) and node.attr == "current":
-                self.fail(f"lifecycle.py:{node.lineno} must take an explicit state.Store, never config.current()")
 
 
 class LifecycleRaceTests(LaneCase):

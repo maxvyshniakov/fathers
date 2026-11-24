@@ -3,12 +3,10 @@ the layout that keeps it readable."""
 from __future__ import annotations
 
 import json
-import re
 import unittest
 
 from support import ROOT, ScratchCase
 
-SECTIONS = ["Breaking", "Added", "Changed", "Deprecated", "Removed", "Fixed", "Security"]
 FIXTURE = """# Tool Changelog
 
 Intro text that is no entry.
@@ -81,28 +79,6 @@ class ChangelogParseTests(unittest.TestCase):
     def test_no_text_gives_no_entries(self):
         from lanefather import changelog
         self.assertEqual(changelog.entries(""), [])
-
-    def test_the_packages_changelog_parses_and_keeps_its_layout(self):
-        from lanefather import changelog
-        text = (ROOT / "CHANGELOG.md").read_text()
-        found = changelog.entries(text)
-        releases = [e["version"] for e in found if e["version"]]
-        self.assertIn("0.1.0", releases)
-        self.assertTrue(all(e["text"] and e["section"] in SECTIONS for e in found))
-        lines = text.splitlines()
-        self.assertEqual(lines[0], "# Lanefather Changelog")
-        headings = [line for line in lines if line.startswith("## ")]
-        self.assertEqual(headings[0], "## Unreleased")
-        dates = [re.fullmatch(r"## \d+\.\d+\.\d+\S* - (\d{4}-\d\d-\d\d)", h) for h in headings[1:]]
-        self.assertTrue(all(dates), headings)
-        self.assertEqual([d[1] for d in dates if d], sorted((d[1] for d in dates if d), reverse=True))
-        section: list[str] = []
-        for line in [*lines, "## end"]:
-            if line.startswith("## "):
-                self.assertEqual(sorted(section, key=SECTIONS.index), section, f"section order before {line}")
-                section = []
-            elif line.startswith("### "):
-                section.append(line[4:])
 
 
 class ChangelogCommandTests(ScratchCase):

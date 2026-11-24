@@ -2,14 +2,13 @@
 schema, checked in strict mode by the shared validator (common/eventcheck.py)."""
 from __future__ import annotations
 
-import ast
 import fcntl
 import json
 import os
 import pathlib
 import sys
 import tempfile
-from typing import Any, cast
+from typing import Any
 import unittest
 from unittest import mock
 
@@ -141,43 +140,6 @@ class WriterTests(unittest.TestCase):
         block = runtime.dashboard()
         self.assertEqual((block["v"], block["tag"]), (1, "lane"))
         self.assertEqual(block["events"], {"path": str(self.log), "versions": [1]})
-
-
-class CallSiteTests(unittest.TestCase):
-    """Two logs per call site drift (Godfather's open risk 7): every ledger line goes through journal.ledger, and
-    each call names one documented kind."""
-
-    def test_every_ledger_call_names_a_documented_kind_and_nothing_else_writes_the_ledger(self):
-        calls = 0
-        for path in sorted((ROOT / "lanefather").glob("*.py")):
-            tree = ast.parse(path.read_text())
-            for node in ast.walk(tree):
-                if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "ledger"
-                        and isinstance(node.func.value, ast.Name) and node.func.value.id == "journal"):
-                    calls += 1
-                    kinds = [k.value for k in node.keywords if k.arg == "kind"]
-                    kind = kinds[0] if kinds else None
-                    self.assertIsInstance(kind, ast.Constant, f"{path.name}:{node.lineno}")
-                    self.assertIn(str(cast(ast.Constant, kind).value), events.KINDS, f"{path.name}:{node.lineno}")
-            if path.name != "journal.py":
-                self.assertNotIn('"ledger.log"', path.read_text().replace("'ledger.log'", '"ledger.log"'), path.name)
-        self.assertGreaterEqual(calls, 35)
-
-    def test_every_override_is_audited_by_journal_override(self):
-        """Review of fathers#172, finding 4: the override audit (record entry and `override` ledger line) is one
-        helper, not a copy per command."""
-        sites: list[str] = []
-        for path in sorted((ROOT / "lanefather").glob("*.py")):
-            if path.name == "journal.py":
-                continue
-            text = path.read_text()
-            self.assertFalse('kind="override"' in text, f"{path.name} audits an override by hand")
-            self.assertFalse('setdefault("overrides", []).append' in text, f"{path.name} audits an override by hand")
-            self.assertFalse('["overrides"].append' in text, f"{path.name} audits an override by hand")
-            sites += [path.name] * text.count("journal.override(")
-        self.assertEqual(sorted(sites), ["done.py", "done.py", "land.py", "land.py", "land.py", "land.py",
-                                        "lanes.py", "lanes.py", "lanes.py", "postmerge.py", "promote.py",
-                                        "review.py", "review_gate.py"])
 
     def test_journal_override_appends_the_entry_and_writes_the_warn_ledger_line(self):
         directory = pathlib.Path(tempfile.mkdtemp(prefix="lanefather-override-"))

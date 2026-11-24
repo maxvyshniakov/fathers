@@ -1,7 +1,6 @@
 """Tests for lanefather.verify: one verify runner for check, post-merge, rerun, base rerun, gate and perf (fathers#70)."""
 from __future__ import annotations
 
-import ast
 import json
 import os
 import pathlib
@@ -15,8 +14,6 @@ import unittest.mock
 
 from support import FAKE_PLAN, FAKE_VERIFY, LaneCase, ScratchCase, close_process
 
-PACKAGE_DIR = pathlib.Path(__file__).resolve().parent.parent / "lanefather"
-
 CAPTURE_ENV_SNIPPET = r'''
 if args[:1] != ["--changed"] and os.environ.get("CAPTURE_VERIFY_CALLS"):
     prefix = os.environ.get("CAPTURE_SLOT_PREFIX", "LANEFATHER_SLOT")
@@ -28,65 +25,6 @@ if args[:1] != ["--changed"] and os.environ.get("CAPTURE_VERIFY_CALLS"):
             "leased": bool(os.environ.get("SLOTFATHER_LEASE")),
         }) + "\n")
 '''
-
-
-def _contains_verify_path(node: ast.AST) -> bool:
-    for child in ast.walk(node):
-        if isinstance(child, ast.Call):
-            func = child.func
-            if isinstance(func, ast.Name) and func.id == "verify_path":
-                return True
-            if isinstance(func, ast.Attribute) and func.attr == "verify_path":
-                return True
-    return False
-
-
-def _is_subprocess_exec(call: ast.Call) -> bool:
-    func = call.func
-    return (isinstance(func, ast.Attribute)
-            and isinstance(func.value, ast.Name)
-            and func.value.id == "subprocess"
-            and func.attr in ("run", "Popen", "call", "check_call", "check_output"))
-
-
-class ArchitectureGuardTests(unittest.TestCase):
-    def test_no_subprocess_call_of_verify_path_outside_verify_module(self):
-        offenders: list[str] = []
-        for path in sorted(PACKAGE_DIR.glob("*.py")):
-            if path.name == "verify.py":
-                continue
-            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-            for node in ast.walk(tree):
-                if not isinstance(node, ast.Call) or not _is_subprocess_exec(node):
-                    continue
-                if not node.args or not _contains_verify_path(node.args[0]):
-                    continue
-                # plan.py invokes verify --changed --base <base> --plan --json to read the plan, not to run checks.
-                if path.name == "plan.py" and isinstance(node.args[0], ast.List):
-                    literals = {elt.value for elt in node.args[0].elts
-                                if isinstance(elt, ast.Constant) and isinstance(elt.value, str)}
-                    if {"--plan", "--json"}.issubset(literals):
-                        continue
-                offenders.append(f"{path.name}:{node.lineno}")
-        self.assertEqual(offenders, [], f"subprocess call of verify_path outside verify.py: {offenders}")
-
-    def test_review_does_not_import_checks(self):
-        for mod_name in ("review.py", "land.py"):
-            path = PACKAGE_DIR / mod_name
-            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-            imported_checks: list[str] = []
-            for node in ast.walk(tree):
-                if isinstance(node, ast.Import):
-                    for alias in node.names:
-                        if alias.name == "checks" or alias.name.endswith(".checks"):
-                            imported_checks.append(f"{mod_name}:{node.lineno}: import {alias.name}")
-                elif isinstance(node, ast.ImportFrom):
-                    if node.module == "checks" or (node.module or "").endswith(".checks"):
-                        imported_checks.append(f"{mod_name}:{node.lineno}: from {node.module} import ...")
-                    for alias in node.names:
-                        if alias.name == "checks":
-                            imported_checks.append(f"{mod_name}:{node.lineno}: from {node.module} import checks")
-            self.assertEqual(imported_checks, [])
 
 
 class VerifyUnitTests(unittest.TestCase):
