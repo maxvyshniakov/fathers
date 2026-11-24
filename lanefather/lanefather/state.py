@@ -6,6 +6,7 @@
   <state>/<id>.post-merge.json      the post-merge smoke's receipt
   <state>/<id>.review.json          the lane's review
   <state>/promote-<sha>.gate.json   a batch gate; perf-<sha>.perf.json a perf run
+  <state>/promote/promote-<sha>.json a promote/ship run record (fathers#58)
   <state>/results/<tree>.json        check results by tree and plan (lanefather.results, fathers#91)
   <state>/history/<YYYY-MM>.jsonl    the run history: per-check runs and flakes (lanefather.history, fathers#92)
   <state>/ledger.log, logs/, reviews/, .<name>.lock
@@ -66,6 +67,13 @@ class Store:
     @property
     def reviews_dir(self) -> Path:
         return self.directory / "reviews"
+
+    @property
+    def promote_dir(self) -> Path:
+        return self.directory / "promote"
+
+    def promote_run_path(self, sha: str) -> Path:
+        return self.promote_dir / f"promote-{sha}.json"
 
     def logs_dir(self) -> Path:
         path = self.directory / "logs"

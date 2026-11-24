@@ -335,7 +335,11 @@ set it, and `normal` when neither does. `ticket` is optional.
 These are Slotfather request fields, not metadata. Lanefather adds the step's
 phase, candidate SHA and project state directory as metadata. The command still
 runs from the exact promoted gate worktree, in order, and a failure stops later
-commands. The lease covers a rebuild even when the tree's gate stamp is reused
+commands. Each `promote` run records its step outcomes, `ship_base` (captured before push), and per-step
+install/deploy status in `<state>/promote/promote-<sha>.json` (fathers#58): rerunning an unfinished promote for the
+same SHA resumes from the first unfinished step and reuses the recorded `ship_base`, so a failed local branch move
+still runs release comments and the overall review over the original range, and a failed `--install` step resumes
+from that step without repeating earlier succeeded steps. The lease covers a rebuild even when the tree's gate stamp is reused
 or an earlier bundle is missing; a gate's finished lease supplies no capacity
 for later execution.
 
