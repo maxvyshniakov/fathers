@@ -32,7 +32,10 @@ from . import (
     history,
     land,
     lanes,
+    lifecycle,
+    postmerge,
     promote,
+    receipts,
     registry,
     results,
     review,
@@ -46,6 +49,7 @@ from . import (
     wait,
 )
 from .errors import LaneError, LaneUsageError
+from .gitops import current_branch, git
 from .host import CHECK_MAX_JOBS
 
 
@@ -97,6 +101,8 @@ COMMANDS: dict[str, Command] = {
                     "fix-login"),
     "drop": Command("remove a lane that adds nothing to its base", "<id> [<id> ...]", "fix-login"),
     "recheck": Command("rerun a landed lane's red post-merge smoke", "<id> [--slots N]", "fix-login"),
+    "smoke": Command("post-merge smoke status, rerun a red/killed smoke, or accept it",
+                     "<id> [--rerun [--slots N] | --accept REASON]", "fix-login --rerun"),
     "keep": Command("keep a lane from auto-done; --off releases it", "<id> [--off]", "fix-login"),
     "list": Command("this repository's lanes that are not done: claims, receipts, load",
                     "[--all] [--all-projects] [--json]", "--json"),
@@ -350,6 +356,17 @@ def parser(project: config.Config = config.DEFAULT) -> Parser:
     p.add_argument("--slots", type=int, choices=range(1, 5),
                    help="worker budget passed as verify --jobs (default: slotfather advise --max 3)")
     p.set_defaults(run=land.recheck)
+    p = add(root, commands, "smoke", "Shows the lane's post-merge smoke status, reruns a red, killed or missing "
+            "post-merge smoke (--rerun), or accepts a red, killed or missing smoke with an audited reason "
+            "(--accept REASON).", prog=prog)
+    p.add_argument("id")
+    p.add_argument("--rerun", action="store_true",
+                   help="rerun a red, killed or missing post-merge smoke")
+    p.add_argument("--accept", metavar="REASON",
+                   help="accept a red, killed or missing post-merge smoke with an audited reason")
+    p.add_argument("--slots", type=int, choices=range(1, 5),
+                   help="with --rerun: worker budget passed as verify --jobs (default: slotfather advise --max 3)")
+    p.set_defaults(run=_run_smoke)
     p = add(root, commands, "keep", "Auto-done, done --finished and start's disk repair leave a kept lane (its scratch "
             "is in use).", prog=prog)
     p.add_argument("id")
@@ -508,9 +525,79 @@ def command_parser(root: Parser, name: str) -> Parser:
     return root.children.get(name, root)
 
 
+def _rerun_unrecorded_smoke(store: state.Store, record: state.Record, slots: int | None) -> int:
+    """Rerun the initial post-merge smoke for a landed lane whose smoke was killed or never recorded."""
+    lane_id = str(record["id"])
+    landed_info = postmerge.landed(record)
+    raw_merge = landed_info.get("merge")
+    merge_sha = raw_merge if isinstance(raw_merge, str) and raw_merge else ""
+    if not merge_sha:
+        raise LaneError(f"smoke --rerun refused: lane {lane_id} has no recorded merge commit")
+    integration = postmerge.integration_of(record)
+    if integration is None:
+        raise LaneError(f"smoke --rerun refused: lane {lane_id}'s integration worktree is gone")
+    raw_prev = landed_info.get("previous")
+    previous = raw_prev if isinstance(raw_prev, str) and raw_prev else git(
+        integration, "rev-parse", "--verify", "--quiet", f"{merge_sha}^1", check=False,
+    )
+    if not previous:
+        raise LaneError(f"smoke --rerun refused: cannot resolve parent commit of merge {merge_sha[:10]}")
+    landed_obj = land.Landed(
+        record=record,
+        merge=merge_sha,
+        previous=previous,
+        integration=integration,
+        onto=current_branch(integration),
+        keep=lifecycle.kept(record),
+        receipt=receipts.read(store, lane_id, record=record),
+    )
+    smoke_result = land.post_merge(store, landed_obj, slots)
+    return land.after_land(store, landed_obj, smoke_result)
+
+
+def _run_smoke(args: Any, store: state.Store) -> int:
+    """`lanefather smoke <id> [--rerun [--slots N] | --accept REASON]`."""
+    if args.rerun and args.accept is not None:
+        raise LaneUsageError("pass either --rerun or --accept, not both")
+    if args.slots is not None and not args.rerun:
+        raise LaneUsageError("--slots goes with --rerun")
+    if args.accept is not None:
+        pm = postmerge.PostMergeRecord.accept_smoke(store, args.id, reason=args.accept)
+        saved_reason = postmerge.post_merge(pm.record).get("reason")
+        shown_reason = saved_reason if isinstance(saved_reason, str) else args.accept
+        print(f"Lane {args.id}: post-merge smoke accepted ({shown_reason}); run {store.prog} done {args.id} to finish")
+        return 0
+    if args.rerun:
+        record = store.load(args.id)
+        if not lifecycle.awaiting_done(record):
+            raise LaneError(f"smoke --rerun refused: lane {args.id} is {record.get('status')}, not landed")
+        phase, live_status = postmerge.live_phase(record)
+        if phase is postmerge.PostMergePhase.RUNNING:
+            raise LaneError(f"smoke --rerun refused: lane {args.id}'s post-merge smoke is already running")
+        if phase in postmerge.SMOKE_OK_PHASES:
+            shown = "green" if phase is postmerge.PostMergePhase.CLEARED else (live_status or "green")
+            raise LaneError(f"smoke --rerun refused: lane {args.id}'s post-merge smoke is already {shown}")
+        if postmerge.red_receipt(record, store) is not None:
+            return land.recheck(args, store)
+        return _rerun_unrecorded_smoke(store, record, args.slots)
+    record = store.load(args.id)
+    pm = postmerge.PostMergeRecord.load(store, record)
+    shown = pm.raw_status or "not run"
+    post = postmerge.post_merge(record)
+    extra = ""
+    if pm.phase is postmerge.PostMergePhase.RUNNING and isinstance(post.get("pid"), int):
+        extra = f" (pid {post['pid']})"
+    elif pm.phase is postmerge.PostMergePhase.ACCEPTED and isinstance(post.get("reason"), str):
+        extra = f" ({post['reason']})"
+    elif pm.phase is postmerge.PostMergePhase.CLEARED and pm.cleared_by:
+        extra = f" (cleared by {postmerge.words(pm.cleared_by)})"
+    print(f"Lane {args.id}: post-merge {shown}{extra}")
+    return 0
+
+
 # The commands that act on one registered lane (fathers#236): from another repository's checkout they refuse, as
 # they would act from the wrong checkout. show is read-only and names the lane's project, so it reads any lane.
-LANE_COMMANDS = ("check", "wait", "land", "review", "done", "drop", "recheck", "keep", "scope")
+LANE_COMMANDS = ("check", "wait", "land", "review", "done", "drop", "recheck", "smoke", "keep", "scope")
 
 
 def lane_ids(args: Any) -> list[str]:

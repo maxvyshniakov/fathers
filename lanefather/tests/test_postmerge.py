@@ -93,6 +93,26 @@ class PostMergeTransitionAndFencingTests(unittest.TestCase):
             record["post_merge"] = {"status": "green", "receipt": str(self.store.receipt_path(lane_id, "post-merge"))}
         elif phase is PostMergePhase.RED:
             record["post_merge"] = {"status": "red", "receipt": str(self.store.receipt_path(lane_id, "post-merge"))}
+        elif phase is PostMergePhase.RUNNING:
+            record["post_merge"] = {
+                "status": "running",
+                "pid": os.getpid(),
+                "checkout": str(self.tmp / "smoke-0"),
+                "receipt": str(self.store.receipt_path(lane_id, "post-merge")),
+            }
+        elif phase is PostMergePhase.KILLED:
+            record["post_merge"] = {
+                "status": "killed",
+                "pid": 999_999,
+                "checkout": str(self.tmp / "smoke-0"),
+                "receipt": str(self.store.receipt_path(lane_id, "post-merge")),
+            }
+        elif phase is PostMergePhase.ACCEPTED:
+            record["post_merge"] = {
+                "status": "accepted",
+                "reason": "known flake",
+                "by": "tester",
+            }
         elif phase is PostMergePhase.CLEARED:
             record["post_merge"] = {
                 "status": "green",
@@ -112,8 +132,47 @@ class PostMergeTransitionAndFencingTests(unittest.TestCase):
                     with self.assertRaises(LaneError):
                         apply_post_merge_event("a", phase, event)
 
-                # Also exercise `record_smoke` and `record_recheck` on disk for the 4 write events.
-                if event in (PostMergeEvent.SMOKE_GREEN, PostMergeEvent.SMOKE_RED):
+                # Also exercise disk-writing methods for each write event.
+                if event is PostMergeEvent.SMOKE_START:
+                    lane_id = f"st-{phase.value}".replace("_", "-")
+                    rec_path = self._seed_lane(lane_id, phase=phase)
+                    before = rec_path.read_bytes()
+                    if expected is not None:
+                        pm, written = PostMergeRecord.start_smoke(
+                            self.store, lane_id, merge_sha=self.merge_sha, checkout=str(self.tmp / "smoke-0"),
+                        )
+                        self.assertEqual(pm.phase, expected)
+                        self.assertIsNotNone(written)
+                        assert written is not None
+                        self.assertTrue(written.exists())
+                        saved_post = self.store.load(lane_id)["post_merge"]
+                        self.assertEqual(saved_post["status"], "running")
+                        self.assertEqual(saved_post["pid"], os.getpid())
+                        self.assertEqual(saved_post["lane_created"], "2026-11-22T00:00:00Z")
+                    else:
+                        with self.assertRaises(LaneError):
+                            PostMergeRecord.start_smoke(
+                                self.store, lane_id, merge_sha=self.merge_sha, checkout=str(self.tmp / "smoke-0"),
+                            )
+                        self.assertEqual(rec_path.read_bytes(), before)
+
+                elif event is PostMergeEvent.ACCEPT:
+                    lane_id = f"ac-{phase.value}".replace("_", "-")
+                    rec_path = self._seed_lane(lane_id, phase=phase)
+                    before = rec_path.read_bytes()
+                    if expected is not None:
+                        pm = PostMergeRecord.accept_smoke(self.store, lane_id, reason="accepted in test", by="tester")
+                        self.assertEqual(pm.phase, expected)
+                        saved_post = self.store.load(lane_id)["post_merge"]
+                        self.assertEqual(saved_post["status"], "accepted")
+                        self.assertEqual(saved_post["reason"], "accepted in test")
+                        self.assertEqual(saved_post["by"], "tester")
+                    else:
+                        with self.assertRaises(LaneError):
+                            PostMergeRecord.accept_smoke(self.store, lane_id, reason="accepted in test", by="tester")
+                        self.assertEqual(rec_path.read_bytes(), before)
+
+                elif event in (PostMergeEvent.SMOKE_GREEN, PostMergeEvent.SMOKE_RED):
                     lane_id = f"s-{phase.value}-{event.value}".replace("_", "-")
                     rec_path = self._seed_lane(lane_id, phase=phase)
                     before = rec_path.read_bytes()
@@ -247,7 +306,7 @@ class DecideCompletionExhaustiveTests(unittest.TestCase):
                 )
 
                 is_auto = mode in (CompletionMode.AUTO_AFTER_SMOKE, CompletionMode.AUTO_AFTER_REVIEW)
-                smoke_ok = smoke in (PostMergePhase.GREEN, PostMergePhase.CLEARED)
+                smoke_ok = smoke in (PostMergePhase.GREEN, PostMergePhase.CLEARED, PostMergePhase.ACCEPTED)
                 review_done = v_name in ("exempt", "complete")
                 review_ok_interactive = review_done or v_name == "absent"
 
@@ -305,7 +364,83 @@ class DecideCompletionExhaustiveTests(unittest.TestCase):
                 if expected is CompletionAction.REFUSE:
                     self.assertTrue(decision.refusal)
 
-        self.assertEqual(checked, 5120)
+        self.assertEqual(checked, 8960)
+
+
+class SmokeLivenessAndAbortUnitTests(unittest.TestCase):
+    """Stubbed-`ps` liveness rules and `record_smoke` / `abort_smoke` contracts (fathers#56 review)."""
+
+    def _running_record(self, **post_fields: Any) -> dict[str, Any]:
+        return {
+            "id": "a",
+            "status": "landed",
+            "created": "2026-11-24T00:00:00Z",
+            "landed": {"merge": "1" * 40, "integration": "/tmp"},
+            "post_merge": {"status": "running", **post_fields},
+        }
+
+    def test_proc_table_error_and_strict_ps_error_fail_closed_as_running(self) -> None:
+        from fathers_common import proc
+
+        rec = self._running_record(pid=4242, start="Tue Nov 24 00:00:00 2026")
+        with mock.patch.object(proc, "identities", side_effect=proc.ProcTableError("ps failed")) as mocked:
+            phase, status = postmerge.live_phase(rec)
+            self.assertEqual((phase, status), (PostMergePhase.RUNNING, "running"))
+            self.assertEqual(mocked.call_args.kwargs.get("strict"), True)
+
+        # Also exercise `proc.identities(..., strict=True)` through a stubbed `ps` exiting 1 with stderr.
+        err_result = subprocess.CompletedProcess(args=["ps"], returncode=1, stdout="", stderr="ps: illegal option\n")
+        with mock.patch.object(subprocess, "run", return_value=err_result):
+            self.assertEqual(postmerge.live_phase(rec), (PostMergePhase.RUNNING, "running"))
+
+    def test_reused_pid_with_different_start_reads_killed(self) -> None:
+        from fathers_common import proc
+
+        rec = self._running_record(pid=4242, start="Tue Nov 24 00:00:00 2026")
+        other = proc.Proc(pid=4242, ppid=1, pgid=4242, uid=501, tty="", start="Tue Nov 24 01:00:00 2026", cmd="other")
+        with mock.patch.object(proc, "identities", return_value={4242: other}):
+            self.assertEqual(postmerge.live_phase(rec), (PostMergePhase.KILLED, "killed"))
+
+    def test_zombie_process_reads_killed(self) -> None:
+        rec = self._running_record(pid=4242, start="Tue Nov 24 00:00:00 2026")
+        zombie_row = "4242 Z+ Tue Nov 24 00:00:00 2026 python3 -m lanefather land a\n"
+        ok_result = subprocess.CompletedProcess(args=["ps"], returncode=0, stdout=zombie_row, stderr="")
+        with mock.patch.object(subprocess, "run", return_value=ok_result):
+            self.assertEqual(postmerge.live_phase(rec), (PostMergePhase.KILLED, "killed"))
+
+    def test_missing_start_treats_process_started_after_smoke_as_killed(self) -> None:
+        from fathers_common import proc
+
+        rec = self._running_record(pid=4242, started="2026-11-24T00:00:00Z")
+        reused = proc.Proc(pid=4242, ppid=1, pgid=4242, uid=501, tty="", start="Tue Nov 24 00:05:00 2026", cmd="other")
+        with mock.patch.object(proc, "identities", return_value={4242: reused}):
+            self.assertEqual(postmerge.live_phase(rec), (PostMergePhase.KILLED, "killed"))
+
+        earlier = proc.Proc(pid=4242, ppid=1, pgid=4242, uid=501, tty="", start="Mon Nov 23 23:59:50 2026", cmd="lane")
+        with mock.patch.object(proc, "identities", return_value={4242: earlier}):
+            self.assertEqual(postmerge.live_phase(rec), (PostMergePhase.RUNNING, "running"))
+
+    def test_killed_recheck_resolves_back_to_red(self) -> None:
+        from fathers_common import proc
+
+        rec = self._running_record(pid=4242, start="Tue Nov 24 00:00:00 2026", previous_status="red")
+        with mock.patch.object(proc, "identities", return_value={}):
+            self.assertEqual(postmerge.live_phase(rec), (PostMergePhase.RED, "red"))
+            self.assertEqual(postmerge.effective_status(rec), "red")
+
+    def test_record_smoke_rejects_skipped_write_status(self) -> None:
+        tmp = pathlib.Path(tempfile.mkdtemp(prefix="lane-pm-skip-"))
+        self.addCleanup(shutil.rmtree, tmp, True)
+        store = state.Store(config.Config(project="Alpha"), directory=tmp / "state")
+        store.save({
+            "id": "a", "ticket": "42", "branch": "lane/a", "base": "main", "base_sha": "0" * 40,
+            "claims": ["lib/**"], "after": [], "common_dir": str(tmp), "integration": str(tmp),
+            "worktree": str(tmp / "a"), "status": "landed", "created": "2026-11-24T00:00:00Z",
+            "scratch": [], "cargo_targets": [], "overrides": [], "agents": [], "rules": [],
+            "landed": {"merge": "1" * 40, "integration": str(tmp)},
+        })
+        with self.assertRaises(LaneError):
+            PostMergeRecord.record_smoke(store, "a", merge_sha="1" * 40, status="skipped", payload={"tree": "a" * 40})
 
 
 class CrashedRecheckAndCrossProjectTests(LaneCase):

@@ -21,6 +21,7 @@ lanefather done <id>
 lanefather done --finished [--dry-run]    done on every finished lane of the registered projects
 lanefather drop <id> [<id> ...]           remove an active lane that adds nothing to its base
 lanefather recheck <id> [--slots N]       rerun a red post-merge smoke on the integration tip
+lanefather smoke <id> [--rerun [--slots N] | --accept REASON]   post-merge smoke status, rerun or accept
 lanefather keep <id> [--off]              auto-done and done --finished leave the lane
 lanefather gc [--dry-run] [--json]         merged idle worktrees, unused branches and gone lanes
 lanefather promote <sha> [--ship] [--no-push] [--install [--deploy HOST]]
@@ -37,7 +38,7 @@ Several projects may share one Store (its `lanes` directory, fathers#149). `list
 lanes of the repository it runs in, as the lane cap counts them; `--all-projects` shows every lane of the Store,
 each row ending in `project: <name>` (fathers#236). Every lane object of `list --json` carries `project`, the
 repository's main checkout directory name, and `gone` (below). `check`, `wait`, `land`, `review`, `done`, `drop`,
-`recheck`, `keep` and `scope` refuse an id of another repository's lane, naming that repository and the command to
+`recheck`, `smoke`, `keep` and `scope` refuse an id of another repository's lane, naming that repository and the command to
 run there (`lane X belongs to sid-kit, not data-grid; run it there (<checkout>): cd <checkout> && lanefather drop
 X`); nothing changes. `show` is read-only and names the lane's project, so it reads any lane of the Store; with
 `--project-dir` it refuses another repository's lane. `status` lists every registered project's lanes by project.
@@ -253,6 +254,15 @@ check's base checkout, a review's, the smoke's and the gate's) and the shared ca
   from its receipt, or for an older receipt from its results-store entry). `done` and `done --finished` look for that
   evidence themselves, nothing runs, and the oldest receipt that clears the smoke is named in the ledger (`lane.done`,
   details `post_merge_cleared_by`) and in the record (`post_merge.cleared_by`).
+- Before a post-merge smoke starts, `land` records `post_merge.status = "running"` with `pid`, `start`, `checkout` and
+  `lane_created` (fathers#56). If that holder process exits before recording a result, readers resolve it as
+  `killed`. `done` requires `green`, `skipped`, or `accepted` (or a red smoke cleared by a later green run) and
+  refuses `running`, `killed`, `red`, or a missing `post_merge` result (unless `--force-reason`). `list` and `status`
+  report `post-merge running`, `post-merge killed`, and `post-merge accepted`.
+- `lanefather smoke <id> [--rerun [--slots N] | --accept REASON]` inspects or resolves a landed lane's post-merge
+  smoke: `--rerun` reruns a red, killed, or missing smoke (`recheck` stays compatible for red smokes); `--accept
+  REASON` accepts a red, killed, or missing smoke with an audited `override` ledger entry (`post_merge.status =
+  "accepted"`, `reason`, `by`) so `done` passes without `--force-reason`.
 - `lanefather recheck ID` reruns the checks the red smoke ran on the integration tip, in a smoke checkout, when the
   tip holds the merge. Green, its receipt `<id>.recheck.json` replaces the red result in the record (the red
   receipt stays), the lane's issue is marked as after a green land, and the lane is finished as land would have

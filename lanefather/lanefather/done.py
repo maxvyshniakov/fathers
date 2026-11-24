@@ -157,7 +157,7 @@ def evaluate_completion(
     needs_lock_probe = (
         check_lock
         and lifecycle.awaiting_done(record)
-        and pm.phase in (postmerge.PostMergePhase.GREEN, postmerge.PostMergePhase.CLEARED)
+        and pm.phase in postmerge.SMOKE_OK_PHASES
         and isinstance(
             rev.verdict,
             (review_record.Absent, review_record.Exempt, review_record.Complete)
