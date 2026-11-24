@@ -78,6 +78,13 @@ regression), names its `blocked_by` and the `prerequisites` that actually ran an
 other blocked checks) with their class, and keeps the receipt red until it runs and passes; `land` names it in its
 refusal.
 
+When a failed prerequisite passes its own rerun (`flaky-under-load`), `check` continues in the same invocation and runs
+every blocked check whose failed prerequisites all passed on rerun (fathers#240). Chained dependencies unblock
+transitively, sharing the `LANEFATHER_RERUNS` rerun budget across waves. The receipt combines the runs and keeps each
+prerequisite's `flaky-under-load` classification (with both logs) visible so a receipt that went green only through a
+solo rerun says so. If a prerequisite's rerun fails too, or another prerequisite of a blocked check stayed red, the
+blocked check stays `dependency-blocked` and the receipt stays red.
+
 `review <id> --fix-lane` starts the fix lane from the branch the lane landed on, which holds its merge, and refuses
 when no branch does; the landed lane keeps its own registration. The fix lane takes over the landed lane's scope
 with every ticket partial, so its merge says `Refs #N` and closes none of them a second time (fathers#64).

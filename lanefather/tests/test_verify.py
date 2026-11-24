@@ -746,5 +746,111 @@ class DependencyBlockedClassificationTests(unittest.TestCase):
                                           "unresolved")
 
 
+class UnblockedAfterRerunPureTests(unittest.TestCase):
+    """fathers#240 pure helpers: unblocked selection, shared rerun budget, and wave joining."""
+
+    def test_unblocked_checks_only_when_every_prerequisite_passed_alone(self) -> None:
+        from lanefather import verify
+        cls = {
+            "base": "a" * 40,
+            "checks": [
+                {"check": "A", "class": "flaky-under-load", "alone": {"status": "passed", "log": "/tmp/a.log"}},
+                {"check": "D", "class": "regression", "alone": {"status": "failed", "log": "/tmp/d.log"}},
+                {"check": "P", "class": "pre-existing", "alone": {"status": "failed", "log": "/tmp/p.log"}},
+                verify.dependency_blocked_entry("B", ["A"], ["A"], {"A": "flaky-under-load"}),
+                verify.dependency_blocked_entry("C", ["B"], ["A"], {"A": "flaky-under-load"}),
+                verify.dependency_blocked_entry("E", ["A", "D"], ["A", "D"], {"A": "flaky-under-load", "D": "regression"}),
+                verify.dependency_blocked_entry("F", ["P"], ["P"], {"P": "pre-existing"}),
+                verify.dependency_blocked_entry("G", [], []),
+            ],
+            "unaccounted": [],
+            "green": False,
+            "runs": [{"run": "r1", "rerun": "alone"}],
+        }
+        self.assertEqual(verify.unblocked_checks(cls), (["B", "C"], ["A"]))
+        self.assertEqual(verify.unblocked_checks({"skipped": "environment", "checks": [], "green": False}), ([], []))
+        self.assertEqual(verify.unblocked_checks(None), ([], []))
+
+    def test_plan_classification_honors_remaining_budget_and_reports_total_cap(self) -> None:
+        from lanefather import verify
+        fresh = [{"suite": "s", "status": "failed", "failed_checks": ["b", "c"], "log": "/tmp/s.log"}]
+        report = {"checks": [{"id": "b", "status": "failed"}, {"id": "c", "status": "failed"}]}
+        one_left = verify.plan_classification(fresh, report, cap=3, budget=1)
+        assert isinstance(one_left, verify.ClassificationPlan)
+        self.assertEqual(one_left.active_rerun, ["b"])
+        self.assertEqual(one_left.entries["c"]["class"], "unclassified")
+        self.assertEqual(one_left.entries["c"]["reason"], "only the first 3 red checks rerun")
+
+        none_left = verify.plan_classification(fresh, report, cap=2, budget=0)
+        assert isinstance(none_left, verify.ClassificationPlan)
+        self.assertEqual(none_left.active_rerun, [])
+        self.assertEqual(none_left.entries["b"]["reason"], "only the first 2 red checks rerun")
+        self.assertEqual(none_left.entries["c"]["reason"], "only the first 2 red checks rerun")
+
+    def test_reruns_used_counts_only_executed_reruns(self) -> None:
+        from lanefather import verify
+        cls = {
+            "checks": [
+                {"check": "a", "class": "flaky-under-load", "alone": {"status": "passed", "log": "/tmp/a.log"}},
+                {"check": "b", "class": "regression", "alone": {"status": "failed"}, "base": {"status": "passed"}},
+                {"check": "c", "class": "unclassified", "reason": "only the first 2 red checks rerun"},
+                {"check": "d", "class": "unclassified", "outside_failed_tests": ["t1"], "reason": "outside"},
+                verify.dependency_blocked_entry("e", ["a"], ["a"]),
+            ],
+        }
+        self.assertEqual(verify.reruns_used(cls), 2)
+        self.assertEqual(verify.reruns_used({"skipped": "env", "checks": []}), 0)
+        self.assertEqual(verify.reruns_used(None), 0)
+
+    def test_joined_results_and_classification_drop_resolved_blocked_checks(self) -> None:
+        from lanefather import verify
+        first_fresh = [
+            {"suite": "core", "status": "failed", "failed_checks": ["A"], "log": "/tmp/run0.log", "checks": ["A"]},
+            {"suite": "app", "status": "blocked", "failed_checks": [], "blocked_checks": ["B", "E"],
+             "log": "/tmp/run0.log", "checks": ["B", "E"]},
+        ]
+        second_fresh = [
+            {"suite": "app", "status": "passed", "failed_checks": [], "log": "/tmp/run1.log", "checks": ["B"]},
+        ]
+        joined = verify.joined_results(first_fresh, second_fresh, attempted=["B"])
+        by_suite = {r["suite"]: r for r in joined}
+        self.assertEqual(by_suite["app"]["status"], "blocked")
+        self.assertEqual(by_suite["app"]["blocked_checks"], ["E"])
+        self.assertEqual(by_suite["app"]["first_log"], "/tmp/run0.log")
+
+        # When every blocked check in a suite runs and passes, blocked_checks clears and the suite passes.
+        all_passed = verify.joined_results(
+            [{"suite": "app", "status": "blocked", "failed_checks": [], "blocked_checks": ["B", "C"],
+              "log": "/tmp/run0.log", "checks": ["B", "C"]}],
+            [{"suite": "app", "status": "passed", "failed_checks": [], "log": "/tmp/run1.log", "checks": ["B", "C"]}],
+            attempted=["B", "C"],
+        )
+        self.assertEqual(all_passed[0]["status"], "passed")
+        self.assertNotIn("blocked_checks", all_passed[0])
+
+        # Joining classification when all unblocked checks pass turns green while keeping flaky-under-load visible.
+        first_cls = {
+            "base": "a" * 40,
+            "checks": [
+                {"check": "A", "class": "flaky-under-load", "alone": {"status": "passed", "log": "/tmp/a.log"}},
+                verify.dependency_blocked_entry("B", ["A"], ["A"], {"A": "flaky-under-load"}),
+            ],
+            "unaccounted": [],
+            "green": False,
+            "runs": [{"run": "r1", "rerun": "alone"}],
+        }
+        merged_green = verify.joined_classification(first_cls, None, resolved=["B"])
+        self.assertTrue(merged_green["green"])
+        self.assertEqual([e["check"] for e in merged_green["checks"]], ["A"])
+        self.assertEqual(merged_green["runs"], [{"run": "r1", "rerun": "alone"}])
+
+        # Environment failure in wave 2 keeps classification red with skipped set.
+        merged_env = verify.joined_classification(
+            first_cls, {"skipped": "environment: disk", "checks": [], "green": False}, resolved=["B"],
+        )
+        self.assertFalse(merged_env["green"])
+        self.assertEqual(merged_env["skipped"], "environment: disk")
+
+
 if __name__ == "__main__":
     unittest.main()

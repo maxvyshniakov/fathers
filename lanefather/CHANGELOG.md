@@ -213,6 +213,13 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
 
 ### Changed
 
+- `lanefather check` now runs dependency-blocked checks in the same invocation once their failed prerequisites pass
+  their own rerun (`flaky-under-load`), instead of leaving those checks unresolved and the receipt red (fathers#240).
+  Chained dependencies unblock transitively while sharing the `LANEFATHER_RERUNS` rerun budget across waves, and the
+  combined receipt keeps each prerequisite's `flaky-under-load` classification and both logs visible. Checks whose
+  prerequisite failed on rerun too, or that still depend on another failed check, stay `dependency-blocked` and keep
+  the receipt red as before.
+
 - `lanefather list` shows only the lanes of the repository it runs in, as its cap line counts them, not every
   project's lanes in a shared Store (fathers#236). `check`, `wait`, `land`, `review`, `done`, `drop`, `recheck`,
   `keep` and `scope` refuse another repository's lane and name where to run them: from the wrong checkout `drop`
