@@ -21,8 +21,9 @@
   options and an example.
 - Check: `lanefather check <id>` plans the lane's diff with `tools/lane-check` (each changed package's checks, and
   the root checks) and runs them ([tools/verify.py](../../tools/verify.py)); the receipt is the evidence.
-- Land: `lanefather land <id> --into <integration worktree>`, which merges, runs the post-merge smoke and starts the
-  review. Then `lanefather done <id>`, and `lanefather gc` for leftovers.
+- Land: `lanefather land <id> --into <integration worktree>`, which merges and runs the post-merge smoke; with
+  `LANEFATHER_REVIEW_START=manual` it does not start a review of its own (see Review). Then `lanefather done <id>`,
+  and `lanefather gc` for leftovers.
 - Without `--force-reason`: a lane with nothing to land goes with `lanefather drop <id>`; a post-merge smoke that went
   red for the environment clears with `lanefather recheck <id>`, or by itself once a later green smoke or gate on
   the integration branch ran its checks
@@ -35,13 +36,17 @@
 
 ## Review
 
-- Every landed lane is reviewed once, blind: Lanefather's land starts it with the `review` role of `models.toml`
-  (another family than the implementer). Mark each finding `lanefather review <id> --mark N fixed:<merge>` or
-  `rejected:<reason>` after the one fix round. A batch is pushed only with every finding marked.
+- Every lane is reviewed once, blind, before it lands, as `orchestrate` step 5 says: the review (the `review` role
+  of `models.toml`, another family than the implementer) runs on the committed lane beside `lanefather check`, its
+  findings go to the same implementer in the same lane, and the lane lands once. Lanefather cannot run a review
+  before the land yet (#242), so land with `LANEFATHER_REVIEW_START=manual` and keep the findings and their
+  marks in the review's report file. A batch is pushed only with every finding marked.
+- A lane that landed unreviewed is reviewed after the land: `lanefather review <id>`, then
+  `lanefather review <id> --mark N fixed:<merge>` or `rejected:<reason>` after the one fix round.
 - The review reads the lane's whole accepted scope: every ticket's title and body (never its comments), each
   `--decision` comment and each `--spec` at the lane's base. Register an owner answer as a decision rather than
   copying it into a ticket body, and never register an implementer's report as one.
-- One fix lane for the findings of several landed lanes names them: `lanefather start review-fixes-<n> --fix-of A,B,C
+- One fix lane for the findings of several lanes that landed unreviewed names them: `lanefather start review-fixes-<n> --fix-of A,B,C
   --ticket <N> --claims '<paths>' --create`. Its land is exempt from review like a `review <id> --fix-lane` lane's;
   mark each parent's findings `fixed:review-fixes-<n>`.
 - Reviewer rules, from findings past reviews missed:
