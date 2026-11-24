@@ -112,9 +112,12 @@ def receipt_platform(receipt: dict[str, Any] | None, worktree: Any = None, *,
     the host that has it made the receipt), otherwise None, which matches no platform."""
     if not receipt:
         return None
-    if receipt.get("platform"):
-        return str(receipt["platform"])
-    return host_platform(project) if worktree and Path(str(worktree)).is_dir() else None
+    raw_platform = receipt.get("platform")
+    if isinstance(raw_platform, str) and raw_platform:
+        return raw_platform
+    if isinstance(worktree, (str, Path)) and str(worktree) and Path(worktree).is_dir():
+        return host_platform(project)
+    return None
 
 
 def under(entry: dict[str, Any], env: str, platform: str) -> bool:

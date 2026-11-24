@@ -90,16 +90,32 @@ def _print_smoke_failures(results: list[dict[str, Any]], triaged: str | None) ->
     return failed
 
 
-def merge_problem(lane_id: str, tip: str, tree: str, receipt: dict[str, Any] | None, *,
-                  record: state.Record | None = None, prog: str = "lanefather") -> str | None:
-    """Why the lane may not land: no receipt, a stale one, or a red one."""
-    # Behaviour preserved in Tidy 3 (#71): land checks tree currency only, ignoring toolchain until #59.
-    verdict = receipts.check_verdict(record, receipt, tree)
+def merge_problem(
+    lane_id: str,
+    tip: str,
+    tree: str,
+    receipt: dict[str, Any] | None,
+    *,
+    record: state.Record | None = None,
+    prog: str = "lanefather",
+    toolchain: Any = receipts.UNCHECKED,
+    platform: str | None = None,
+    project: config.Config = config.DEFAULT,
+) -> str | None:
+    """Why the lane may not land: no receipt, a stale one (tree, toolchain or platform), or a red one."""
+    verdict = receipts.check_verdict(
+        record, receipt, tree, toolchain, platform=platform, project=project,
+    )
     if isinstance(verdict, receipts.NoReceipt):
         return f"no receipt for lane {lane_id}: run {prog} check {lane_id} in its worktree"
     if isinstance(verdict, receipts.StaleTree):
         return (f"the receipt is stale: it covers tree {verdict.receipt_tree}, the lane tip {tip[:10]} has tree "
                 f"{tree}; rerun {prog} check {lane_id}")
+    if isinstance(verdict, receipts.StaleToolchain):
+        if verdict.toolchain_changed:
+            return (f"the receipt is stale: the {project.toolchain_name} changed since the lane check; "
+                    f"rerun {prog} check {lane_id}")
+        return f"the receipt is stale: it was not made on {verdict.platform}; rerun {prog} check {lane_id}"
     if isinstance(verdict, receipts.Green):
         return None
     assert isinstance(verdict, receipts.Red)
@@ -341,8 +357,15 @@ def merge(
                 store, lane_id, merge_sha=merge_sha, previous=previous, tip=tip, tree=tree,
                 integration=integration, onto=onto, keep=keep_flag, new_overrides=new_overrides, receipt=receipt,
             )
+        worktree = record.get("worktree")
+        tc_root = worktree if isinstance(worktree, str) and os.path.isdir(worktree) else main
+        toolchain = plan.toolchain_state(tc_root, store.project)
+        platform = result_store.host_platform(store.project)
         problems: list[str] = []
-        problem = merge_problem(lane_id, tip, tree, receipt, record=record, prog=prog)
+        problem = merge_problem(
+            lane_id, tip, tree, receipt,
+            record=record, prog=prog, toolchain=toolchain, platform=platform, project=store.project,
+        )
         if problem:
             problems.append(problem)
         pre_land_problem = review.pre_land_review_problem(store, record, main, tip, tree, integration, prog=prog)

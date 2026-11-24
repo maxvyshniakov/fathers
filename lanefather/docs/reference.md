@@ -729,9 +729,14 @@ lane through `lanefather show ID --state-dir DIR --json`.
 
 The version-1 summary contains project and repository identity, ticket number
 and URL, lane status, branch, base, worktree, claims, dependencies, receipt
-status and review status/finding counts. `checks.tree_match` is true/false when the
+status and review status/finding counts. Check-receipt staleness across `land`,
+`check`, `list`, `show`, and `status` is evaluated by `receipts.check_verdict`
+against the results store's environment hash (`results.env_hash`, fathers#59):
+`land` and `check` resolve the current toolchain and platform and treat a
+mismatch as `StaleToolchain` (`land` refuses unless `--force-reason`), matching
+results-store reuse. `checks.tree_match` is true/false when the
 branch tree can be compared with the receipt, otherwise null. `checks.current`
-is false for a proven tree mismatch and null (unknown) for a match: current
+is false for a proven tree mismatch (or `StaleToolchain` when checked) and null (unknown) for a match: current
 toolchain resolution and other verification conditions cannot be certified
 without executing project code. A green saved status is not a currentness claim.
 The version-1 nullable field remains compatible with receivers that omit a

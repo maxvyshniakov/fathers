@@ -268,6 +268,25 @@ class ReceiptStoreAndVerdictUnitTests(unittest.TestCase):
                                             "platform": "linux-x64"}, "t1", pin_v1, platform="darwin-arm64"),
             receipts.StaleToolchain(tree="t1", tree_match=True, toolchain_changed=False, platform="darwin-arm64"),
         )
+        # Environment comparison uses results.env_hash (canonical JSON), so bool vs int is distinct.
+        self.assertEqual(
+            receipts.check_verdict(
+                record,
+                {"status": "green", "tree": "t1", "toolchain": {"flag": True}, "platform": "darwin-arm64"},
+                "t1",
+                {"flag": 1},
+                platform="darwin-arm64",
+            ),
+            receipts.StaleToolchain(tree="t1", tree_match=True, toolchain_changed=True, platform="darwin-arm64"),
+        )
+        self.assertFalse(
+            receipts.same_environment(
+                {"status": "green", "tree": "t1", "toolchain": {"flag": True}, "platform": "darwin-arm64"},
+                {"flag": 1},
+                worktree=wt,
+                platform="darwin-arm64",
+            )
+        )
         # Tree mismatch -> StaleTree (carries underlying status).
         self.assertEqual(
             receipts.check_verdict(record, {"status": "red", "tree": "t0"}, "t1", pin_v1, platform="darwin-arm64"),
@@ -369,8 +388,31 @@ class ReceiptReadersTableTests(LaneCase):
                     "check_short_circuit": False,
                     "check_notice": None,
                     "list_receipt": "no receipt",
+                    "list_receipt_with_tc": "no receipt",
                     "show_checks": {"status": "not run", "current": None, "tree_match": None},
+                    "show_checks_with_tc": {"status": "not run", "current": None, "tree_match": None},
                     "status_receipt": {"status": "not run", "tree_match": None, "has_path": False},
+                    "results_verified": False,
+                },
+            ),
+            (
+                "generation_mismatch",
+                {
+                    "version": 1, "lane": "fx", "lane_created": "2020-01-01T00:00:00Z",
+                    "head": tip, "tree": tip_tree, "status": "green",
+                    "toolchain": current_tc, "platform": host_plat, "results": [], "check_results": {},
+                },
+                {
+                    # fathers#54: older lane incarnation receipt is treated as absent by every reader.
+                    "land_problem": "no receipt for lane fx: run lanefather check fx in its worktree",
+                    "check_short_circuit": False,
+                    "check_notice": None,
+                    "list_receipt": "no receipt",
+                    "list_receipt_with_tc": "no receipt",
+                    "show_checks": {"status": "not run", "current": None, "tree_match": None},
+                    "show_checks_with_tc": {"status": "not run", "current": None, "tree_match": None},
+                    "status_receipt": {"status": "not run", "tree_match": None, "has_path": False},
+                    "results_verified": None,
                 },
             ),
             (
@@ -384,8 +426,11 @@ class ReceiptReadersTableTests(LaneCase):
                     "check_short_circuit": True,
                     "check_notice": f"Receipt current: green for tree {tip_tree} on {host_plat}",
                     "list_receipt": "green",
+                    "list_receipt_with_tc": "green",
                     "show_checks": {"status": "green", "current": None, "tree_match": True},
+                    "show_checks_with_tc": {"status": "green", "current": None, "tree_match": True},
                     "status_receipt": {"status": "green", "tree_match": True, "has_path": True},
+                    "results_verified": True,
                 },
             ),
             (
@@ -395,14 +440,20 @@ class ReceiptReadersTableTests(LaneCase):
                     "toolchain": old_tc, "platform": host_plat, "results": [], "check_results": {},
                 },
                 {
-                    # Disagreement preserved in Tidy 3 (#71): land ignores toolchain, show cannot certify it,
-                    # check reruns with toolchain notice.
-                    "land_problem": None,
+                    # fathers#59: land refuses StaleToolchain consistently with check and results-store reuse;
+                    # read-only list/show/status never run the toolchain resolver, and agree when given toolchain.
+                    "land_problem": (
+                        "the receipt is stale: the Rust toolchain changed since the lane check; "
+                        "rerun lanefather check fx"
+                    ),
                     "check_short_circuit": False,
                     "check_notice": "lane: the Rust toolchain changed since the receipt (#571); running the checks again",
                     "list_receipt": "green",
+                    "list_receipt_with_tc": "green (stale)",
                     "show_checks": {"status": "green", "current": None, "tree_match": True},
+                    "show_checks_with_tc": {"status": "green", "current": False, "tree_match": True},
                     "status_receipt": {"status": "green", "tree_match": True, "has_path": True},
+                    "results_verified": False,
                 },
             ),
             (
@@ -412,12 +463,15 @@ class ReceiptReadersTableTests(LaneCase):
                     "toolchain": current_tc, "platform": "freebsd-riscv64", "results": [], "check_results": {},
                 },
                 {
-                    "land_problem": None,
+                    "land_problem": f"the receipt is stale: it was not made on {host_plat}; rerun lanefather check fx",
                     "check_short_circuit": False,
                     "check_notice": f"lane: the receipt was not made on {host_plat}; running the checks again",
                     "list_receipt": "green",
+                    "list_receipt_with_tc": "green (stale)",
                     "show_checks": {"status": "green", "current": None, "tree_match": True},
+                    "show_checks_with_tc": {"status": "green", "current": False, "tree_match": True},
                     "status_receipt": {"status": "green", "tree_match": True, "has_path": True},
+                    "results_verified": False,
                 },
             ),
             (
@@ -434,8 +488,11 @@ class ReceiptReadersTableTests(LaneCase):
                     "check_short_circuit": False,
                     "check_notice": None,
                     "list_receipt": "green (stale)",
+                    "list_receipt_with_tc": "green (stale)",
                     "show_checks": {"status": "green", "current": False, "tree_match": False},
+                    "show_checks_with_tc": {"status": "green", "current": False, "tree_match": False},
                     "status_receipt": {"status": "green", "tree_match": False, "has_path": True},
+                    "results_verified": False,
                 },
             ),
             (
@@ -453,8 +510,11 @@ class ReceiptReadersTableTests(LaneCase):
                     "check_short_circuit": False,
                     "check_notice": None,
                     "list_receipt": "red (stale)",
+                    "list_receipt_with_tc": "red (stale)",
                     "show_checks": {"status": "red", "current": False, "tree_match": False},
+                    "show_checks_with_tc": {"status": "red", "current": False, "tree_match": False},
                     "status_receipt": {"status": "red", "tree_match": False, "has_path": True},
+                    "results_verified": False,
                 },
             ),
             (
@@ -483,8 +543,11 @@ class ReceiptReadersTableTests(LaneCase):
                     "check_short_circuit": False,
                     "check_notice": None,
                     "list_receipt": "red",
+                    "list_receipt_with_tc": "red",
                     "show_checks": {"status": "red", "current": None, "tree_match": True},
+                    "show_checks_with_tc": {"status": "red", "current": None, "tree_match": True},
                     "status_receipt": {"status": "red", "tree_match": True, "has_path": True},
+                    "results_verified": False,
                 },
             ),
         ]
@@ -496,6 +559,7 @@ class ReceiptReadersTableTests(LaneCase):
                     receipt_file.unlink(missing_ok=True)
                 else:
                     state.write_json(receipt_file, fixture)
+                shutil.rmtree(self.state / "results", ignore_errors=True)
 
                 # 1. `list --json`
                 list_raw = self.lane("list", "--json")
@@ -520,7 +584,8 @@ class ReceiptReadersTableTests(LaneCase):
                 }
                 self.assertEqual(status_lane["receipt"], expected_status_rec)
 
-                # Verify `lane_view` produces byte-identical per-lane structures for all three JSON commands.
+                # Verify `lane_view` produces byte-identical per-lane structures for all three JSON commands,
+                # and agrees on StaleToolchain when toolchain/platform are supplied.
                 cfg = config.load(self.integration / ".lanefather.toml")
                 store = state.Store(cfg, directory=self.state)
                 rec = store.load("fx")
@@ -537,11 +602,36 @@ class ReceiptReadersTableTests(LaneCase):
                     json.dumps(status_lane, sort_keys=True),
                     json.dumps(dict(view.for_status(), gone=False), sort_keys=True),
                 )
-
-                # 4 & 5. `land.merge_problem` and `checks.select`
                 with mock.patch.dict(os.environ, self.env, clear=False):
-                    problem = land.merge_problem("fx", tip, tip_tree, fixture, record=rec, prog=store.prog)
+                    view_tc = receipts.lane_view(
+                        store, rec, toolchain=current_tc, platform=host_plat, logs=status_lane["logs"],
+                    )
+                    self.assertEqual(view_tc.list_receipt_text(), expected["list_receipt_with_tc"])
+                    self.assertEqual(view_tc.for_show()["checks"], expected["show_checks_with_tc"])
+
+                    # 4 & 5. `land.merge_problem`, `checks.select`, and results-store parity
+                    problem = land.merge_problem(
+                        "fx", tip, tip_tree, fixture,
+                        record=rec, prog=store.prog, toolchain=current_tc, platform=host_plat, project=cfg,
+                    )
                     self.assertEqual(problem, expected["land_problem"])
+
+                    if expected["results_verified"] is not None:
+                        if fixture is not None:
+                            check_status = "passed" if fixture.get("status") == "green" else "failed"
+                            results.record(
+                                store,
+                                fixture["tree"],
+                                {"lib-check": check_status},
+                                source="check",
+                                toolchain=fixture.get("toolchain"),
+                                platform=fixture.get("platform"),
+                                lane="fx",
+                            )
+                        lookup = results.lookup(
+                            store, tip_tree, ["lib-check"], toolchain=current_tc, platform=host_plat,
+                        )
+                        self.assertEqual(lookup["verified"], expected["results_verified"])
 
                     prepared = checks.prepare(store, "fx")
                     buf = io.StringIO()
@@ -553,6 +643,46 @@ class ReceiptReadersTableTests(LaneCase):
                         self.assertIsNotNone(selected)
                     if expected["check_notice"]:
                         self.assertIn(expected["check_notice"], buf.getvalue())
+
+    def test_toolchain_change_invalidates_both_land_and_results_store_reuse(self) -> None:
+        from lanefather import config, plan, results, state
+
+        worktree = pathlib.Path(self.created("tc", "lib/**"))
+        self.commit(worktree, {"lib/api.txt": "foo\ntc\n"})
+        self.lane("check", "tc")
+        tip_tree = self.git(worktree, "rev-parse", "HEAD^{tree}")
+
+        with mock.patch.dict(os.environ, self.env, clear=False):
+            cfg = config.load(self.integration / ".lanefather.toml")
+            store = state.Store(cfg, directory=self.state)
+            host_plat = results.host_platform(cfg)
+            tc_v1 = plan.toolchain_state(worktree, cfg)
+            self.assertTrue(
+                results.lookup(store, tip_tree, ["lib-check"], toolchain=tc_v1, platform=host_plat)["verified"]
+            )
+
+        # Toolchain changes: both `land` and results-store reuse treat the prior receipt/entries as stale.
+        self.env["FIXTURE_RUST"] = "1.99.0"
+        with mock.patch.dict(os.environ, self.env, clear=False):
+            cfg = config.load(self.integration / ".lanefather.toml")
+            store = state.Store(cfg, directory=self.state)
+            host_plat = results.host_platform(cfg)
+            tc_v2 = plan.toolchain_state(worktree, cfg)
+            self.assertNotEqual(
+                results.env_hash(tc_v1, host_plat, project=cfg),
+                results.env_hash(tc_v2, host_plat, project=cfg),
+            )
+            self.assertFalse(
+                results.lookup(store, tip_tree, ["lib-check"], toolchain=tc_v2, platform=host_plat)["verified"]
+            )
+            self.assertEqual(results.passed(store, tip_tree, toolchain=tc_v2, platform=host_plat), {})
+
+        refused = self.lane("land", "tc", ok=False)
+        self.assertIn("the receipt is stale: the Rust toolchain changed since the lane check", refused)
+        self.assertEqual(self.record("tc")["status"], "active")
+        # Overridable via --force-reason (audited in the lane record).
+        self.lane("land", "tc", "--force-reason", "toolchain upgrade verified separately", "--keep")
+        self.assertEqual(self.record("tc")["status"], "landed")
 
     def test_review_receipt_fixtures_across_list_show_status_done_and_gate(self) -> None:
         from lanefather import state

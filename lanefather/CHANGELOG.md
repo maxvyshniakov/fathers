@@ -277,6 +277,13 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
 
 ### Changed
 
+- Unified check-receipt staleness under `receipts.check_verdict` using the results store's environment hash
+  (`results.env_hash`, fathers#59): `land`, `check`, `list`, `show`, and `status` all evaluate check receipts through
+  one verdict (`NoReceipt | Green | Red | StaleTree | StaleToolchain`), so a toolchain or platform change invalidates
+  both lane receipts and results-store reuse for the same reason. `lanefather land` now refuses a green receipt whose
+  toolchain or platform changed (`StaleToolchain`, overridable via `--force-reason`), while read-only `list`, `show`,
+  and `status` continue to avoid executing project toolchain resolvers.
+
 - `lanefather land` post-merge `plan` mode now reuses passing whole-suite results from the lane's green check receipt
   instead of re-running every suite when the merge tree equals the lane's verified tree or when the diff between the
   lane tree and merge tree touches no input of a suite (fathers#249). When all planned suites are reused, post-merge

@@ -163,13 +163,17 @@ def same_environment(
     platform: str | None = None,
     project: config.Config = config.DEFAULT,
 ) -> bool:
-    """Whether `receipt` ran under `toolchain` and `platform` (this host's by default)."""
+    """Whether `receipt` ran under the same environment hash (`results.env_hash`) as `toolchain` and `platform`
+    (this host's by default)."""
     if not receipt:
         return False
-    expected = platform or result_store.host_platform(project)
+    expected_platform = platform or result_store.host_platform(project)
+    rec_platform = result_store.receipt_platform(receipt, worktree, project=project)
+    if rec_platform != expected_platform:
+        return False
     return (
-        receipt.get("toolchain") == toolchain
-        and result_store.receipt_platform(receipt, worktree, project=project) == expected
+        result_store.env_hash(receipt.get("toolchain"), rec_platform, project=project)
+        == result_store.env_hash(toolchain, expected_platform, project=project)
     )
 
 
@@ -410,9 +414,9 @@ def check_verdict(
     if not receipt or not state.receipt_matches_lane(receipt, state.lane_created_of(record)):
         return NoReceipt()
     raw_status = receipt.get("status")
-    status_str = str(raw_status) if raw_status is not None else None
+    status_str = raw_status if isinstance(raw_status, str) else None
     raw_tree = receipt.get("tree")
-    tree_str = str(raw_tree) if isinstance(raw_tree, str) else None
+    tree_str = raw_tree if isinstance(raw_tree, str) else None
     if tip_tree and raw_tree != tip_tree:
         return StaleTree(receipt_tree=raw_tree, tip_tree=tip_tree, status=status_str)
     matched: bool | None = True if tip_tree else None
@@ -478,13 +482,22 @@ def check_verdict(
     if toolchain is not UNCHECKED:
         worktree = record.get("worktree") if record else None
         expected_platform = platform or result_store.host_platform(project)
-        toolchain_ok = receipt.get("toolchain") == toolchain
-        platform_ok = result_store.receipt_platform(receipt, worktree, project=project) == expected_platform
-        if not (toolchain_ok and platform_ok):
+        rec_platform = result_store.receipt_platform(receipt, worktree, project=project)
+        expected_env = result_store.env_hash(toolchain, expected_platform, project=project)
+        receipt_env = (
+            result_store.env_hash(receipt.get("toolchain"), rec_platform, project=project)
+            if rec_platform is not None
+            else None
+        )
+        if rec_platform != expected_platform or receipt_env != expected_env:
+            toolchain_changed = (
+                result_store.env_hash(receipt.get("toolchain"), expected_platform, project=project)
+                != expected_env
+            )
             return StaleToolchain(
                 tree=tree_str,
                 tree_match=matched,
-                toolchain_changed=not toolchain_ok,
+                toolchain_changed=toolchain_changed,
                 platform=expected_platform,
             )
     return Green(tree=tree_str, tree_match=matched)
@@ -659,7 +672,7 @@ class LaneView:
                 return f"no receipt, {self.review_words}"
             return "no receipt"
         text = self._check_status_word(default="?")
-        if self.is_active and isinstance(self.check, StaleTree):
+        if self.is_active and isinstance(self.check, (StaleTree, StaleToolchain)):
             text += " (stale)"
         if self.post_merge_present:
             text += f", post-merge {self.post_merge_status}"
@@ -682,7 +695,7 @@ class LaneView:
         # verification conditions without executing project code, which this read-only query never does.
         checks = {
             "status": self._check_status_word(default="unknown"),
-            "current": False if tree_match is False else None,
+            "current": False if isinstance(self.check, (StaleTree, StaleToolchain)) else None,
             "tree_match": tree_match,
         }
         repo_url = f"https://github.com/{self.repository}" if self.repository else None
@@ -766,6 +779,8 @@ def lane_view(
     record: Record,
     *,
     tip_tree: Any = UNCHECKED,
+    toolchain: Any = UNCHECKED,
+    platform: str | None = None,
     repository: Any = UNCHECKED,
     logs: dict[str, str] | None = None,
     prog: str | None = None,
@@ -794,7 +809,9 @@ def lane_view(
     if repo_slug and repo_slug.startswith("https://github.com/"):
         repo_slug = repo_slug.removeprefix("https://github.com/").strip("/")
 
-    check_v = check_verdict(record, check_rec, resolved_tree)
+    check_v = check_verdict(
+        record, check_rec, resolved_tree, toolchain, platform=platform, project=store.project,
+    )
     check_path = str(path(store, lane_id, "receipt")) if check_rec else None
 
     rev = review_record.ReviewRecord.load(store, lane_id, record=record)
