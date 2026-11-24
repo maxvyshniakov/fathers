@@ -735,7 +735,7 @@ def fix_claims(
             held.append(path)
             lines.append(
                 f"{path} stays out of the fix lane's claims: "
-                + ", ".join(f"lane {o['id']} (#{o['ticket']}) claims {c}" for o, c in holders)
+                + ", ".join(f"lane {o['id']} ({scope.display_ticket(o['ticket'])}) claims {c}" for o, c in holders)
                 + f"; {store.prog} check warns if the fix changes it"
             )
         else:

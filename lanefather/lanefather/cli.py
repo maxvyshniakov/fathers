@@ -13,7 +13,6 @@ from collections.abc import Sequence
 import os
 from pathlib import Path
 import re
-import shlex
 import sys
 import textwrap
 from typing import Any, NoReturn
@@ -47,7 +46,6 @@ from . import (
     wait,
 )
 from .errors import LaneError, LaneUsageError
-from .gitops import main_checkout
 from .host import CHECK_MAX_JOBS
 
 
@@ -522,17 +520,7 @@ def lane_ids(args: Any) -> list[str]:
 
 def refuse_foreign(store: state.Store, command: str, lane_id: str) -> None:
     """Refuse a lane of another repository than the one the command runs in, naming where it runs."""
-    if not state.ID.fullmatch(lane_id):
-        return
-    record = state.read_json(store.record_path(lane_id))
-    theirs = record.get("common_dir") if record else None
-    here = admission.running_common(store.project)
-    if not theirs or not here or os.path.realpath(str(theirs)) == os.path.realpath(here):
-        return
-    checkout = main_checkout(str(theirs))
-    raise LaneError(f"lane {lane_id} belongs to {state.project_name(str(theirs))}, not "
-                    f"{state.project_name(here)}; run it there ({checkout}): cd {shlex.quote(checkout)} && "
-                    f"{store.prog} {command} {lane_id}")
+    admission.refuse_foreign(store, command, lane_id)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -557,7 +545,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.command not in registry.READ_ONLY:
             registry.note(loaded_cfg)
         store = state.Store(loaded_cfg)
-        if args.command in LANE_COMMANDS:
+        if args.command in LANE_COMMANDS and args.command != "drop":
             for lane_id in lane_ids(args):
                 refuse_foreign(store, args.command, lane_id)
         return args.run(args, store)

@@ -93,6 +93,35 @@ class SharedStoreTests(LaneCase):
         self.assertIn("lane belongs to another repository",
                       self.lane("show", "sk-1", "--project-dir", str(self.repo), ok=False))
 
+    def test_drop_continues_past_a_foreign_id_and_deduplicates_before_single_id_handling(self):
+        self.foreign("sk-1")
+        for lane_id, claim in (("g1", "a/**"), ("g2", "b/**")):
+            worktree = self.created(lane_id, claim)
+            self.git(self.repo, "worktree", "remove", "--force", worktree)
+            self.git(self.repo, "branch", "-D", f"lane/{lane_id}")
+        output = self.lane("drop", "g1", "sk-1", "g2", ok=False)
+        self.assertIn("Lane g1 dropped", output)
+        self.assertIn("Lane g2 dropped", output)
+        self.assertIn("lane sk-1 belongs to sid-kit", output)
+        self.assertEqual((self.record("g1")["status"], self.record("g2")["status"]), ("done", "done"))
+        self.assertEqual(self.record("sk-1")["status"], "active")
+        single = self.lane("drop", "sk-1", ok=False)
+        repeated = self.lane("drop", "sk-1", "sk-1", ok=False)
+        self.assertEqual(repeated, single)
+
+    def test_non_string_common_dir_does_not_crash_list_or_refuse_foreign(self):
+        self.state.mkdir(parents=True, exist_ok=True)
+        (self.state / "weird.json").write_text(json.dumps({
+            "id": "weird", "ticket": "7", "branch": "lane/weird", "base": "main", "base_sha": "0" * 40,
+            "claims": ["other/**"], "after": [], "common_dir": 123,
+            "integration": None, "worktree": None, "status": "active",
+            "created": "2026-11-23T09:00:00Z", "scratch": [], "overrides": [], "rules": []}))
+        listed = json.loads(self.lane("list", "--all-projects", "--json"))["lanes"]
+        by_id = {lane["id"]: lane for lane in listed}
+        self.assertEqual(by_id["weird"]["project"], "an unnamed repository")
+        self.assertIn("project: an unnamed repository", self.lane("list", "--all-projects"))
+        self.assertIn("names no repository that exists", self.lane("drop", "weird", ok=False))
+
 
 class GoneLaneTests(LaneCase):
     """fathers#237: a planned or active lane whose branch and worktree are gone."""
@@ -159,8 +188,35 @@ class GoneLaneTests(LaneCase):
         with mock.patch.object(review_record.ReviewRecord, "load", return_value=reviewed):
             output = self.lane("drop", "g", ok=False)
             self.assertIn("drop refused: lane g's review has 2 unmarked findings, which hold lands", output)
+            dry_text = self.lane("gc", "--dry-run")
+            self.assertNotIn("would drop lane g", dry_text)
+            self.assertIn("lane g: drop refused", dry_text)
+            dry_json = json.loads(self.lane("gc", "--dry-run", "--json"))
+            self.assertEqual(dry_json["removed"], [])
+            self.assertTrue(any("lane g: drop refused" in err for err in dry_json["errors"]))
             self.assertIn("lane g: drop refused", self.lane("gc", "--json", ok=None))
         self.assertEqual(self.record("g")["status"], "active")
+        non_blocking = types.SimpleNamespace(open_findings=({"n": 1, "severity": "P3"},))
+        with mock.patch.object(review_record.ReviewRecord, "load", return_value=non_blocking):
+            p3_output = self.lane("drop", "g", ok=False)
+            self.assertIn("drop refused: lane g's review has 1 unmarked finding: mark each first", p3_output)
+            self.assertNotIn("which hold lands", p3_output)
+        self.assertEqual(self.record("g")["status"], "active")
+
+    def test_gc_drops_gone_lane_even_without_merge_target_refs(self):
+        self.lane("start", "g", "--ticket", "404", "--base", "main", "--claims", "lib/**", "--create")
+        worktree = str(self.record("g")["worktree"])
+        self.git(self.repo, "worktree", "remove", "--force", worktree)
+        self.git(self.repo, "branch", "-D", "lane/g")
+        self.git(self.repo, "worktree", "remove", "--force", str(self.integration))
+        self.git(self.repo, "branch", "-D", "integrate/q")
+        dry = json.loads(self.lane("gc", "--dry-run", "--json", cwd=self.repo))
+        self.assertIn({"kind": "lane", "path": "g"}, dry["removed"])
+        self.assertTrue(any(k["reason"] == "no merge target refs" for k in dry["kept"]))
+        self.assertEqual(self.record("g")["status"], "active")
+        report = json.loads(self.lane("gc", "--json", cwd=self.repo))
+        self.assertIn({"kind": "lane", "path": "g"}, report["removed"])
+        self.assertEqual(self.record("g")["status"], "done")
 
     def test_a_lane_whose_branch_or_worktree_exists_is_not_gone(self):
         branch_only = self.created("branch-only", "a/**")

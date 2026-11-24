@@ -7,6 +7,7 @@ import json
 import math
 import os
 import selectors
+import shlex
 import signal
 import subprocess
 import sys
@@ -215,6 +216,21 @@ def running_common(project: config.Config) -> str | None:
     return repository_of(os.getcwd()) or (repository_of(project.path.parent) if project.path else None)
 
 
+def refuse_foreign(store: state.Store, command: str, lane_id: str) -> None:
+    """Refuse a lane of another repository than the one the command runs in, naming where it runs."""
+    if not state.ID.fullmatch(lane_id):
+        return
+    record = state.read_json(store.record_path(lane_id))
+    theirs = record.get("common_dir") if record else None
+    here = running_common(store.project)
+    if not isinstance(theirs, str) or not theirs or not here or os.path.realpath(theirs) == os.path.realpath(here):
+        return
+    checkout = main_checkout(theirs)
+    raise LaneError(f"lane {lane_id} belongs to {state.project_name(theirs)}, not "
+                    f"{state.project_name(here)}; run it there ({checkout}): cd {shlex.quote(checkout)} && "
+                    f"{store.prog} {command} {lane_id}")
+
+
 GONE = "no branch or worktree"
 
 
@@ -223,7 +239,8 @@ def gone(record: state.Record) -> bool:
     neither that worktree (as a directory) nor its branch is left. drop's proof holds for it ("no branch and no
     commits"). A planned lane that never had a worktree is not gone: its branch may not exist yet."""
     common, worktree = record.get("common_dir"), record.get("worktree")
-    if not lifecycle.occupying(record) or not worktree or not common or not os.path.isdir(common):
+    if (not lifecycle.occupying(record) or not isinstance(worktree, str) or not worktree
+            or not isinstance(common, str) or not common or not os.path.isdir(common)):
         return False
     if os.path.isdir(worktree):
         return False

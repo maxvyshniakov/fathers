@@ -25,6 +25,7 @@ from . import (
     plan,
     queue,
     receipts,
+    scope,
     state,
     verify,
 )
@@ -228,7 +229,8 @@ def select(
     if added:
         print(f"lane: claims widened: {', '.join(added)}")
     for overlap in overlaps:
-        print(f"lane: warning: {overlap['path']} overlaps the claims of lane {overlap['lane']} (#{overlap['ticket']}): "
+        print(f"lane: warning: {overlap['path']} overlaps the claims of lane {overlap['lane']} "
+              f"({scope.display_ticket(overlap['ticket'])}): "
               f"{overlap['claim']}; tell the orchestrator, the two lanes may conflict when they land")
     for unowned in lane_plan.get("unowned", []):
         print(f"lane: no check reads {unowned}, so the plan is the full gate: declare its readers in "

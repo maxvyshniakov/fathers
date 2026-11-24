@@ -68,6 +68,19 @@ class Issue:
         """How GitHub refers to it from the lane's repository: `#12`, or `owner/repo#97`."""
         return self.number if self.repo else f"#{self.number}"
 
+    @property
+    def key(self) -> str:
+        """Case-folded identity for deduplication: GitHub owner/repo names are case-insensitive."""
+        return f"{self.repo.lower()}#{self.local}" if self.repo else self.number
+
+
+def display_ticket(ticket: Any) -> str:
+    """How a ticket prints in prose: `#42` for a local ticket, `owner/repo#97` for a foreign one, or `none`."""
+    value = str(ticket).strip()
+    if not value or value.lower() == NONE:
+        return NONE
+    return Issue(value.lstrip("#")).ref
+
 
 @dataclass(frozen=True)
 class Decision:
@@ -130,10 +143,14 @@ def validate(items: Sequence[Item]) -> None:
     """Refuse an issue, decision or spec named twice."""
     seen: set[tuple[str, str]] = set()
     for item in items:
-        key = (("issue", item.ref) if isinstance(item, Issue)
-               else ("decision", item.url) if isinstance(item, Decision) else ("spec", item.path))
+        if isinstance(item, Issue):
+            key, shown = ("issue", item.key), item.ref
+        elif isinstance(item, Decision):
+            key, shown = ("decision", item.url), item.url
+        else:
+            key, shown = ("spec", item.path), item.path
         if key in seen:
-            raise LaneError(f"scope names {key[0]} {key[1]} twice")
+            raise LaneError(f"scope names {key[0]} {shown} twice")
         seen.add(key)
 
 
@@ -217,7 +234,7 @@ def of(record: Record) -> tuple[Item, ...]:
         if key not in _WARNED:
             _WARNED.add(key)
             print(f"lane: warning: lane {record.get('id')} has a malformed scope ({error}); reading its ticket "
-                  f"#{record.get('ticket')} alone", file=sys.stderr)
+                  f"{display_ticket(record.get('ticket'))} alone", file=sys.stderr)
         return from_ticket(str(record.get("ticket", NONE)))
 
 
