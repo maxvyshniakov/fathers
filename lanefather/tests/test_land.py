@@ -908,7 +908,7 @@ class PostMergePlanReuseTests(LaneCase):
         self.assertEqual(post["narrowing"]["reused_suites"]["lib"]["reused_from"], receipt["tree"])
         self.assertEqual(post["results"], [])
         self.assertRegex((self.state / "ledger.log").read_text(),
-                         r"post-merge a green skip jobs=0 suites=- lane_verified=2 ")
+                         r"post-merge a green skip jobs=0 suites=- lane_verified_suites=2 ")
 
     def test_whole_suite_plan_reuses_untouched_suite_and_runs_touched_suite_on_disjoint_diff(self) -> None:
         self._enable_whole_suite_plan_mode()
@@ -1051,6 +1051,67 @@ class PostMergePlanReuseTests(LaneCase):
         self.assertEqual([r["id"] for r in kept or []], ["structure-check", "consumer-check"])
         self.assertEqual(narrowing["dropped"], ["lib-check"])
         self.assertEqual(list(lane_verified), ["lib-check"])
+
+        # Regression (P2): when `structure-check` is selected by the delta but is NOT in post-merge `rows`,
+        # `consumer-check` (`depends_on: ["structure-check"]`) in `rows` must still re-run and not be reused.
+        rows_without_dep = [
+            {"id": "lib-check", "suite": "lib", "paths": ["lib/api.txt"]},
+            {"id": "consumer-check", "suite": "lib", "paths": ["lib/api.txt"], "depends_on": ["structure-check"]},
+        ]
+        with unittest.mock.patch.dict(os.environ, self.env, clear=False):
+            kind2, kept2, narrowing2, lane_verified2 = plan.narrow_smoke(
+                inspector, receipt, landed, merge_tree, "plan", rows_without_dep, worktree, toolchain=None,
+            )
+        self.assertEqual(kind2, "narrowed")
+        self.assertEqual([r["id"] for r in kept2 or []], ["consumer-check"])
+        self.assertEqual(narrowing2["dropped"], ["lib-check"])
+        self.assertEqual(list(lane_verified2), ["lib-check"])
+
+    def test_delta_plan_dropping_a_changed_path_fails_closed_and_empty_suites_is_handled(self) -> None:
+        from lanefather import config, plan, state
+
+        self._enable_whole_suite_plan_mode()
+        worktree = self.created("a", "lib/**")
+        self.commit(worktree, {"lib/api.txt": "foo\nbaz\n"})
+        self.lane("check", "a")
+        receipt = self._receipt("a")
+        tip = self.git(worktree, "rev-parse", "HEAD")
+        landed = {"tip": tip, "tree": receipt["tree"]}
+
+        # Integration changes two files; stubbed delta plan reports only one of them -> must fail closed.
+        self.commit(self.integration, {"docs/a.md": "a\n", "docs/b.md": "b\n"}, "two docs")
+        self.git(self.integration, "merge", "--no-ff", "-m", "merge a", "lane/a")
+        merge_tree = self.git(self.integration, "rev-parse", "HEAD^{tree}")
+        store = state.Store(config.load(config.find(self.integration)), directory=self.state)
+        inspector = plan.Checkout(store.project, self.integration)
+        partial_delta = {"full": False, "paths": ["docs/a.md"], "selected": ["structure"], "selection": None}
+        with (
+            unittest.mock.patch.dict(os.environ, self.env, clear=False),
+            unittest.mock.patch.object(inspector, "plan_for", return_value=partial_delta),
+        ):
+            kind, suites, narrowing = plan.narrow_suites(
+                inspector, receipt, landed, merge_tree, "plan", ["structure", "lib"], worktree, toolchain=None,
+            )
+        self.assertEqual((kind, suites, narrowing["narrowed"]), ("plan", ["structure", "lib"], False))
+        self.assertIn("did not report all changed paths", narrowing["reason"])
+
+        # Empty suites list gives an accurate reason (not "the tree's plan names whole suites").
+        kind_empty, suites_empty, narrowing_empty = plan.narrow_suites(
+            inspector, receipt, landed, merge_tree, "plan", [], worktree, toolchain=None,
+        )
+        self.assertEqual((kind_empty, suites_empty, narrowing_empty["reason"]), ("plan", [], "no suites to run"))
+
+        # Empty-suite whole-suite lane lands cleanly as a whole-suite skip (prints "0 suites", not "0 checks").
+        worktree_empty = self.created("empty", "docs/**")
+        self.git(worktree_empty, "commit", "-q", "--allow-empty", "-m", "empty commit")
+        self.lane("check", "empty")
+        output = self.lane("land", "empty")
+        self.assertIn("0 suites", output)
+        self.assertNotIn("0 checks", output)
+        post_empty = self._post("empty")
+        self.assertEqual((post_empty["kind"], post_empty["status"], post_empty["suites"]), ("skip", "green", []))
+        self.assertIsNone(post_empty["selection"])
+        self.assertIsNone(post_empty["checks"])
 
 
 if __name__ == "__main__":

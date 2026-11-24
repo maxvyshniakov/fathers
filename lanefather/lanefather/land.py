@@ -419,10 +419,7 @@ def post_merge(store: state.Store, landed: Landed, slots: int | None) -> Smoke:
                 inspector, receipt, record["landed"], merge_tree, previous, toolchain, record.get("worktree")
             )
             if exact_verified is not None and exact_narrowing is not None:
-                merged_paths = [p for p in git(
-                    checkout, "-c", "core.quotePath=false", "diff", "--no-renames", "--name-only",
-                    previous, merge_sha, "--",
-                ).splitlines() if p]
+                merged_paths = plan.diff_paths(checkout, previous, merge_sha) or []
                 docs_only = review.documentation_only(merged_paths, store.project)
                 record = store.update(lane_id, lambda rec: rec["landed"].update(docs_only=docs_only))
                 print(f"lane: {review.start_lane_review(store, record)}", flush=True)
@@ -430,7 +427,7 @@ def post_merge(store: state.Store, landed: Landed, slots: int | None) -> Smoke:
                 exact_dropped_suites: list[Any] = (
                     cast(list[Any], raw_exact_dropped) if isinstance(raw_exact_dropped, list) else []
                 )
-                is_whole_suite_skip = bool(exact_dropped_suites) and not exact_verified
+                is_whole_suite_skip = "dropped_suites" in exact_narrowing and not exact_verified
                 verified_desc = (
                     f"{len(exact_dropped_suites)} suite{'s' if len(exact_dropped_suites) != 1 else ''}"
                     if is_whole_suite_skip
@@ -513,15 +510,25 @@ def post_merge(store: state.Store, landed: Landed, slots: int | None) -> Smoke:
                                  **verify.origins(tree_verified, "")}, phase="post-merge")
     raw_dropped_suites: Any = narrowing.get("dropped_suites")
     dropped_suites: list[Any] = cast(list[Any], raw_dropped_suites) if isinstance(raw_dropped_suites, list) else []
-    verified = len(lane_verified) if lane_verified else len(dropped_suites)
+    is_whole_suite_narrowed = "dropped_suites" in narrowing and not lane_verified
+    verified_checks = len(lane_verified)
+    verified_suites = len(dropped_suites)
+    verified = verified_suites if is_whole_suite_narrowed else verified_checks
+    verified_tag = (
+        f"lane_verified_suites={verified_suites} "
+        if is_whole_suite_narrowed
+        else f"lane_verified={verified_checks} "
+    )
     journal.ledger(f"post-merge {lane_id} {status} {kind} jobs={jobs} suites={','.join(suites) or '-'} "
-                   + (f"lane_verified={verified} " if narrowing.get("narrowed") else "")
+                   + (verified_tag if narrowing.get("narrowed") else "")
                    + (f"not_rerun={len(tree_verified)} " if tree_verified else "")
                    + (f"gate_only={len(skips) - len(tree_verified)} " if len(skips) > len(tree_verified) else "")
                    + f"{host_fields(info)} merge={merge_sha}",
                    kind="lane.post_merge", level="info" if status == "green" else "error", lane=record,
                    details={"status": status, "scope": kind, "jobs": jobs, "suites": suites,
-                            "lane_verified": verified, "skipped": skips, "merge": merge_sha, "receipt": str(post)},
+                            "lane_verified": verified_checks,
+                            **({"lane_verified_suites": verified_suites} if is_whole_suite_narrowed else {}),
+                            "skipped": skips, "merge": merge_sha, "receipt": str(post)},
                    store=store)
     ids = [c for s in suites for c in selected[s]] if selected is not None else None
     what = (", ".join(ids) if ids is not None and len(ids) <= 8 else f"{len(ids)} checks" if ids is not None

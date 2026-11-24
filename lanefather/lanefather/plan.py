@@ -402,10 +402,31 @@ def receipt_paths(receipt: dict[str, Any]) -> set[str]:
     checks."""
     listed: Any = receipt.get("paths")
     if isinstance(listed, list):
-        return {str(p) for p in cast(list[Any], listed)}
-    rows: list[dict[str, Any]] = receipt.get("selection") or []
-    reasons: dict[str, list[str]] = receipt.get("reasons") or {}
-    return {p for row in rows for p in row.get("paths", [])} | {p for paths in reasons.values() for p in paths}
+        return {p for p in cast(list[Any], listed) if isinstance(p, str) and p}
+    raw_rows: Any = receipt.get("selection")
+    rows = (
+        [cast(dict[str, Any], r) for r in cast(list[Any], raw_rows) if isinstance(r, dict)]
+        if isinstance(raw_rows, list)
+        else []
+    )
+    raw_reasons: Any = receipt.get("reasons")
+    reasons = cast(dict[Any, Any], raw_reasons) if isinstance(raw_reasons, dict) else {}
+    return (
+        {
+            p
+            for row in rows
+            if isinstance(row.get("paths"), list)
+            for p in cast(list[Any], row["paths"])
+            if isinstance(p, str) and p
+        }
+        | {
+            p
+            for paths in reasons.values()
+            if isinstance(paths, list)
+            for p in cast(list[Any], paths)
+            if isinstance(p, str) and p
+        }
+    )
 
 
 def fix_plan(lane_plan: dict[str, Any], parent: dict[str, Any], known: set[str] | None = None) -> dict[str, Any]:
@@ -514,7 +535,7 @@ def reuse_from_receipt(
     return reused
 
 
-def _diff_paths(root: Path, base_ref: str, target_ref: str) -> list[str] | None:
+def diff_paths(root: Any, base_ref: str, target_ref: str) -> list[str] | None:
     """Changed paths between `base_ref` and `target_ref` using NUL-delimited git diff, or None on git error."""
     result = subprocess.run(
         ["git", "-C", str(root), "-c", "core.quotePath=false", "diff", "--no-renames", "--name-only", "-z",
@@ -673,7 +694,7 @@ def exact_tree_reuse(
             return None, None, {}, "the lane's receipt has invalid suites"
         receipt_suites = cast(list[str], raw_suites)
         if not receipt.get("full") and not same_base:
-            merged_paths = _diff_paths(inspector.root, previous, merge_tree)
+            merged_paths = diff_paths(inspector.root, previous, merge_tree)
             if merged_paths is None:
                 return None, None, {}, "merge base differs from the lane receipt's base"
             outside = sorted(set(merged_paths) - receipt_paths(receipt))
@@ -730,7 +751,7 @@ def exact_tree_reuse(
                 # path that plan left out; for both scoped and full receipts, every check in the receipt's own
                 # selection must have passed as well (a green receipt may carry flaky/pre-existing failures).
                 if not receipt.get("full"):
-                    merged_paths = _diff_paths(inspector.root, previous, merge_tree)
+                    merged_paths = diff_paths(inspector.root, previous, merge_tree)
                     outside = sorted(set(merged_paths) - receipt_paths(receipt)) if merged_paths is not None else []
                     if merged_paths is None or outside or receipt_selection is None:
                         listed = ", ".join(outside[:3]) + ("..." if len(outside) > 3 else "")
@@ -746,16 +767,7 @@ def exact_tree_reuse(
         if receipt_selection is None:
             return None, None, {}, "the lane's receipt has no per-check selection"
         if not receipt.get("full") and not same_base:
-            merged_paths = _diff_paths(inspector.root, previous, merge_tree)
-            if merged_paths is None:
-                return None, None, {}, "merge base differs from the lane receipt's base"
-            outside = sorted(set(merged_paths) - receipt_paths(receipt))
-            if outside:
-                listed = ", ".join(outside[:3]) + ("..." if len(outside) > 3 else "")
-                return None, None, {}, (
-                    f"merge base differs from the lane receipt's base and the merge changes {listed}, "
-                    "which its plan did not cover"
-                )
+            return None, None, {}, "merge base differs from the lane receipt's base"
         rows = receipt_selection
     missing = [str(row["id"]) for row in rows if str(row["id"]) not in passed_map]
     if missing:
@@ -802,6 +814,7 @@ def narrow_smoke(
     lane_tip = landed.get("tip")
     basis = {"receipt_tree": receipt_tree, "receipt_head": receipt.get("head"), "lane_tip": lane_tip}
     paths: list[str]
+    delta_selection: Rows = []
     if merge_tree == receipt_tree:
         brought: dict[str, list[str]] = {}
         paths = []
@@ -813,8 +826,8 @@ def narrow_smoke(
         )
         if tip_tree != receipt_tree:
             return kind, rows, dict(basis, narrowed=False, reason="lane tip tree does not match receipt tree"), {}
-        diff_paths = _diff_paths(inspector.root, receipt_tree, merge_tree)
-        if diff_paths is None:
+        changed_paths = diff_paths(inspector.root, receipt_tree, merge_tree)
+        if changed_paths is None:
             return kind, rows, dict(basis, narrowed=False, reason="could not diff lane tree against merge tree"), {}
         delta = inspector.plan_for(lane_tip)
         raw_delta_paths: Any = delta.get("paths")
@@ -823,18 +836,19 @@ def narrow_smoke(
             if isinstance(raw_delta_paths, list)
             else []
         )
-        delta_selection = _valid_selection_rows(delta.get("selection"))
-        if delta.get("full") or delta_selection is None:
+        validated_delta = _valid_selection_rows(delta.get("selection"))
+        if delta.get("full") or validated_delta is None:
             return kind, rows, dict(basis, narrowed=False, integration_paths=paths,
                                     reason="what the integration brought in selects the full gate"), {}
         if delta.get("unowned"):
             return kind, rows, dict(basis, narrowed=False, integration_paths=paths,
                                     reason="what the integration brought in includes unowned paths"), {}
-        if diff_paths and not paths:
+        if set(changed_paths) - set(paths):
             return kind, rows, dict(
-                basis, narrowed=False, integration_paths=diff_paths,
-                reason="delta plan did not report the changed paths between lane tree and merge tree",
+                basis, narrowed=False, integration_paths=changed_paths,
+                reason="delta plan did not report all changed paths between lane tree and merge tree",
             ), {}
+        delta_selection = validated_delta
         brought = {
             str(row["id"]): [p for p in cast(list[Any], row["paths"]) if isinstance(p, str)]
             if isinstance(row.get("paths"), list) else []
@@ -847,8 +861,8 @@ def narrow_smoke(
         str(row["id"])
         for row in valid_rows
         if str(row["id"]) in brought or str(row["id"]) not in passed_map
-    }
-    running = _expand_dependent_checks(valid_rows, initial_running)
+    } | set(brought)
+    running = _expand_dependent_checks([*valid_rows, *delta_selection], initial_running)
     kept: Rows = []
     for row in valid_rows:
         cid = str(row["id"])
@@ -884,8 +898,10 @@ def narrow_suites(
     """The suites of a whole-suite post-merge `plan` that still need to run after the lane's green receipt
     (fathers#249): `(kind, kept_suites, narrowing)`. Fail-closed on any missing, red, stale, stopped, or malformed
     receipt, full or unowned delta, or suite not passed as a whole suite in the receipt."""
-    if kind != "plan" or not suites:
-        return kind, list(suites), {"narrowed": False, "reason": "the tree's plan names whole suites"}
+    if not suites:
+        return kind, [], {"narrowed": False, "reason": "no suites to run"}
+    if kind != "plan":
+        return kind, list(suites), {"narrowed": False, "reason": f"post-merge kind is {kind}, not plan"}
     inspector = _as_checkout(checkout, project)
     resolved_tc = inspector.toolchain() if toolchain is UNRESOLVED else toolchain
     reason = receipts.smoke_basis(
@@ -910,8 +926,8 @@ def narrow_suites(
         )
         if tip_tree != receipt_tree:
             return kind, list(suites), dict(basis, narrowed=False, reason="lane tip tree does not match receipt tree")
-        diff_paths = _diff_paths(inspector.root, receipt_tree, merge_tree)
-        if diff_paths is None:
+        changed_paths = diff_paths(inspector.root, receipt_tree, merge_tree)
+        if changed_paths is None:
             return kind, list(suites), dict(basis, narrowed=False, reason="could not diff lane tree against merge tree")
         delta = inspector.plan_for(lane_tip)
         raw_delta_paths: Any = delta.get("paths")
@@ -930,10 +946,10 @@ def narrow_suites(
                 basis, narrowed=False, integration_paths=paths,
                 reason="what the integration brought in includes unowned paths",
             )
-        if diff_paths and not paths:
+        if set(changed_paths) - set(paths):
             return kind, list(suites), dict(
-                basis, narrowed=False, integration_paths=diff_paths,
-                reason="delta plan did not report the changed paths between lane tree and merge tree",
+                basis, narrowed=False, integration_paths=changed_paths,
+                reason="delta plan did not report all changed paths between lane tree and merge tree",
             )
         raw_selected: Any = delta.get("selected")
         if not isinstance(raw_selected, list) or not all(
