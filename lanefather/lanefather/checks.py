@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from . import (
     claims,
@@ -360,16 +360,14 @@ def _execute_lane_run(
 ) -> tuple[Rows, dict[str, dict[str, Any]], str | None, dict[str, Any] | None, Any, int | None]:
     """Run the lane's checks that are left, classify the red ones (#568), and run any checks unblocked by a
     prerequisite passing its own rerun (fathers#240)."""
-    rerun_budget = verify.rerun_cap(store.project)
-
     def attempt(
         selection: dict[str, list[str]] | None,
         *,
         budget: int,
-    ) -> tuple[Rows, dict[str, dict[str, Any]], str | None, dict[str, Any] | None, Any, int | None]:
+    ) -> tuple[Rows, dict[str, dict[str, Any]], str | None, dict[str, Any] | None, Any, int | None, set[str]]:
         active_suites = [s for s in suites if selection is None or selection.get(s)]
         if not active_suites:
-            return [], {}, None, None, None, None
+            return [], {}, None, None, None, None, set()
         ids = None if selection is None else [c for s in active_suites for c in selection[s]]
         choice = verify.Selection.checks(ids) if ids is not None else verify.Selection.suites(active_suites)
         run_type = (
@@ -389,6 +387,19 @@ def _execute_lane_run(
         fresh, ran = verify.suite_outcomes(worktree, active_suites, selection, outcome, project=store.project)
         triaged = outcome.triage
         classification, report = None, outcome.report
+        raw_report_checks: Any = (report or {}).get("checks") or []
+        passed_ids: set[str] = set()
+        if not outcome.environment and isinstance(raw_report_checks, list):
+            for raw_row in cast(list[Any], raw_report_checks):
+                if not isinstance(raw_row, dict):
+                    continue
+                row = cast(dict[str, Any], raw_row)
+                if (
+                    row.get("id")
+                    and row.get("status") in ("passed", "skipped")
+                    and not verify.is_dependency_blocked(row)
+                ):
+                    passed_ids.add(str(row["id"]))
         if any(r["status"] != "passed" for r in fresh):
             run_dir = outcome.run_dir
             effective_jobs = outcome.granted_jobs if outcome.granted_jobs is not None else jobs
@@ -400,13 +411,13 @@ def _execute_lane_run(
             if classification and run_dir is not None:
                 state.write_json(run_dir / "rerun.json", classification)
                 triaged = plan.triage(worktree, run_dir, store.project) or triaged
-        return fresh, ran, triaged, classification, outcome.stopped, outcome.granted_jobs
+        return fresh, ran, triaged, classification, outcome.stopped, outcome.granted_jobs, passed_ids
 
     def run_with_unblocking(
         initial_selection: dict[str, list[str]] | None,
     ) -> tuple[Rows, dict[str, dict[str, Any]], str | None, dict[str, Any] | None, Any, int | None]:
-        nonlocal rerun_budget
-        fresh, ran, triaged, classification, stopped, granted_jobs = attempt(initial_selection, budget=rerun_budget)
+        rerun_budget = verify.rerun_cap(store.project)
+        fresh, ran, triaged, classification, stopped, granted_jobs, _ = attempt(initial_selection, budget=rerun_budget)
         rerun_budget = max(0, rerun_budget - verify.reruns_used(classification))
         if stopped:
             return fresh, ran, triaged, classification, stopped, granted_jobs
@@ -431,18 +442,19 @@ def _execute_lane_run(
                 f"unblocked check(s): {', '.join(ran_ids)}",
                 flush=True,
             )
-            more, ran_more, triaged_more, classified_more, stopped_more, more_jobs = attempt(
+            more, ran_more, triaged_more, classified_more, stopped_more, more_jobs, more_passed = attempt(
                 next_selection, budget=rerun_budget,
             )
             rerun_budget = max(0, rerun_budget - verify.reruns_used(classified_more))
-            fresh = verify.joined_results(fresh, more, attempted=ran_ids)
+            resolved_ids = [*ran_ids, *(c for c in unblocked_ids if c in more_passed and c not in ran_ids)]
+            fresh = verify.joined_results(fresh, more, attempted=resolved_ids)
             ran = {**ran, **ran_more}
             triaged = "\n".join(t for t in (triaged, triaged_more) if t) or None
             assert classification is not None
-            classification = verify.joined_classification(classification, classified_more, resolved=ran_ids)
+            classification = verify.joined_classification(classification, classified_more, resolved=resolved_ids)
             stopped = stopped_more
             if more_jobs is not None:
-                granted_jobs = more_jobs
+                granted_jobs = max(granted_jobs, more_jobs) if granted_jobs is not None else more_jobs
             wave_fresh, wave_cls = more, classified_more
             if stopped:
                 break

@@ -1334,9 +1334,153 @@ class UnblockedAfterRerunTests(LaneCase):
         entries = {e["check"]: e for e in receipt["classification"]["checks"]}
         self.assertEqual(entries["chain:a"]["class"], "flaky-under-load")
         self.assertEqual(entries["chain:b"]["class"], "unclassified")
-        self.assertEqual(entries["chain:b"]["reason"], "only the first 1 red checks rerun")
+        self.assertEqual(entries["chain:b"]["reason"], "the rerun budget (1) was used by earlier checks")
         self.assertEqual(entries["chain:c"]["class"], "dependency-blocked")
         self.assertEqual(entries["chain:c"]["prerequisites"], ["chain:b"])
+
+    def test_scoped_plan_with_producer_unblocks_and_turns_receipt_green(self):
+        runs_log = self.tmp / "scoped-producer-runs.log"
+        config = (self.integration / ".lanefather.toml").read_text().replace(
+            'plan_module = "tools/verification_plan.py"\n', "")
+        script = textwrap.dedent(f"""\
+            #!/usr/bin/env python3
+            import json, os, pathlib, sys, uuid
+            args = sys.argv[1:]
+            root = pathlib.Path(__file__).resolve().parent
+            if args[:1] == ["--changed"]:
+                paths = ["src/app.ts"]
+                rows = [
+                    {{"id": "verify:unit", "suite": "verify", "paths": paths, "producer": False}},
+                    {{"id": "browser:build", "suite": "browser", "paths": [], "producer": True}},
+                    {{"id": "browser:story", "suite": "browser", "paths": paths, "producer": False}},
+                ]
+                print(json.dumps({{"full": False, "paths": paths, "unowned": [], "suites": ["verify", "browser"],
+                                   "reasons": {{"verify": paths, "browser": paths}}, "checks": rows}}))
+                sys.exit(0)
+            ids = args[args.index("--checks") + 1].split(",") if "--checks" in args else ["verify:unit", "browser:story"]
+            label = os.environ.get("LANEFATHER_SLOT_LABEL", "")
+            with open({str(runs_log)!r}, "a") as handle:
+                handle.write(label + " " + ",".join(ids) + "\\n")
+            run = root / ".build" / "verification-runs" / ("prod-" + uuid.uuid4().hex[:8])
+            run.mkdir(parents=True)
+            fail_first = os.environ.get("PROD_FAIL_FIRST") == "1"
+            rows = []
+            if label.endswith("-alone") or label.startswith("post-merge-"):
+                for cid in ids:
+                    rows.append({{"id": cid, "status": "passed", "exit": 0,
+                                 "log": str(run / (cid.replace(":", "_") + ".log")), "seconds": 0.01}})
+            elif "verify:unit" in ids and fail_first:
+                rows = [
+                    {{"id": "verify:unit", "status": "failed", "exit": 1,
+                      "log": str(run / "verify_unit.log"), "seconds": 0.01}},
+                    {{"id": "browser:build", "status": "blocked", "exit": 1, "blocked_by": ["verify:unit"],
+                      "log": str(run / "browser_build.log"), "seconds": 0.01}},
+                    {{"id": "browser:story", "status": "blocked", "exit": 1, "blocked_by": ["browser:build"],
+                      "log": str(run / "browser_story.log"), "seconds": 0.01}},
+                ]
+            else:
+                # Running --checks browser:story executes its producer browser:build and then browser:story.
+                rows = [
+                    {{"id": "browser:build", "status": "passed", "exit": 0,
+                      "log": str(run / "browser_build.log"), "seconds": 0.01}},
+                    {{"id": "browser:story", "status": "passed", "exit": 0,
+                      "log": str(run / "browser_story.log"), "seconds": 0.01}},
+                ]
+            exit_code = int(any(r["status"] != "passed" for r in rows))
+            (run / "report.json").write_text(json.dumps({{"exit": exit_code, "checks": rows, "stopped": None}}))
+            print("Verification report: " + str(run / "report.json"))
+            sys.exit(exit_code)
+            """)
+        self.commit(self.integration, {".lanefather.toml": config, "verify.sh": script},
+                    "install scoped producer verify fixture")
+        self.env["PROD_FAIL_FIRST"] = "1"
+        worktree = self.created("a", "src/**")
+        self.commit(worktree, {"src/app.ts": "export const p = 1\n"})
+        self.lane("check", "a")
+        receipt = self.receipt("a")
+        self.assertEqual(runs_log.read_text().splitlines(), [
+            "lane-a verify:unit,browser:story",
+            "lane-a-alone verify:unit",
+            "lane-a browser:story",
+        ])
+        self.assertEqual(receipt["status"], "green")
+        self.assertTrue(receipt["classification"]["green"])
+        self.assertEqual([e["check"] for e in receipt["classification"]["checks"]], ["verify:unit"])
+        self.assertEqual(receipt["check_results"]["browser:story"]["status"], "passed")
+        self.env.pop("PROD_FAIL_FIRST", None)
+        self.lane("land", "a")
+
+    def test_whole_suite_plan_unblocks_without_narrowing_suite_to_single_check(self):
+        runs_log = self.tmp / "whole-suite-runs.log"
+        config = (self.integration / ".lanefather.toml").read_text().replace(
+            'plan_module = "tools/verification_plan.py"\n', "")
+        script = textwrap.dedent(f"""\
+            #!/usr/bin/env python3
+            import json, os, pathlib, sys, uuid
+            args = sys.argv[1:]
+            root = pathlib.Path(__file__).resolve().parent
+            if args[:1] == ["--changed"]:
+                paths = ["src/app.ts"]
+                print(json.dumps({{"full": True, "paths": paths, "unowned": [], "suites": ["core", "app"],
+                                   "reasons": {{"core": paths, "app": paths}}}}))
+                sys.exit(0)
+            label = os.environ.get("LANEFATHER_SLOT_LABEL", "")
+            sel = (args[args.index("--checks") + 1] if "--checks" in args
+                   else "suites:" + args[args.index("--suites") + 1])
+            with open({str(runs_log)!r}, "a") as handle:
+                handle.write(label + " " + sel + "\\n")
+            run = root / ".build" / "verification-runs" / ("whole-" + uuid.uuid4().hex[:8])
+            run.mkdir(parents=True)
+            if label.endswith("-alone") or "--checks" in args:
+                ids = args[args.index("--checks") + 1].split(",")
+                rows = [{{"id": cid, "status": "passed", "exit": 0,
+                          "log": str(run / (cid.replace(":", "_") + ".log")), "seconds": 0.01}} for cid in ids]
+            else:
+                rows = [
+                    {{"id": "core:a", "status": "failed", "exit": 1, "log": str(run / "core_a.log"), "seconds": 0.01}},
+                    {{"id": "app:b", "status": "blocked", "exit": 1, "blocked_by": ["core:a"],
+                      "log": str(run / "app_b.log"), "seconds": 0.01}},
+                ]
+            exit_code = int(any(r["status"] != "passed" for r in rows))
+            (run / "report.json").write_text(json.dumps({{"exit": exit_code, "checks": rows, "stopped": None}}))
+            print("Verification report: " + str(run / "report.json"))
+            sys.exit(exit_code)
+            """)
+        self.commit(self.integration, {".lanefather.toml": config, "verify.sh": script},
+                    "install whole-suite unblock fixture")
+        worktree = self.created("a", "src/**")
+        self.commit(worktree, {"src/app.ts": "export const w = 1\n"})
+        self.lane("check", "a")
+        receipt = self.receipt("a")
+        self.assertEqual(runs_log.read_text().splitlines(), [
+            "lane-a suites:core,app",
+            "lane-a-alone core:a",
+            "lane-a app:b",
+        ])
+        self.assertEqual(receipt["status"], "green")
+        by_suite = {r["suite"]: r for r in receipt["results"]}
+        self.assertEqual(by_suite["app"]["status"], "passed")
+        self.assertNotIn("checks", by_suite["app"])
+        # All 3 runs (wave 1, solo rerun, wave 2) appear in leases.
+        self.assertEqual(len(receipt["leases"]), 3)
+
+    def test_stopped_first_tier_does_not_spend_heavier_stage_rerun_budget(self):
+        # Break structure-check on both base and lane (#639 pre-existing), and flake lib-check once with RERUNS=1.
+        self.commit(
+            self.integration,
+            {"checks/structure.sh": "test ! -e lib/structure-broken\n", "lib/structure-broken": "pre-existing\n"},
+            "break structure on base",
+        )
+        flag = self.tmp / "heavier-flake-once"
+        flag.touch()
+        self.env.update(LANEFATHER_RERUNS="1", FIXTURE_FLAKE_ONCE=f"lib-check:{flag}")
+        worktree = self.created("cheap", "lib/**")
+        self.commit(worktree, {"lib/thing.txt": "lane\n"})
+        self.lane("check", "cheap")
+        receipt = self.receipt("cheap")
+        self.assertEqual(receipt["status"], "green")
+        entries = {e["check"]: e["class"] for e in receipt["classification"]["checks"]}
+        self.assertEqual(entries, {"structure-check": "pre-existing", "lib-check": "flaky-under-load"})
 
 
 class MinSlotsTests(LaneCase):

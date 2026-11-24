@@ -779,13 +779,13 @@ class UnblockedAfterRerunPureTests(unittest.TestCase):
         assert isinstance(one_left, verify.ClassificationPlan)
         self.assertEqual(one_left.active_rerun, ["b"])
         self.assertEqual(one_left.entries["c"]["class"], "unclassified")
-        self.assertEqual(one_left.entries["c"]["reason"], "only the first 3 red checks rerun")
+        self.assertEqual(one_left.entries["c"]["reason"], "the rerun budget (3) was used by earlier checks")
 
         none_left = verify.plan_classification(fresh, report, cap=2, budget=0)
         assert isinstance(none_left, verify.ClassificationPlan)
         self.assertEqual(none_left.active_rerun, [])
-        self.assertEqual(none_left.entries["b"]["reason"], "only the first 2 red checks rerun")
-        self.assertEqual(none_left.entries["c"]["reason"], "only the first 2 red checks rerun")
+        self.assertEqual(none_left.entries["b"]["reason"], "the rerun budget (2) was used by earlier checks")
+        self.assertEqual(none_left.entries["c"]["reason"], "the rerun budget (2) was used by earlier checks")
 
     def test_reruns_used_counts_only_executed_reruns(self) -> None:
         from lanefather import verify
@@ -794,6 +794,7 @@ class UnblockedAfterRerunPureTests(unittest.TestCase):
                 {"check": "a", "class": "flaky-under-load", "alone": {"status": "passed", "log": "/tmp/a.log"}},
                 {"check": "b", "class": "regression", "alone": {"status": "failed"}, "base": {"status": "passed"}},
                 {"check": "c", "class": "unclassified", "reason": "only the first 2 red checks rerun"},
+                {"check": "c2", "class": "unclassified", "reason": "the rerun budget (2) was used by earlier checks"},
                 {"check": "d", "class": "unclassified", "outside_failed_tests": ["t1"], "reason": "outside"},
                 verify.dependency_blocked_entry("e", ["a"], ["a"]),
             ],
@@ -801,6 +802,15 @@ class UnblockedAfterRerunPureTests(unittest.TestCase):
         self.assertEqual(verify.reruns_used(cls), 2)
         self.assertEqual(verify.reruns_used({"skipped": "env", "checks": []}), 0)
         self.assertEqual(verify.reruns_used(None), 0)
+        # #639 first-tier stopped checks skip the solo rerun and do not consume the heavier stage's budget.
+        first_tier = {
+            "first": True,
+            "checks": [
+                {"check": "structure", "class": "pre-existing",
+                 "alone": {"status": "not rerun", "reason": "first check"}, "base": {"status": "failed"}},
+            ],
+        }
+        self.assertEqual(verify.reruns_used(first_tier), 0)
 
     def test_joined_results_and_classification_drop_resolved_blocked_checks(self) -> None:
         from lanefather import verify
@@ -832,7 +842,8 @@ class UnblockedAfterRerunPureTests(unittest.TestCase):
         first_cls = {
             "base": "a" * 40,
             "checks": [
-                {"check": "A", "class": "flaky-under-load", "alone": {"status": "passed", "log": "/tmp/a.log"}},
+                {"check": "A", "class": "flaky-under-load", "load": {"first_run": [1, 1, 1], "alone": [1, 1, 1]},
+                 "alone": {"status": "passed", "log": "/tmp/a.log"}},
                 verify.dependency_blocked_entry("B", ["A"], ["A"], {"A": "flaky-under-load"}),
             ],
             "unaccounted": [],
@@ -844,12 +855,99 @@ class UnblockedAfterRerunPureTests(unittest.TestCase):
         self.assertEqual([e["check"] for e in merged_green["checks"]], ["A"])
         self.assertEqual(merged_green["runs"], [{"run": "r1", "rerun": "alone"}])
 
-        # Environment failure in wave 2 keeps classification red with skipped set.
+        # Environment failure in wave 2 keeps classification red with skipped set AND keeps Wave 1's blocked entries.
         merged_env = verify.joined_classification(
             first_cls, {"skipped": "environment: disk", "checks": [], "green": False}, resolved=["B"],
         )
         self.assertFalse(merged_env["green"])
         self.assertEqual(merged_env["skipped"], "environment: disk")
+        self.assertEqual([e["check"] for e in merged_env["checks"]], ["A", "B"])
+        env_lines = "\n".join(verify.classification_lines(merged_env))
+        self.assertIn("environment: disk", env_lines)
+        self.assertIn("A: flaky-under-load", env_lines)
+
+        # Symmetry: skipped in first_cls stays skipped when joined with a non-skipped second_cls.
+        sym = verify.joined_classification(
+            {"skipped": "environment: oom", "checks": [], "green": False, "unaccounted": [], "runs": []},
+            {"base": "a" * 40, "checks": [{"check": "X", "class": "flaky-under-load"}],
+             "unaccounted": [], "green": True, "runs": [{"run": "r2", "rerun": "alone"}]},
+        )
+        self.assertFalse(sym["green"])
+        self.assertEqual(sym["skipped"], "environment: oom")
+
+    def test_joined_results_preserves_whole_suite_runs_logs_and_failure_exit(self) -> None:
+        from lanefather import verify
+        # Whole-suite row (no "checks") joined with a targeted unblocked wave stays whole-suite.
+        whole_wave1 = [{"suite": "app", "status": "blocked", "exit": 1, "failed_checks": [], "blocked_checks": ["B"],
+                        "log": "/tmp/w1.log", "run": "r1", "lease": "l1"}]
+        whole_wave2 = [{"suite": "app", "status": "passed", "exit": 0, "failed_checks": [], "checks": ["B"],
+                        "log": "/tmp/w2.log", "run": "r2", "lease": "l2"}]
+        whole_merged = verify.joined_results(whole_wave1, whole_wave2, attempted=["B"])
+        self.assertNotIn("checks", whole_merged[0])
+        self.assertEqual(whole_merged[0]["status"], "passed")
+        self.assertEqual(verify.leases_of(whole_merged), [
+            {"run": "r1", "lease": "l1"},
+            {"run": "r2", "lease": "l2"},
+        ])
+
+        # 3-wave chain in one suite preserves all runs/leases, all logs, and a failing exit/log on the failed suite.
+        w1 = [{"suite": "chain", "status": "failed", "exit": 1, "failed_checks": ["A"], "blocked_checks": ["B", "C"],
+               "log": "/tmp/w1.log", "run": "run1", "lease": "lease1", "checks": ["A", "B", "C"]}]
+        w2 = [{"suite": "chain", "status": "failed", "exit": 2, "failed_checks": ["B"], "blocked_checks": ["C"],
+               "log": "/tmp/w2.log", "run": "run2", "lease": "lease2", "checks": ["B", "C"]}]
+        w3 = [{"suite": "chain", "status": "passed", "exit": 0, "failed_checks": [],
+               "log": "/tmp/w3.log", "run": "run3", "lease": "lease3", "checks": ["C"]}]
+        m12 = verify.joined_results(w1, w2, attempted=["B", "C"])
+        m123 = verify.joined_results(m12, w3, attempted=["C"])
+        row = m123[0]
+        self.assertEqual(row["status"], "failed")
+        self.assertEqual(row["exit"], 2)
+        self.assertEqual(row["log"], "/tmp/w2.log")
+        self.assertEqual(row["first_log"], "/tmp/w1.log")
+        self.assertEqual(row["logs"], ["/tmp/w1.log", "/tmp/w2.log", "/tmp/w3.log"])
+        self.assertEqual(verify.leases_of(m123, {"runs": [{"run": "alone1", "rerun": "alone"}]}), [
+            {"run": "run1", "lease": "lease1"},
+            {"run": "run2", "lease": "lease2"},
+            {"run": "run3", "lease": "lease3"},
+            {"run": "alone1", "rerun": "alone"},
+        ])
+
+    def test_joined_classification_recomputes_prerequisites_on_still_blocked_checks(self) -> None:
+        from lanefather import verify
+        first_cls = {
+            "base": "a" * 40,
+            "checks": [
+                {"check": "A", "class": "flaky-under-load", "alone": {"status": "passed", "log": "/tmp/a.log"}},
+                {"check": "D", "class": "regression", "alone": {"status": "failed"}, "base": {"status": "passed"}},
+                verify.dependency_blocked_entry("B", ["A"], ["A"], {"A": "flaky-under-load"}),
+                verify.dependency_blocked_entry("E", ["B", "D"], ["A", "D"],
+                                                {"A": "flaky-under-load", "D": "regression"}),
+            ],
+            "unaccounted": [],
+            "green": False,
+            "runs": [{"run": "r1", "rerun": "alone"}],
+        }
+        # When B passes in wave 2, E's prerequisites drop the A->B branch and name only D.
+        after_b_pass = verify.joined_classification(first_cls, None, resolved=["B"])
+        e_pass = next(e for e in after_b_pass["checks"] if e["check"] == "E")
+        self.assertEqual(e_pass["prerequisites"], ["D"])
+        self.assertIn("failed prerequisite: D (regression)", e_pass["reason"])
+        self.assertNotIn("A (", e_pass["reason"])
+
+        # When B regresses in wave 2, E's prerequisites point at B (regression) and D (regression).
+        second_cls = {
+            "base": "a" * 40,
+            "checks": [
+                {"check": "B", "class": "regression", "alone": {"status": "failed"}, "base": {"status": "passed"}},
+            ],
+            "unaccounted": [],
+            "green": False,
+            "runs": [{"run": "r2", "rerun": "alone"}],
+        }
+        after_b_reg = verify.joined_classification(first_cls, second_cls, resolved=["B"])
+        e_reg = next(e for e in after_b_reg["checks"] if e["check"] == "E")
+        self.assertEqual(e_reg["prerequisites"], ["B", "D"])
+        self.assertIn("failed prerequisites: B (regression), D (regression)", e_reg["reason"])
 
 
 if __name__ == "__main__":
