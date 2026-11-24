@@ -20,8 +20,9 @@ ROOT = Path(__file__).resolve().parents[1]
 ZERO = "0" * 40
 A, B = "a" * 40, "b" * 40
 
-# The fixture's tools/checks.py: `unit` passes while the committed file `verdict` says pass; a change selects it alone,
-# while no change (a commit already on origin/main) selects every check, `other` too, as tools/checks.py does.
+# The fixture's tools/checks.py: `unit` passes while the committed file `verdict` says pass; `always_ok` passes when
+# `two_steps` exists. A change selects `unit` (and `always_ok` when `two_steps` exists), while no change (a commit
+# already on origin/main) selects every check, `other` too, as tools/checks.py does.
 STUB = '''import os, sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -32,14 +33,22 @@ NAMES = ["unit", "other"]
 class Selection:
     def __init__(self, paths):
         self.checks = {"unit": sorted(paths)}
+        self.unowned = []
 def select(paths):
     return Selection(paths)
-if __name__ == "__main__" and sys.argv[1:] == ["verify"]:
+def cache_keys(root, tree, names, *, full_tree=False, env=None):
+    if full_tree:
+        return {name: tree for name in names}
+    steps = [verify.Step(name, [], inputs=("verdict", "notes.txt") if name == "unit" else ()) for name in names]
+    return verify.tree_keys(root, tree, steps, env=env)
+if __name__ == "__main__" and sys.argv[1:] == ["verify", "--keep-going"]:
     verdict = (ROOT / "verdict").read_text().strip()
     base = os.environ.get("FATHERS_CHECK_BASE")
     code = f"print('unit ran with base', {base!r}); raise SystemExit({verdict!r} != 'pass')"
-    step = verify.Step("unit", [sys.executable, "-c", code], 0.1, 1, ROOT)
-    sys.exit(verify.gate([step], root=ROOT))
+    steps = [verify.Step("unit", [sys.executable, "-c", code], 0.1, 1, ROOT, inputs=("verdict", "notes.txt"))]
+    if (ROOT / "two_steps").exists():
+        steps.append(verify.Step("always_ok", [sys.executable, "-c", "print('always_ok ran')"], 0.1, 1, ROOT))
+    sys.exit(verify.gate(steps, root=ROOT, keep_going=True))
 if __name__ == "__main__":
     sys.exit(2)
 '''
@@ -167,6 +176,34 @@ class PushTests(unittest.TestCase):
         with open(self.root / "tools/checks.py", "a") as stub:
             stub.write("# changed in the checkout, not in the commit\n")
         self.assertIsNone(_pending(self.root, env, sha))
+
+    def test_keep_going_records_passing_steps_even_when_another_step_fails(self) -> None:
+        self.assertEqual(0, self.push("main").returncode)
+        (self.root / "two_steps").write_text("1\n")
+        (self.root / "verdict").write_text("fail\n")
+        self.git("add", "two_steps", "verdict")
+        self.git("commit", "-qm", "one fails, one passes")
+        refused = self.push("main")
+        self.assertEqual(1, refused.returncode)
+        self.assertIn("[always_ok] always_ok ran", refused.stdout)
+        # `always_ok` was recorded in fathers-verified despite `unit` failing.
+        common = Path(self.git("rev-parse", "--path-format=absolute", "--git-common-dir"))
+        record = (common / "fathers-verified").read_text(encoding="utf-8")
+        self.assertIn("\talways_ok\n", record)
+
+    def test_pending_uses_per_check_input_cache_keys(self) -> None:
+        self.assertEqual(0, self.push("main").returncode)
+        # Touch an unrelated file: `verdict` is unchanged, so `unit`'s subtree cache key still hits.
+        (self.root / "unrelated.txt").write_text("hello\n")
+        self.git("add", "unrelated.txt")
+        self.git("commit", "-qm", "unrelated change")
+        sha = self.git("rev-parse", "HEAD")
+        env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+        self.assertEqual(set(), _pending(self.root, env, sha))
+        again = self.push("main")
+        self.assertEqual(0, again.returncode, again.stderr)
+        self.assertIn("already passed its checks", again.stdout)
+        self.assertNotIn("unit ran", again.stdout)
 
 
 def _pending(root: Path, env: dict[str, str], sha: str) -> set[str] | None:

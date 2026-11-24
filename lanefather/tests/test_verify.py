@@ -8,6 +8,7 @@ import pathlib
 import signal
 import subprocess
 import sys
+import threading
 import time
 from typing import Any
 import unittest
@@ -443,6 +444,7 @@ class VerifyProgressHeartbeatTests(LaneCase):
 
     def test_queued_check_shows_slotfather_queue_wait_as_its_own_state(self):
         self.env["LANEFATHER_VERIFY_HEARTBEAT"] = "0.1"
+        self.env["PYTHONUNBUFFERED"] = "1"
         queue_hold = self.tmp / "queue-hold"
         self.env["FAKE_SLOTFATHER_QUEUE_HOLD"] = str(queue_hold)
         # Make verify.sh wrap its check execution under `slotfather run` like a real queued verifier.
@@ -459,15 +461,35 @@ class VerifyProgressHeartbeatTests(LaneCase):
         )
         self.addCleanup(close_process, proc)
         self.addCleanup(queue_hold.touch)
+        lines: list[str] = []
+        two_heartbeats = threading.Event()
+
+        def read_output() -> None:
+            assert proc.stdout is not None
+            try:
+                queued_count = 0
+                for line in proc.stdout:
+                    lines.append(line)
+                    if "lane-queued [queued]" in line:
+                        queued_count += 1
+                        if queued_count >= 2:
+                            two_heartbeats.set()
+            finally:
+                two_heartbeats.set()
+
+        reader = threading.Thread(target=read_output, daemon=True)
+        reader.start()
         waiting_marker = pathlib.Path(str(queue_hold) + ".waiting")
         deadline = time.monotonic() + 30
         while not waiting_marker.exists():
             self.assertIsNone(proc.poll(), "lanefather check exited before entering slotfather queue")
             self.assertLess(time.monotonic(), deadline, "queued check did not enter slotfather")
             time.sleep(0.05)
-        time.sleep(0.45)  # sleep-ok: let >=2 heartbeat intervals (0.1s) elapse while queued in slotfather
+        self.assertTrue(two_heartbeats.wait(timeout=30), "".join(lines))
         queue_hold.touch()
-        output, _ = proc.communicate(timeout=30)
+        proc.wait(timeout=30)
+        reader.join(timeout=5)
+        output = "".join(lines)
         self.assertEqual(proc.returncode, 0, output)
         queued_lines = [line for line in output.splitlines() if "lane-queued [queued]" in line]
         self.assertGreaterEqual(len(queued_lines), 2, output)

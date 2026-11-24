@@ -312,6 +312,43 @@ class CacheTests(unittest.TestCase):
         common = Path(run_git(root, "rev-parse", "--path-format=absolute", "--git-common-dir"))
         self.assertFalse((common / verify.VERIFIED_RECORD).exists())
 
+    def test_subtree_inputs_cache_skips_unchanged_packages_and_invalidates_changed_ones(self) -> None:
+        root = repository(self)
+        (root / "pkg_a").mkdir()
+        (root / "pkg_b").mkdir()
+        (root / "pkg_a" / "a.py").write_text("a = 1\n")
+        (root / "pkg_b" / "b.py").write_text("b = 1\n")
+        run_git(root, "add", ".")
+        run_git(root, "commit", "-qm", "two packages")
+
+        counter_a = root.parent / f"{root.name}-a"
+        counter_b = root.parent / f"{root.name}-b"
+        counter_root = root.parent / f"{root.name}-root"
+        for c in (counter_a, counter_b, counter_root):
+            self.addCleanup(lambda p=c: p.unlink(missing_ok=True))
+
+        steps = [
+            verify.Step("a", [PY, "-c", f"open({str(counter_a)!r}, 'a').write('x')"], cwd=root, inputs=("pkg_a/",)),
+            verify.Step("b", [PY, "-c", f"open({str(counter_b)!r}, 'a').write('x')"], cwd=root, inputs=("pkg_b/",)),
+            verify.Step("root", [PY, "-c", f"open({str(counter_root)!r}, 'a').write('x')"], cwd=root),
+        ]
+        code, _ = self.gate(root, steps)
+        self.assertEqual(0, code)
+        self.assertEqual(("x", "x", "x"), (counter_a.read_text(), counter_b.read_text(), counter_root.read_text()))
+
+        # Edit pkg_a only: `b` hits cache, `a` and `root` (full tree) re-run.
+        (root / "pkg_a" / "a.py").write_text("a = 2\n")
+        run_git(root, "commit", "-qam", "edit pkg_a")
+        code, text = self.gate(root, steps)
+        self.assertEqual(0, code)
+        self.assertIn("verify: b already passed on tree", text)
+        self.assertEqual(("xx", "x", "xx"), (counter_a.read_text(), counter_b.read_text(), counter_root.read_text()))
+
+        # full_tree=True ignores subtree hits and keys every step on HEAD^{tree}.
+        code, _ = self.gate(root, steps, full_tree=True)
+        self.assertEqual(0, code)
+        self.assertEqual(("xxx", "xx", "xx"), (counter_a.read_text(), counter_b.read_text(), counter_root.read_text()))
+
 
 class LaneTests(unittest.TestCase):
     CATALOG: ClassVar = [("verify:a", step("a", "print('a ran')")), ("verify:b%20c", step("b c", "print('b ran')"))]

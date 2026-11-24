@@ -61,22 +61,29 @@ def verified(root: Path, env: Mapping[str, str]) -> verify.Verified | None:
 
 
 def pending(root: Path, env: Mapping[str, str], sha: str) -> set[str] | None:
-    """The checks `sha` selects that have not passed on its tree (none for a commit this hook passed); None when this
-    hook cannot tell, because the commit's tools/checks.py is not this hook's own."""
+    """The checks `sha` selects that have not passed on its input trees (none for a commit this hook passed); None when
+    this hook cannot tell, because the commit's tools/checks.py or tools/verify.py is not this hook's own."""
     cache = verified(root, env)
     if cache is None:
         return None
     if cache.commit_passed(sha):
         return set()
-    ours = git(root, env, "hash-object", str(TOOLS / "checks.py"))
-    if ours is None or ours != git(root, env, "rev-parse", "--verify", "--quiet", f"{sha}:tools/checks.py"):
-        return None
+    for tool_file in ("checks.py", "verify.py"):
+        ours = git(root, env, "hash-object", str(TOOLS / tool_file))
+        if ours is None or ours != git(root, env, "rev-parse", "--verify", "--quiet", f"{sha}:tools/{tool_file}"):
+            return None
     base = base_of(root, env, sha)
     listed = git(root, env, "diff", "--name-only", "-z", base, sha, "--") if base else None
     paths = [path for path in (listed or "").split("\0") if path]
-    names = set(checks.select(paths).checks) if paths else set(checks.NAMES)
+    selection = checks.select(paths) if paths else None
+    names = list(selection.checks) if selection is not None else list(checks.NAMES)
     tree = git(root, env, "rev-parse", f"{sha}^{{tree}}")
-    return None if tree is None else names - cache.passed(tree)
+    if tree is None:
+        return None
+    if hasattr(checks, "cache_keys"):
+        keys = checks.cache_keys(root, tree, names, full_tree=bool(getattr(selection, "unowned", None)), env=env)
+        return set(names) - cache.passed_keys(keys)
+    return set(names) - cache.passed(tree)
 
 
 def check_commit(root: Path, env: Mapping[str, str], sha: str) -> tuple[int, int | None]:
@@ -98,7 +105,8 @@ def check_commit(root: Path, env: Mapping[str, str], sha: str) -> tuple[int, int
             run_env["FATHERS_CHECK_BASE"] = base
         else:
             run_env.pop("FATHERS_CHECK_BASE", None)
-        return verify.run_forwarding([sys.executable, "tools/checks.py", "verify"], cwd=Path(directory), env=run_env)
+        return verify.run_forwarding([sys.executable, "tools/checks.py", "verify", "--keep-going"],
+                                     cwd=Path(directory), env=run_env)
     finally:
         subprocess.run(["git", "worktree", "remove", "--force", directory], cwd=root, env=dict(env),
                        capture_output=True)

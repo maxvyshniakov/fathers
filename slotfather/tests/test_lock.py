@@ -111,7 +111,10 @@ class LockTests(SlotCase):
         self.processes_a = self.locked("a", then="a2")
         self.started("a")
         second = self.locked("b", then=then)
-        self.wait_for(lambda: self.entries().get("b", {}).get("state") == "waiting", "b to give up its slot")
+        self.wait_for(
+            lambda: self.entries().get("b", {}).get("state") == "waiting" and "lock_owner" in self.raw("b"),
+            "b to give up its slot and record its lock waiter",
+        )
         return second
 
     def test_a_waiter_killed_outright_leaves_no_mark_the_next_look_keeps(self) -> None:

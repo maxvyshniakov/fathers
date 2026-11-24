@@ -20,7 +20,7 @@ everything. A tree without changes since its base verifies everything.
 """
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 import fnmatch
@@ -52,6 +52,8 @@ DOCUMENTATION = ("LICENSE", ".gitignore", ".github/dependabot.yml")
 PACKAGE_DOCUMENTATION = ("GLOSSARY.md",)
 # Root configuration the root tool tests cover. A file not named here (a package.json, say) selects everything.
 ROOT_CONFIG = (".lanefather.toml",)
+# Gate and runner files: a change to either selects every check and invalidates every check's cache key.
+RUNNER_INPUTS = ("tools/checks.py", "tools/verify.py")
 
 
 @dataclass(frozen=True)
@@ -60,6 +62,7 @@ class Check:
     memory: float  # GiB at its peak, what the runner fits beside the others (measured 2026-11-13: lint 0.4-0.6,
     # tests 0.1-0.2)
     timeout: int = 15  # minutes
+    inputs: tuple[str, ...] = ()  # repo-relative paths/prefixes (ending in '/'); empty => full HEAD^{tree}
 
 
 TESTS = {
@@ -69,53 +72,67 @@ TESTS = {
     "godfather": ["-s", "tests", "-t", "tests"],
     "tokenfather": ["-s", "tests"],
 }
+COMMON_VERSION_INPUTS = tuple(
+    path for pkg in PACKAGES for path in (
+        f"{pkg}/CHANGELOG.md",
+        f"{pkg}/pyproject.toml",
+        f"{pkg}/src/{pkg}/version.py",
+        f"{pkg}/{pkg}/__init__.py",
+    )
+)
+
+
+def _package_inputs(name: str, kind: str) -> tuple[str, ...]:
+    base = (f"{name}/", "common/", *RUNNER_INPUTS, f".github/workflows/{name}.yml")
+    if kind == "lint":
+        return (*base, "tools/ruff.toml")
+    if name == "lanefather":
+        return (*base, "slotfather/slotfather", "slotfather/src/", "spawnfather/spawnfather/")
+    if name == "godfather":
+        return (
+            *base,
+            "slotfather/slotfather",
+            "slotfather/src/",
+            "spawnfather/spawnfather/events.py",
+            "spawnfather/spawnfather/dashboard.py",
+            "lanefather/lanefather/events.py",
+            "lanefather/lanefather/dashboard.py",
+        )
+    return base
+
+
 CHECKS = [
     *(check for name in PACKAGES for check in (
-        Check(f"{name} lint", 0.7),
-        Check(f"{name} tests", 0.3, 30 if name == "lanefather" else 15),
+        Check(f"{name} lint", 0.7, inputs=_package_inputs(name, "lint")),
+        Check(f"{name} tests", 0.3, 30 if name == "lanefather" else 15, inputs=_package_inputs(name, "tests")),
     )),
-    Check("common lint", 0.4),
-    Check("common tests", 0.2),
+    Check("common lint", 0.4, inputs=("common/", "install.py", ".github/workflows/common.yml", *RUNNER_INPUTS)),
+    Check("common tests", 0.2, inputs=(
+        "common/", "install.py", ".github/workflows/common.yml", *RUNNER_INPUTS,
+        "slotfather/src/", "spawnfather/spawnfather/", *COMMON_VERSION_INPUTS,
+    )),
     Check("tools", 0.2),
     Check("test hygiene", 0.2),
 ]
+CHECKS_BY_NAME = {check.name: check for check in CHECKS}
 ALWAYS = ("tools", "test hygiene")
 NAMES = [check.name for check in CHECKS]
+
+
+def _matches_input(path: str, spec: str) -> bool:
+    return path.startswith(spec) if spec.endswith("/") else path == spec
 
 
 def owners(path: str) -> set[str] | None:
     """The checks a changed path selects besides the root checks; None for a path no rule knows."""
     first, _, rest = path.partition("/")
-    if first in PACKAGES:
-        if rest in PACKAGE_DOCUMENTATION or rest.startswith("docs/"):
-            return set()
-        chosen = {f"{first} lint", f"{first} tests"}
-        if first == "slotfather" and (rest == "slotfather" or rest.startswith("src/")):
-            chosen.add("godfather tests")  # its contract tests run ../slotfather
-        if first == "spawnfather" and rest == "spawnfather/events.py":
-            chosen.add("godfather tests")  # godfather/tests/test_procs.py checks every Spawnfather event kind
-        if (first == "slotfather" and rest.startswith("src/")) or (
-            first == "spawnfather" and rest.startswith("spawnfather/")
-        ):
-            chosen.add("common tests")  # common/tests/test_agents.py checks Slotfather/Spawnfather agreement
-        if rest in ("CHANGELOG.md", "pyproject.toml", f"src/{first}/version.py", f"{first}/__init__.py"):
-            chosen.add("common tests")  # common/tests/test_changelog.py checks layout & version lockstep
-        return chosen
-    if first == "common":
-        return {name for name in NAMES if name.split()[0] in PACKAGES} | {"common lint", "common tests"}
-    if path == "install.py":
-        return {"common lint", "common tests"}
-    if path == "tools/ruff.toml":
-        return {f"{name} lint" for name in PACKAGES}
-    if first == "tools":
+    if first in PACKAGES and (rest in PACKAGE_DOCUMENTATION or rest.startswith("docs/")):
         return set()
-    if path.startswith(".github/workflows/"):
-        workflow = Path(path).stem
-        if workflow in PACKAGES:
-            return {f"{workflow} lint", f"{workflow} tests"}
-        if workflow == "package":  # the shape the five call: tools/test_checks.py reads it
-            return set()
-        return {"common lint", "common tests"} if workflow == "common" else None
+    matched = {check.name for check in CHECKS if any(_matches_input(path, spec) for spec in check.inputs)}
+    if matched:
+        return matched
+    if first == "tools" or path == ".github/workflows/package.yml":
+        return set()
     if path in ROOT_CONFIG or first == ".githooks":
         return set()
     if path in DOCUMENTATION or first in ("docs", "notes") or ("/" not in path and path.endswith(".md")):
@@ -178,13 +195,12 @@ def plan(root: Path, base: str) -> dict[str, object]:
                        for name, chosen in selection.checks.items()]}
 
 
-def selected(environment: Mapping[str, str]) -> list[Check]:
-    """The checks to run, in CHECKS order: every one (FATHERS_CHECKS=all), or those the changes since the merge-base
-    with FATHERS_CHECK_BASE (default origin/main) select; everything when nothing changed or there is no such base."""
+def _selected_with_full_tree(environment: Mapping[str, str]) -> tuple[list[Check], bool]:
     wanted = environment.get("FATHERS_CHECKS", "")
     if wanted not in ("", "all"):
         raise ValueError(f"FATHERS_CHECKS must be 'all' or unset, not {wanted!r}")
     names = NAMES
+    full_tree = False
     if wanted != "all":
         base = environment.get("FATHERS_CHECK_BASE") or DEFAULT_BASE
         try:
@@ -193,31 +209,48 @@ def selected(environment: Mapping[str, str]) -> list[Check]:
         except subprocess.CalledProcessError:
             paths = []  # no such base here: verify everything
         if paths:
-            names = list(select(paths).checks)
-    return [check for check in CHECKS if check.name in names]
+            selection = select(paths)
+            names = list(selection.checks)
+            full_tree = bool(selection.unowned)
+    return [check for check in CHECKS if check.name in names], full_tree
+
+
+def selected(environment: Mapping[str, str]) -> list[Check]:
+    """The checks to run, in CHECKS order: every one (FATHERS_CHECKS=all), or those the changes since the merge-base
+    with FATHERS_CHECK_BASE (default origin/main) select; everything when nothing changed or there is no such base."""
+    return _selected_with_full_tree(environment)[0]
 
 
 def step(check: Check) -> runner.Step:
-    """A check as the runner's step: `checks.py run NAME` in the root, with its memory and timeout."""
+    """A check as the runner's step: `checks.py run NAME` in the root, with its memory, timeout and cache inputs."""
     return runner.Step(check.name, [sys.executable, str(ROOT / "tools/checks.py"), "run", check.name], check.memory,
-                       check.timeout, ROOT)
+                       check.timeout, ROOT, check.inputs)
+
+
+def cache_keys(root: Path, tree: str, names: Iterable[str], *, full_tree: bool = False,
+               env: Mapping[str, str] | None = None) -> dict[str, str]:
+    """Per-check cache keys for `tree`, from each check's declared `inputs` (or full `tree` when `full_tree`)."""
+    if full_tree:
+        return {name: tree for name in names}
+    steps = [step(CHECKS_BY_NAME[name]) if name in CHECKS_BY_NAME else runner.Step(name, []) for name in names]
+    return runner.tree_keys(root, tree, steps, env=env)
 
 
 def verify(arguments: list[str]) -> int:
-    """`checks.py verify [--keep-going] [--fresh]`: the selected checks under one lease, skipping those this tree
+    """`checks.py verify [--keep-going] [--fresh]`: the selected checks under one lease, skipping those whose inputs
     passed already (--fresh runs them again)."""
     unknown = [argument for argument in arguments if argument not in ("--keep-going", "--fresh")]
     if unknown:
         raise ValueError(f"verify takes --keep-going and --fresh, not {' '.join(unknown)}")
     environment = dict(os.environ)
-    checks = selected(environment)
+    checks, full_tree = _selected_with_full_tree(environment)
     slots = environment.get("FATHERS_VERIFY_SLOTS") or "2"
     leased = runner.lease_self(slots, "verify", [sys.executable, str(ROOT / "tools/checks.py"), "verify", *arguments],
                                root=ROOT, environment=environment)
     if leased is not None:
         return leased
     return runner.gate([step(check) for check in checks], root=ROOT, keep_going="--keep-going" in arguments,
-                       use_cache="--fresh" not in arguments, env=environment)
+                       use_cache="--fresh" not in arguments, full_tree=full_tree, env=environment)
 
 
 def lint_tools(*arguments: str) -> list[str]:
@@ -261,19 +294,37 @@ class FileTestResult:
     skipped: int
 
 
+def _positive_int(raw: str) -> int | None:
+    try:
+        value = int(raw.strip())
+    except ValueError:
+        return None
+    return value if value > 0 else None
+
+
 def test_workers(environment: Mapping[str, str] | None = None) -> int:
-    """Bounded worker count for parallel test-file execution; FATHERS_TEST_WORKERS overrides the default."""
+    """Bounded worker count for parallel test-file execution; FATHERS_TEST_WORKERS overrides the default.
+    Under a Slotfather lease or FATHERS_VERIFY_SLOTS, scales to max(2, min(MAX_DEFAULT_TEST_WORKERS, slots))
+    (bounded by CPU count) so concurrent package suites do not oversubscribe a small lease."""
     env = os.environ if environment is None else environment
     raw = env.get("FATHERS_TEST_WORKERS", "").strip()
-    if not raw:
-        return min(MAX_DEFAULT_TEST_WORKERS, os.cpu_count() or 1)
-    try:
-        value = int(raw)
-    except ValueError:
-        raise ValueError(f"FATHERS_TEST_WORKERS must be a positive integer, not {raw!r}") from None
-    if value < 1:
-        raise ValueError(f"FATHERS_TEST_WORKERS must be a positive integer, not {raw!r}")
-    return value
+    if raw:
+        try:
+            value = int(raw)
+        except ValueError:
+            raise ValueError(f"FATHERS_TEST_WORKERS must be a positive integer, not {raw!r}") from None
+        if value < 1:
+            raise ValueError(f"FATHERS_TEST_WORKERS must be a positive integer, not {raw!r}")
+        return value
+    cpus = os.cpu_count() or 1
+    slots = _positive_int(env.get("SLOTFATHER_SLOTS", ""))
+    if slots is None and env.get("SLOTFATHER_LEASE"):
+        slots = _positive_int(env.get("SLOTFATHER_COUNT", ""))
+    if slots is None:
+        slots = _positive_int(env.get("FATHERS_VERIFY_SLOTS", ""))
+    if slots is not None:
+        return min(cpus, max(2, min(MAX_DEFAULT_TEST_WORKERS, slots)))
+    return min(MAX_DEFAULT_TEST_WORKERS, cpus)
 
 
 def discover_test_files(directory: Path, discover_args: list[str]) -> tuple[list[Path], str | None]:

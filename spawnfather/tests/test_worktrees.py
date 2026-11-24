@@ -250,6 +250,30 @@ class MoreGuardTests(WorktreeCase):
         found = worktrees.refusal(item, str(self.repo), here, cwds, items)
         self.assertIn(f"pid {child.pid} (sleep 600; its working directory is unknown)", found or "")
 
+    def test_a_setuid_binary_with_unknown_cwd_does_not_refuse_removal(self):
+        import stat
+        from unittest import mock
+        from spawnfather import procs
+        path = self.worktree("setuid", "setuid")
+        me = os.getuid()
+        fake = procs.Proc(
+            pid=999999, ppid=1, pgid=999999, uid=me, cpu=0.0, tty="?",
+            start="Mon Jan  1 00:00:00 2026", cmd="/usr/bin/top -l 1",
+        )
+        table = procs.Table({fake.pid: fake})
+        items = worktrees.listing(str(self.repo)) or []
+        item = next(i for i in items if i["path"] == str(path))
+        fake_stat = mock.Mock(st_mode=stat.S_IFREG | stat.S_ISUID | 0o555)
+        real_stat = os.stat
+
+        def stat_side_effect(target: Any, *args: Any, **kwargs: Any) -> Any:
+            return fake_stat if target == "/usr/bin/top" else real_stat(target, *args, **kwargs)
+
+        with mock.patch.object(worktrees.os, "stat", side_effect=stat_side_effect), \
+                mock.patch.object(procs, "identities", return_value={fake.pid: fake.start}):
+            self.assertEqual(([], []), worktrees.users(str(path), table, {}))
+            self.assertIsNone(worktrees.refusal(item, str(self.repo), table, {}, items))
+
 
 class OwnedTests(WorktreeCase):
     def test_own_resource_then_reap_removes_it_and_its_merged_branch(self):
