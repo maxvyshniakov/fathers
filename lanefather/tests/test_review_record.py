@@ -4,7 +4,7 @@
 - All 8 verdicts (`Absent`, `Running`, `Died`, `Failed`, `PartialPanel`, `Exempt`, `Unmarked`, `Complete`), with
   `PartialPanel` separated from hard `Failed`.
 - Named mutators (`begin`, `spawn_and_begin`, `finish`, `fail`, `exempt`, `mark`, `open_pre_land_fix`,
-  `attach_fix_lane`, `record_ticket`), verifying `open_pre_land_fix` writes only to `.review.json` while
+  `record_ticket`), verifying `open_pre_land_fix` writes only to `.review.json` while
   `pre_land_fix(record)` preserves the guarded legacy `record['pre_land_fix']` read fallback.
 """
 from __future__ import annotations
@@ -77,8 +77,6 @@ def _payload_for_event(event: ReviewEvent, existing: dict[str, Any] | None, *, p
         return {**(existing or {}), "status": "finished"}
     if event is ReviewEvent.PRE_LAND_FIX:
         return {**(existing or {}), "status": "finished", "pre_land_fix": {"reviewed_sha": "abc"}}
-    if event is ReviewEvent.FIX_LANE:
-        return {**(existing or {}), "status": "finished", "fix_lane": "a-review-fixes"}
     return {**(existing or {}), "status": "finished", "issue": "https://example.test/1"}
 
 
@@ -270,7 +268,7 @@ class VerdictAndReadSurfaceTests(unittest.TestCase):
         partial_opt = ReviewRecord.from_raw("a", partial_raw, panel_required=False)
         self.assertIsInstance(partial_opt.verdict, Unmarked)
 
-    def test_attach_fix_lane_and_record_ticket_transitions(self) -> None:
+    def test_record_ticket_and_legacy_fix_lane_fallback(self) -> None:
         live_pid = os.getpid()
         ReviewRecord.begin(self.store, "ship-abc", {"kind": "overall"}, pid=live_pid, log=None, effort="medium")
         ReviewRecord.finish(
@@ -284,10 +282,10 @@ class VerdictAndReadSurfaceTests(unittest.TestCase):
         filed_ticket = ReviewRecord.record_ticket(self.store, "ship-abc", issue="https://github.com/x/y/issues/1")
         self.assertEqual((filed_ticket.raw or {}).get("issue"), "https://github.com/x/y/issues/1")
         self.assertNotIn("issue_error", filed_ticket.raw or {})
-
-        attached = ReviewRecord.attach_fix_lane(self.store, "ship-abc", "fix-1")
-        self.assertEqual((attached.raw or {}).get("fix_lane"), "fix-1")
         self.assertEqual([r.label for r in ReviewRecord.all(self.store)], ["ship-abc"])
+
+        legacy = ReviewRecord.from_raw("old", {"status": "finished", "fix_lane": "old-review-fixes"})
+        self.assertEqual(legacy.fix_lane(), "old-review-fixes")
 
     def test_spawn_and_begin_starts_detached_process_and_records_pid(self) -> None:
         log = self.tmp / "logs" / "review-bg.log"

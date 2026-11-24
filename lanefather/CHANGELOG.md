@@ -8,6 +8,16 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
 
 ### Added
 
+- Fix lane kind and atomic hand-over transaction (fathers#45 Part (b)):
+  - Lane records now carry `kind: "lane" | "fix"` (`lifecycle.kind_of` defaults legacy records without `kind` to
+    `"fix"` when `review_fix_of` is set, else `"lane"`), while preserving `review_fix_of` / `review_fix_of_all`
+    for compatibility.
+  - `lanefather review <id> --fix-lane` now executes one `lifecycle.hand_over` transaction under the `state` lock:
+    clearing the parent's `worktree` and recording `handed_over`, registering the fix lane directly as `active`
+    (`kind: "fix"`) so no `planned` lane ever holds a worktree, rolling back on write failure so an interrupted
+    hand-over never leaves both lanes owning the worktree, and deriving `fix_lane` from lane records
+    (`ReviewRecord.fix_lane`, with legacy receipt fallback) instead of writing a separate `fix_lane` field to
+    `<id>.review.json`.
 - Review run lifecycle under one lock with `(pid, start)` process identity (fathers#60): primary and delta review runs
   now record `start` (UTC `lstart` via `fathers_common.proc`) and their checkout path on `<label>.review.json`.
   Recycled PIDs with a mismatched start time read as `Died` (with bare-PID fallback preserved for legacy receipts

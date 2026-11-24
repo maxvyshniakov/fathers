@@ -51,7 +51,6 @@ class ReviewEvent(StrEnum):
     RECORD = "record"
     MARK = "mark"
     PRE_LAND_FIX = "pre_land_fix"
-    FIX_LANE = "fix_lane"
     TICKET = "ticket"
     DELTA_START = "delta_start"
     DELTA_FINISH = "delta_finish"
@@ -72,7 +71,6 @@ REVIEW_TRANSITIONS: dict[tuple[ReceiptPhase, ReviewEvent], ReceiptPhase] = {
     (ReceiptPhase.FAILED, ReviewEvent.RECORD): ReceiptPhase.FINISHED,
     (ReceiptPhase.FINISHED, ReviewEvent.MARK): ReceiptPhase.FINISHED,
     (ReceiptPhase.FINISHED, ReviewEvent.PRE_LAND_FIX): ReceiptPhase.FINISHED,
-    (ReceiptPhase.FINISHED, ReviewEvent.FIX_LANE): ReceiptPhase.FINISHED,
     (ReceiptPhase.FINISHED, ReviewEvent.TICKET): ReceiptPhase.FINISHED,
     (ReceiptPhase.FINISHED, ReviewEvent.DELTA_START): ReceiptPhase.FINISHED,
     (ReceiptPhase.FINISHED, ReviewEvent.DELTA_FINISH): ReceiptPhase.FINISHED,
@@ -1160,6 +1158,57 @@ class ReviewRecord:
                     return PreLandFix.from_dict(legacy)
         return None
 
+    def fix_lane(
+        self,
+        store: state.Store | None = None,
+        *,
+        record: Record | None = None,
+    ) -> str | None:
+        """Follow-up fix lane for this review, derived from lane records with legacy receipt `fix_lane` fallback."""
+        if record is not None:
+            raw_ho: Any = record.get("handed_over")
+            if isinstance(raw_ho, dict):
+                to_id = cast(dict[str, Any], raw_ho).get("to")
+                if isinstance(to_id, str) and to_id:
+                    return to_id
+        if store is not None:
+            damaged: list[Path] = []
+            all_lanes = store.lanes(damaged=damaged)
+            parent_rec = record
+            if parent_rec is None:
+                parent_rec = next((lane for lane in all_lanes if lane.get("id") == self.label), None)
+            if parent_rec is not None:
+                raw_ho = parent_rec.get("handed_over")
+                if isinstance(raw_ho, dict):
+                    to_id = cast(dict[str, Any], raw_ho).get("to")
+                    if isinstance(to_id, str) and to_id:
+                        return to_id
+            raw_common = parent_rec.get("common_dir") if isinstance(parent_rec, dict) else None
+            common = raw_common if isinstance(raw_common, str) and raw_common else None
+            scoped = state.of_project(all_lanes, common)
+            candidates = [
+                lane for lane in scoped
+                if lane.get("id") != self.label
+                and self.label in state.fix_parents(lane)
+                and isinstance(lane.get("id"), str)
+                and lane["id"]
+            ]
+            if candidates:
+                candidates.sort(
+                    key=lambda lane: (
+                        1 if lifecycle.occupying(lane) else 0,
+                        state.lane_created_of(lane) or "",
+                        str(lane["id"]),
+                    ),
+                    reverse=True,
+                )
+                return str(candidates[0]["id"])
+        if self.raw is not None:
+            raw_fix = self.raw.get("fix_lane")
+            if isinstance(raw_fix, str) and raw_fix:
+                return raw_fix
+        return None
+
     def reviewer_views(self) -> list[dict[str, Any]]:
         """Each reviewer of a finished review with its own findings (fathers#151)."""
         payload = self.raw or {}
@@ -2148,25 +2197,6 @@ class ReviewRecord:
                 lane_created=lane_created,
             )
         return updated_rev, fix_round
-
-    @classmethod
-    def attach_fix_lane(
-        cls,
-        store: state.Store,
-        lane_id: str,
-        fix_id: str,
-        *,
-        record: Record | None = None,
-        lane_created: str | None = None,
-    ) -> ReviewRecord:
-        expected = lane_created if lane_created is not None else state.lane_created_of(record)
-        return cls._transition(
-            store,
-            lane_id,
-            ReviewEvent.FIX_LANE,
-            lambda existing: {**(existing or {}), "fix_lane": fix_id},
-            lane_created=expected,
-        )
 
     @classmethod
     def record_ticket(

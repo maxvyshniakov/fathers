@@ -430,7 +430,7 @@ def on_demand(spawnfather: lifetimes.Spawnfather, record: Record, *, clean_stale
     """Register what the lane record names before a removal (a lane from before the upgrade, a registration that
     failed): a fix lane first takes its parent's worktree over. One line per path Spawnfather refused."""
     if clean_stale_base:
-        parent = state.hand_over_parent(record)
+        parent = state.hand_over_parent(record) if lifecycle.is_fix_lane(record) else None
         if parent is not None:
             spawnfather.hand(lifetimes.owner({**record, "id": parent}), lifetimes.owner(record), "worktree")
         # The base checkouts a killed red check left in the scratch (#568) are Lanefather's own throwaway worktrees:

@@ -124,7 +124,8 @@ class FixLaneCapTests(LaneCase):
         self.assertIn("3 lanes are planned or active", self.lane("next", "--start", ok=False))
         self.lane("review", "a", "--fix-lane")
         fix = json.loads((self.state / "a-review-fixes.json").read_text())
-        self.assertEqual((fix["review_fix_of"], fix["cap_source"]), ("a", "fix-lane of a"))
+        self.assertEqual((fix["status"], fix["kind"], fix["review_fix_of"], fix["cap_source"]),
+                         ("active", "fix", "a", "fix-lane of a"))
         self.assertIn("start a-review-fixes", ledger := (self.state / "ledger.log").read_text())
         self.assertIn("(fix-lane of a)", ledger)
         started = [json.loads(line) for line in self.events.read_text().splitlines()
@@ -177,6 +178,169 @@ class FixParentUnitTests(ScratchCase):
                     store = state.Store(cfg, directory=self.state)
                     self.assertEqual(lanes.fix_parent(store, {"review_fix_of": "p", "worktree": worktree}), expected)
                     self.assertIsNone(lanes.fix_parent(store, {"review_fix_of": "p", "worktree": str(self.tmp / "x")}))
+
+
+class FixLaneKindAndAtomicHandOverTests(LaneCase):
+    """fathers#45 (b): fix lane as a lane kind (`kind: "lane" | "fix"`) and one atomic `hand_over` transaction."""
+
+    def _landed_parent(self) -> str:
+        self.review_text.write_text(TWO_FINDINGS)
+        worktree = self.created("a", "lib/**")
+        self.commit(worktree, {"lib/api.txt": "foo\nbaz\n"})
+        self.lane("check", "a")
+        self.lane("land", "a")
+        self.lane("review", "a")
+        return worktree
+
+    def test_kind_is_recorded_on_normal_and_fix_lanes_and_fix_lane_is_derived(self) -> None:
+        from unittest.mock import patch
+
+        from lanefather import config, review_record, state
+
+        worktree = self._landed_parent()
+        self.assertEqual(self.record("a")["kind"], "lane")
+        self.start("b", "docs/**")
+        self.assertEqual(self.record("b")["kind"], "lane")
+        self.start("batch-fix", "calls/**", extra=("--fix-of", "a"))
+        self.assertEqual(self.record("batch-fix")["kind"], "fix")
+        self.assertEqual(self.record("batch-fix")["status"], "planned")
+        self.assertIsNone(self.record("batch-fix")["worktree"])
+
+        self.lane("review", "a", "--fix-lane")
+        fix = self.record("a-review-fixes")
+        self.assertEqual(fix["status"], "active")
+        self.assertEqual(fix["kind"], "fix")
+        self.assertEqual(fix["review_fix_of"], "a")
+        self.assertEqual(fix["worktree"], worktree)
+        self.assertIsNone(self.record("a")["worktree"])
+        # No planned lane holds a worktree.
+        listed = json.loads(self.lane("list", "--json"))
+        for entry in listed["lanes"]:
+            if entry["status"] == "planned":
+                self.assertIsNone(entry["worktree"])
+
+        # `fix_lane` is derived from lane records rather than written to `<id>.review.json`.
+        review_raw = json.loads((self.state / "a.review.json").read_text())
+        self.assertNotIn("fix_lane", review_raw)
+        with patch.dict("os.environ", self.env, clear=True):
+            cfg = config.load(self.repo / ".lanefather.toml")
+            store = state.Store(cfg, directory=self.state)
+            rev = review_record.ReviewRecord.load(store, "a", record=self.record("a"))
+            self.assertEqual(rev.fix_lane(store, record=self.record("a")), "a-review-fixes")
+            self.assertEqual(rev.fix_lane(store), "a-review-fixes")
+            # Legacy receipt with `fix_lane` still reads cleanly when no lane record links it.
+            legacy = review_record.ReviewRecord.from_raw("old", {"status": "finished", "fix_lane": "old-review-fixes"})
+            self.assertEqual(legacy.fix_lane(), "old-review-fixes")
+
+    def test_fault_during_hand_over_write_never_leaves_both_lanes_owning_worktree(self) -> None:
+        import os
+        from unittest.mock import patch
+
+        from lanefather import config, lanes, state
+
+        worktree = self._landed_parent()
+        self.start("other", "docs/**")
+
+        with patch.dict("os.environ", self.env, clear=True):
+            cfg = config.load(self.repo / ".lanefather.toml")
+            store = state.Store(cfg, directory=self.state)
+            real_save = store.save
+            calls = 0
+
+            def failing_second_save(rec: dict[str, Any]) -> None:
+                nonlocal calls
+                calls += 1
+                if calls == 2:
+                    raise OSError("injected write failure on second save")
+                real_save(rec)
+
+            parent_record = store.load("a")
+            with patch.object(store, "save", side_effect=failing_second_save), self.assertRaises(OSError):
+                lanes.hand_over_fix_lane(store, parent_record, "a-review-fixes", ["lib/api.txt"], "integrate/q", None)
+
+            # After the failure, `list` sees ONLY the parent owning the worktree (never both).
+            listed = json.loads(self.lane("list", "--json"))
+            owners = [entry["id"] for entry in listed["lanes"] if entry.get("worktree") == worktree]
+            self.assertEqual(owners, ["a"])
+            self.assertFalse((self.state / "a-review-fixes.json").exists())
+
+            # `adopt` sees `a` owning the worktree and refuses to let another lane take it.
+            adopt_err = self.lane("adopt", "other", worktree, "lane/a", ok=False)
+            self.assertIn("lane a owns", adopt_err)
+
+            # Even if rollback itself fails (2nd and 3rd writes fail), NEVER both lanes own the worktree.
+            calls = 0
+
+            def failing_from_second_save(rec: dict[str, Any]) -> None:
+                nonlocal calls
+                calls += 1
+                if calls >= 2:
+                    raise OSError("persistent write failure")
+                real_save(rec)
+
+            parent_record = store.load("a")
+            with patch.object(store, "save", side_effect=failing_from_second_save), self.assertRaises(OSError):
+                lanes.hand_over_fix_lane(store, parent_record, "a-review-fixes", ["lib/api.txt"], "integrate/q", None)
+
+            listed_after = json.loads(self.lane("list", "--json"))
+            owners_after = [entry["id"] for entry in listed_after["lanes"] if entry.get("worktree") == worktree]
+            self.assertEqual(owners_after, [])
+            self.assertIsNone(self.record("a")["worktree"])
+            self.assertEqual(self.record("a")["handed_over"]["to"], "a-review-fixes")
+            self.assertFalse((self.state / "a-review-fixes.json").exists())
+
+        # Retrying `review a --fix-lane` resumes the interrupted hand-over and leaves exactly one owner (`a-review-fixes`).
+        self.lane("review", "a", "--fix-lane")
+        fix = self.record("a-review-fixes")
+        self.assertEqual((fix["status"], fix["kind"], fix["worktree"]), ("active", "fix", worktree))
+        self.assertIsNone(self.record("a")["worktree"])
+        listed_resumed = json.loads(self.lane("list", "--json"))
+        owners_resumed = [entry["id"] for entry in listed_resumed["lanes"] if entry.get("worktree") == worktree]
+        self.assertEqual(owners_resumed, ["a-review-fixes"])
+        self.assertEqual(os.path.realpath(worktree), worktree)
+
+    def test_review_record_fix_lane_edge_cases(self) -> None:
+        from unittest.mock import patch
+
+        from lanefather import config, review_record, state
+
+        self._landed_parent()
+        common = self.record("a")["common_dir"]
+        # Seed a truncated/corrupt lane file to ensure `fix_lane` passes `damaged=[]` and does not crash.
+        (self.state / "corrupt.json").write_text("{not valid json")
+        # Seed another project's fix lane targeting "a" in the shared state directory.
+        (self.state / "00-foreign-fix.json").write_text(json.dumps({
+            "id": "00-foreign-fix", "status": "active", "kind": "fix", "review_fix_of": "a",
+            "ticket": "404", "branch": "lane/00-foreign-fix", "claims": [], "after": [],
+            "common_dir": "/other/repo/.git", "created": "2099-01-01T00:00:00Z",
+        }))
+        # Seed an older done fix lane and a newer active batch fix lane in the same repo.
+        (self.state / "00-batch-old.json").write_text(json.dumps({
+            "id": "00-batch-old", "status": "done", "kind": "fix", "review_fix_of": "a",
+            "review_fix_of_all": ["a", "b"], "ticket": "404", "branch": "lane/00-batch-old",
+            "claims": [], "after": [], "common_dir": common, "created": "2026-11-20T00:00:00Z",
+        }))
+        (self.state / "01-batch-live.json").write_text(json.dumps({
+            "id": "01-batch-live", "status": "active", "kind": "fix", "review_fix_of": "a",
+            "review_fix_of_all": ["a", "b"], "ticket": "404", "branch": "lane/01-batch-live",
+            "claims": [], "after": [], "common_dir": common, "created": "2026-11-21T00:00:00Z",
+        }))
+        with patch.dict("os.environ", self.env, clear=True):
+            cfg = config.load(self.repo / ".lanefather.toml")
+            store = state.Store(cfg, directory=self.state)
+            rev = review_record.ReviewRecord.load(store, "a", record=self.record("a"))
+            # Before hand-over: ignores foreign repo, prefers occupying `01-batch-live` over done `00-batch-old`.
+            self.assertEqual(rev.fix_lane(store), "01-batch-live")
+
+        # After hand-over: parent's `handed_over["to"]` beats lexicographically earlier `01-batch-live`.
+        (self.state / "corrupt.json").unlink()
+        self.lane("review", "a", "--fix-lane")
+        (self.state / "corrupt.json").write_text("{not valid json")
+        with patch.dict("os.environ", self.env, clear=True):
+            cfg = config.load(self.repo / ".lanefather.toml")
+            store = state.Store(cfg, directory=self.state)
+            rev = review_record.ReviewRecord.load(store, "a", record=self.record("a"))
+            self.assertEqual(rev.fix_lane(store), "a-review-fixes")
 
 
 if __name__ == "__main__":
