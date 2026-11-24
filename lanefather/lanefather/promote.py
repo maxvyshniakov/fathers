@@ -680,20 +680,19 @@ def promote_sha(run: PromoteRun) -> int:
                 f"finish it with {run.store.prog} promote {run.sha[:10]} --ship"
             )
         deploy_steps = {f"deploy:{step.name}" for step in run.store.project.deploy}
-        record: dict[str, Any]
+        promote_record: dict[str, Any]
         if existing is not None and _can_resume(existing, run):
-            record = existing
-            deploy_changed = run.install and record["deploy"] != run.deploy
-            record["status"] = "running"
-            record["install"] = record["install"] or run.install
+            promote_record = existing
+            deploy_changed = run.install and promote_record["deploy"] != run.deploy
+            promote_record.update(status="running", updated=journal.now())
+            promote_record["install"] = promote_record["install"] or run.install
             if run.install:
-                record["deploy"] = run.deploy
-            record["updated"] = journal.now()
-            if run.ship and not run.ship_base and record.get("ship_base"):
-                run.ship_base = record["ship_base"]
-            if record.get("pushed"):
+                promote_record["deploy"] = run.deploy
+            if run.ship and not run.ship_base and promote_record.get("ship_base"):
+                run.ship_base = promote_record["ship_base"]
+            if promote_record.get("pushed"):
                 run.pushed = True
-            recorded_steps: dict[str, dict[str, Any]] = record["steps"]
+            recorded_steps: dict[str, dict[str, Any]] = promote_record["steps"]
             start_index = len(steps)
             for index, (name, _) in enumerate(steps):
                 entry = recorded_steps.get(name)
@@ -713,7 +712,7 @@ def promote_sha(run: PromoteRun) -> int:
             ):
                 run.ship_base = existing["ship_base"]
             now = journal.now()
-            record = {
+            promote_record = {
                 "version": PROMOTE_RECORD_VERSION,
                 "sha": run.sha,
                 "branches": list(run.branches),
@@ -731,13 +730,13 @@ def promote_sha(run: PromoteRun) -> int:
                 "steps": {},
             }
             start_index = 0
-        run.record = record
+        run.record = promote_record
         _save_promote_record(run)
-        record_steps: dict[str, dict[str, Any]] = record["steps"]
+        record_steps: dict[str, dict[str, Any]] = promote_record["steps"]
         for name, step in steps[start_index:]:
             now = journal.now()
             record_steps[name] = {"status": "running", "at": now}
-            record["updated"] = now
+            promote_record["updated"] = now
             _save_promote_record(run)
             try:
                 status = step(run)
@@ -745,34 +744,29 @@ def promote_sha(run: PromoteRun) -> int:
                 evidence = dict(run.step_evidence.pop(name, {}))
                 evidence.update({"status": "failed", "at": journal.now(), "error": str(exc)})
                 record_steps[name] = evidence
-                record["ship_base"] = run.ship_base
-                record["pushed"] = run.pushed
-                record["status"] = "failed"
-                record["updated"] = journal.now()
+                promote_record.update(
+                    ship_base=run.ship_base, pushed=run.pushed, status="failed", updated=journal.now()
+                )
                 _save_promote_record(run)
                 raise
             evidence = dict(run.step_evidence.pop(name, {}))
-            record["ship_base"] = run.ship_base
-            record["pushed"] = run.pushed
+            promote_record["ship_base"] = run.ship_base
+            promote_record["pushed"] = run.pushed
             if status:
                 evidence.update({"status": "failed", "at": journal.now(), "returncode": status})
                 record_steps[name] = evidence
-                record["status"] = "failed"
-                record["updated"] = journal.now()
+                promote_record.update(status="failed", updated=journal.now())
                 _save_promote_record(run)
                 return status
             evidence.update({"status": "ok", "at": journal.now()})
             record_steps[name] = evidence
-            record["updated"] = journal.now()
+            promote_record["updated"] = journal.now()
             _save_promote_record(run)
         if all(entry.get("status") == "ok" for entry in record_steps.values()):
             finished = journal.now()
-            record["status"] = "completed"
-            record["finished"] = finished
-            record["updated"] = finished
+            promote_record.update(status="completed", finished=finished, updated=finished)
         else:
-            record["status"] = "failed"
-            record["updated"] = journal.now()
+            promote_record.update(status="failed", updated=journal.now())
         _save_promote_record(run)
         return 0
 
