@@ -509,7 +509,11 @@ class LineageTests(unittest.TestCase):
             with self.subTest(cmd=cmd):
                 self.assertTrue(sf_lineage.session_command(cmd))
         for cmd in ("/Applications/Claude.app/Contents/MacOS/Claude", "/Applications/Codex.app/Contents/MacOS/Codex",
-                    "node /w/claude/index.js", "node codex-helper"):
+                    "node /w/claude/index.js", "node codex-helper",
+                    "pnpm --dir /Users/m/work/codex dev", "rg TODO /Users/m/src/claude",
+                    "git -C /Users/m/claude status", "tail -f /tmp/logs/claude",
+                    "/Applications/Visual Studio Code.app/Contents/MacOS/Electron /Users/m/src/codex",
+                    "python3 worker.py /Users/m/src/claude"):
             with self.subTest(not_session=cmd):
                 self.assertFalse(sf_lineage.session_command(cmd))
 

@@ -83,9 +83,12 @@ def owner(pid: int, procs: Mapping[int, Proc], parents: Mapping[int, int], by_pi
         if procs[member].pgid in by_group:
             return by_group[procs[member].pgid]
     for member in chain:
-        if _lineage.session_executable(procs[member].cmd):
-            label = _agents.agent_kind(procs[member].cmd) or family(procs[member].cmd)
-            return clip(f"{label} {member}", OWNER_MAX)
+        cmd = procs[member].cmd
+        agent = _agents.agent_kind(cmd)
+        if agent is not None:
+            return clip(f"{agent} {member}", OWNER_MAX)
+        if _lineage.TERMINAL_SESSION.search(_lineage.program(cmd)):
+            return clip(f"{family(cmd)} {member}", OWNER_MAX)
     return None
 
 
