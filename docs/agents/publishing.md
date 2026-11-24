@@ -2,13 +2,15 @@
 
 ## Branches
 
-- One branch, `main` on `maxvyshniakov/fathers`: the everyday destination, the release destination and the base for
-  cleanup. There is no `dev`.
-- Only an explicit push request in the conversation publishes; finishing, landing or releasing does not imply one.
+- Two branches on `maxvyshniakov/fathers`:
+  - `dev` is the everyday integration branch, checked out in the main checkout and used for local installs. The
+    orchestrator may push verified batches to `origin/dev` without waiting for an explicit push word.
+  - `main` is the stable/release destination. Only an explicit push request in the conversation publishes to
+    `origin/main`; finishing, landing, or pushing to `dev` does not imply a push to `main`.
 - Worktrees: Lanefather's lanes in `.claude/worktrees/lane-<id>` of the main checkout (`lanefather start` creates,
-  `lanefather done` and `lanefather gc` remove them); the orchestrator's integration worktree `../fathers-integrate`
-  on `integrate/<batch>`, removed with `git worktree remove` once its batch is on `main`. Older hand-made lanes are
-  `../fathers-lane-<slug>`, removed the same way.
+  `lanefather done` and `lanefather gc` remove them); integration worktrees on `integrate/<batch>`, removed with
+  `git worktree remove` once their batch is on `dev`. Older hand-made lanes are `../fathers-lane-<slug>`, removed
+  the same way.
 
 ## Gate
 
@@ -56,8 +58,8 @@
 
 ## Install, deploy, restart
 
-- A push installs nothing. `python3 install.py <package>` from a clean checkout of the pushed `main` installs one
-  package, only on an explicit request; its README has the options (Spawnfather `--launchd --mastack`). Check it with
+- A push installs nothing. `python3 install.py <package>` from a clean checkout of `dev` (or `main`) installs one
+  package; its README has the options (Spawnfather `--launchd --mastack`). Check it with
   the command's version (`slotfather version`, `lanefather --version`, `spawnfather version`,
   `godfather --version`). Running commands keep the release they started from.
 
