@@ -6,6 +6,10 @@ Versions and release rules: [README.md](README.md#versions).
 
 ### Added
 
+- Automatic seamless reload after reinstall: when `python3 install.py godfather` installs a newer release, a running
+  Godfather automatically `exec`s into the new version as soon as no modal or action is open (preserving the active
+  page), instead of requiring a manual restart. While a modal is open, `↻` stays in the footer until it closes.
+
 - Settings contract tests and fake tool updated for Lanefather's move from exit 4 to exit 5 on read-only settings
   (fathers#130); `SettingsClient` continues to accept both 4 and 5 for compatibility with older Lanefather releases.
 

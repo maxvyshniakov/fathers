@@ -229,7 +229,7 @@ class VersionTests(LiveCase):
         root = Path(tempfile.mkdtemp(prefix="godfather-reinstall-"))
         self.addCleanup(shutil.rmtree, root, ignore_errors=True)
 
-        def release(name: str, digest: str) -> Path:
+        def release(name: str, digest: str, commit: str) -> Path:
             folder = root / name
             shutil.copytree(ROOT / "src" / "godfather", folder / "godfather",
                             ignore=shutil.ignore_patterns("__pycache__"))
@@ -237,7 +237,7 @@ class VersionTests(LiveCase):
                             ignore=shutil.ignore_patterns("__pycache__"))
             shutil.copyfile(ROOT / "CHANGELOG.md", folder / "godfather" / "CHANGELOG.md")
             (folder / "godfather" / "version.json").write_text(json.dumps(
-                {"v": 1, "commit": "0" * 40, "dirty": False, "source_sha256": digest}))
+                {"v": 1, "commit": commit, "dirty": False, "source_sha256": digest}))
             return folder
 
         def entry(folder: Path) -> None:
@@ -245,17 +245,24 @@ class VersionTests(LiveCase):
                                             "from godfather.app import main\nif __name__ == '__main__':\n"
                                             "    sys.exit(main())\n")
 
-        first, second = release("first", "a" * 64), release("second", "b" * 64)
+        first, second = release("first", "a" * 64, "a" * 40), release("second", "b" * 64, "b" * 40)
         entry(first)
         command = [sys.executable, str(root / "godfather"), "--interval", "0.3"]
         screen = self.start(rows=30, columns=140, argv=command)
         screen.until(lambda _: "Godfather what's new? " in screen.rows().get(30, ""), 8, "the footer's what's new")
         self.assertNotIn("↻", screen.rows().get(30, ""))
-        entry(second)  # a reinstall replaces the entry point; this process keeps its release
-        screen.until(lambda _: "what's new? ↻" in screen.rows().get(30, ""), 8, "↻ after the reinstall")
+        mark = screen.mark()
+        screen.write(b"?")  # hold a modal open: auto-reload waits instead of interrupting it
+        screen.receive("HELP", since=mark)
+        entry(second)  # a reinstall replaces the entry point; while the modal is open, ↻ appears in the footer
+        screen.until(lambda _: "what's new? ↻" in screen.rows().get(30, ""), 8, "↻ while modal is open")
+        mark = screen.mark()
+        screen.write(b"\x1b")  # closing the modal lets Godfather seamlessly exec into the new release
+        screen.until(lambda _: "Godfather what's new? " in screen.rows().get(30, "")
+                     and "↻" not in screen.rows().get(30, ""), 8, "auto-reloaded into the new release")
         mark = screen.mark()
         screen.write(b"v")
-        text = screen.receive("WHAT'S NEW", "installed", since=mark)
+        text = screen.receive("WHAT'S NEW", "installed bbbbbbb", since=mark)
         self.assertNotIn("restart to update", text, "fathers#102: the footer's ↻ says it")
         self.assertEqual(0, screen.quit())
 

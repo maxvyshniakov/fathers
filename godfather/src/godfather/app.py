@@ -426,8 +426,14 @@ class Live:
     clock say goes in as events; what reduce() asks for is carried out here; the screen is drawn from the state,
     only the rows that changed written."""
 
-    def __init__(self, fd_in: int, fd_out: int, screen: Screen, interval: float, theme: str) -> None:
+    def __init__(self, fd_in: int, fd_out: int, screen: Screen, interval: float, theme: str,
+                 reload_entry: str | None = None) -> None:
         self.fd_in, self.fd_out, self.screen = fd_in, fd_out, screen
+        self.reload_entry = reload_entry
+        self.reloaded_from = os.environ.pop(RELOAD_FROM_ENV, None)
+        resumed = os.environ.pop(RESUME_PAGE_ENV, None)
+        self.resume_page: str | None = resumed if resumed in _state.PAGES and resumed != "overview" else None
+        self.reload_requested = False
         self.colour = not os.environ.get("NO_COLOR")
         # What the terminal says about its colours (#14) and how wide it draws 👨‍🦳 (#15): asked with colour off too
         self.answers = _theme.Answers()
@@ -602,6 +608,13 @@ class Live:
             lane, cwd = value if failure is None and value else (None, None)
             self.send(_state.DetailsLoaded(key, lane, cwd, None if failure is None else str(failure) or
                                            type(failure).__name__))
+        if self.resume_page is not None:
+            tool_name = _state.PAGE_TOOLS.get(self.resume_page)
+            if tool_name and tool_name in self.state.tools:
+                if self.state.tools[tool_name].present:
+                    self.state = _reducer.open_page(self.state, self.resume_page)
+                    self.dirty = True
+                self.resume_page = None
         self.send(_state.Tick(datetime.datetime.now(datetime.UTC)))
         if time.monotonic() - self.fetched >= self.state.interval and not self.models.wants("model"):
             self.load_model()
@@ -690,9 +703,27 @@ class Live:
             with self.resizes():
                 self.loop()
 
+    def should_reload(self) -> bool:
+        """True when a newer installed release can seamlessly replace this process via os.execve: idle (no open
+        modal, no in-flight action), running from an installed entry point, and not already reloaded from this digest."""
+        if os.environ.get("GODFATHER_NO_AUTO_RELOAD"):
+            return False
+        if not _common.stale_install(self.state.model):
+            return False
+        if self.state.ui.modal is not None or self.state.acting:
+            return False
+        running = _version.running_source()
+        if not running or running == self.reloaded_from:
+            return False
+        return bool(self.reload_entry and Path(self.reload_entry).is_file())
+
     def loop(self) -> None:
         while not self.done:
             self.take()
+            if self.should_reload():
+                self.reload_requested = True
+                self.done = True
+                break
             loading = self.draw()
             self.read(0.1 if loading else 0.25)
 
@@ -708,14 +739,25 @@ def terminal_size(fd: int) -> os.terminal_size:
 ACTOR = f"godfather/{_version.VERSION}"  # GODFATHER_ACTOR for every action (SPEC 24)
 TOOL_DEBOUNCE = 0.25  # seconds after a tool's event before its snapshot is polled (SPEC 9)
 UNLEASED_EVERY = 5.0  # seconds between looks at the machine's processes while unleased load is high (fathers#203)
+RELOAD_FROM_ENV = "GODFATHER_RELOADED_FROM"
+RESUME_PAGE_ENV = "GODFATHER_RESUME_PAGE"
 
 
 def dashboard_live(interval: float, theme: str = _theme.DEFAULT_MODE, screen: Screen | None = None) -> None:
-    live = Live(sys.stdin.fileno(), sys.stdout.fileno(), screen or Screen(), interval, theme)
+    entry = sys.argv[0] if sys.argv else None
+    live = Live(sys.stdin.fileno(), sys.stdout.fileno(), screen or Screen(), interval, theme, reload_entry=entry)
     try:
         live.run()
     finally:
         live.close()
+    if live.reload_requested and live.reload_entry:
+        env = dict(os.environ)
+        running = _version.running_source()
+        if running:
+            env[RELOAD_FROM_ENV] = running
+        if live.state.ui.page != "overview":
+            env[RESUME_PAGE_ENV] = live.state.ui.page
+        os.execve(sys.executable, [sys.executable, live.reload_entry, *sys.argv[1:]], env)
 
 
 def terminal_marks(ascii_only: bool, answers: _theme.Answers) -> _common.Marks:
