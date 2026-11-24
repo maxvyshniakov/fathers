@@ -294,8 +294,8 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
 
 ### Fixed
 
-- `lanefather check` (and other verify invocations) now refuse cleanly with a `LaneError` naming the missing verifier
-  path and `[checks].verify` in `.lanefather.toml` instead of crashing with an unhandled `FileNotFoundError` when the
+- `lanefather check` (and direct verifier runs) now refuse cleanly, naming the missing or unrunnable verifier path and
+  `[checks].verify` in `.lanefather.toml`, instead of crashing with an unhandled `FileNotFoundError` when the
   configured verifier script does not exist (fathers#244).
 - A land forced past other lanes' unmarked review findings with `--force-reason` prints each finding it overrides
   (`lane: overridden: <finding>`, worded as the refusal) before merging; before, they reached only the override

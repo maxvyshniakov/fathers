@@ -158,10 +158,11 @@ def verify_path(root: Any, project: config.Config = config.DEFAULT) -> str:
 
 def verifier_error(path: str, error: OSError) -> LaneError:
     """Clear refusal when the configured `[checks].verify` script or command cannot be executed."""
+    display = os.path.normpath(path)
     if isinstance(error, FileNotFoundError) and not os.path.exists(path):
-        return LaneError(f"verifier not found: {path} (configure [checks].verify in {config.CONFIG_NAME})")
+        return LaneError(f"verifier not found: {display} (configure [checks].verify in {config.CONFIG_NAME})")
     return LaneError(
-        f"cannot run verifier {path}: {error.strerror or error} (configure [checks].verify in {config.CONFIG_NAME})"
+        f"cannot run verifier {display}: {error.strerror or error} (configure [checks].verify in {config.CONFIG_NAME})"
     )
 
 

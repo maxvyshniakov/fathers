@@ -1362,6 +1362,7 @@ class MissingVerifierTests(LaneCase):
         self.assertNotIn("FileNotFoundError", output)
         self.assertIn("lane: verifier not found:", output)
         self.assertIn("scripts/missing-verify.sh", output)
+        self.assertNotIn("/./", output)
         self.assertIn("[checks].verify", output)
         self.assertIn(".lanefather.toml", output)
 
