@@ -16,7 +16,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
-from typing import Any
+from typing import Any, TypeGuard, cast
 
 from . import (
     config,
@@ -49,9 +49,11 @@ from .gitops import ahead_lines, commits, common_dir, git, git_ok, move_branch, 
 from .landing import landing
 
 __all__ = [
+    "PROMOTE_RECORD_VERSION",
     "PromoteRun",
     "after_promote",
     "batch_gate",
+    "load_promote_record",
     "main_base",
     "perf",
     "perf_suite",
@@ -68,6 +70,148 @@ __all__ = [
     "verified",
     "verified_why",
 ]
+
+PROMOTE_RECORD_VERSION = 1
+_PROMOTE_STATUSES = ("running", "failed", "completed")
+_STEP_STATUSES = ("running", "ok", "failed")
+
+
+def _is_strict_int(value: Any) -> TypeGuard[int]:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _is_str_list(value: Any) -> TypeGuard[list[str]]:
+    if not isinstance(value, list):
+        return False
+    items = cast(list[Any], value)
+    return all(isinstance(item, str) for item in items)
+
+
+def load_promote_record(store: state.Store, sha: str) -> dict[str, Any] | None:
+    """Load and strictly validate `<store>/promote/promote-<sha>.json` (fathers#58).
+
+    Returns None when absent; raises LaneError when damaged, invalid, or of a newer version.
+    """
+    path = store.promote_run_path(sha)
+    if not path.exists():
+        return None
+    raw = state.read_json(path)
+    if raw is None:
+        raise LaneError(
+            f"promote record {path} is damaged or unreadable: not a valid JSON object. "
+            "Restore the record or remove the file"
+        )
+    version = raw.get("version")
+    if not _is_strict_int(version):
+        raise LaneError(f"promote record {path} is invalid: bad version; restore or remove the file")
+    if version > PROMOTE_RECORD_VERSION:
+        raise LaneError(
+            f"promote record {path} has version {version}, newer than this lanefather's "
+            f"{PROMOTE_RECORD_VERSION}: update lanefather"
+        )
+    if version < 1:
+        raise LaneError(f"promote record {path} is invalid: version {version}; restore or remove the file")
+    rec_sha = raw.get("sha")
+    status = raw.get("status")
+    branches = raw.get("branches")
+    remote = raw.get("remote")
+    ship = raw.get("ship")
+    no_push = raw.get("no_push")
+    install = raw.get("install")
+    pushed = raw.get("pushed")
+    deploy = raw.get("deploy")
+    ship_base = raw.get("ship_base")
+    started = raw.get("started")
+    updated = raw.get("updated")
+    finished = raw.get("finished")
+    raw_steps = raw.get("steps")
+    if (
+        not isinstance(rec_sha, str)
+        or rec_sha != sha
+        or not isinstance(status, str)
+        or status not in _PROMOTE_STATUSES
+        or not _is_str_list(branches)
+        or not isinstance(remote, str)
+        or not isinstance(ship, bool)
+        or not isinstance(no_push, bool)
+        or not isinstance(install, bool)
+        or not isinstance(pushed, bool)
+        or (deploy is not None and not isinstance(deploy, str))
+        or (ship_base is not None and not isinstance(ship_base, str))
+        or (started is not None and not isinstance(started, str))
+        or (updated is not None and not isinstance(updated, str))
+        or (finished is not None and not isinstance(finished, str))
+        or not isinstance(raw_steps, dict)
+    ):
+        raise LaneError(f"promote record {path} is invalid or damaged; restore or remove the file")
+    steps: dict[str, dict[str, Any]] = {}
+    for step_name, raw_entry in cast(dict[Any, Any], raw_steps).items():
+        if not isinstance(step_name, str) or not isinstance(raw_entry, dict):
+            raise LaneError(f"promote record {path} is invalid or damaged; restore or remove the file")
+        entry = cast(dict[str, Any], raw_entry)
+        step_status = entry.get("status")
+        if not isinstance(step_status, str) or step_status not in _STEP_STATUSES:
+            raise LaneError(f"promote record {path} is invalid or damaged; restore or remove the file")
+        clean: dict[str, Any] = {"status": step_status}
+        for key in ("at", "error", "ship_base", "message", "command"):
+            if key in entry and entry[key] is not None:
+                if not isinstance(entry[key], str):
+                    raise LaneError(f"promote record {path} is invalid or damaged; restore or remove the file")
+                clean[key] = entry[key]
+        for key in ("exit", "returncode", "commented"):
+            if key in entry and entry[key] is not None:
+                if not _is_strict_int(entry[key]):
+                    raise LaneError(f"promote record {path} is invalid or damaged; restore or remove the file")
+                clean[key] = entry[key]
+        if "pushed" in entry and entry["pushed"] is not None:
+            if not isinstance(entry["pushed"], bool):
+                raise LaneError(f"promote record {path} is invalid or damaged; restore or remove the file")
+            clean["pushed"] = entry["pushed"]
+        for key in ("failed_moves", "branches"):
+            if key in entry and entry[key] is not None:
+                value = entry[key]
+                if not _is_str_list(value):
+                    raise LaneError(f"promote record {path} is invalid or damaged; restore or remove the file")
+                clean[key] = list(value)
+        steps[step_name] = clean
+    return {
+        "version": version,
+        "sha": rec_sha,
+        "branches": list(branches),
+        "remote": remote,
+        "ship": ship,
+        "no_push": no_push,
+        "install": install,
+        "deploy": deploy,
+        "ship_base": ship_base or None,
+        "pushed": pushed,
+        "status": status,
+        "started": started,
+        "updated": updated,
+        "finished": finished,
+        "steps": steps,
+    }
+
+
+def _save_promote_record(run: PromoteRun) -> None:
+    if run.record is None:
+        return
+    path = run.store.promote_run_path(run.sha)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    state.write_json(path, run.record)
+
+
+def _record_publish_progress(run: PromoteRun) -> None:
+    if run.record is None:
+        return
+    run.record["ship_base"] = run.ship_base
+    run.record["pushed"] = run.pushed
+    run.record["updated"] = journal.now()
+    step_entry = run.record["steps"].setdefault("publish_refs", {"status": "running", "at": run.record["updated"]})
+    if run.ship_base is not None:
+        step_entry["ship_base"] = run.ship_base
+    step_entry["pushed"] = run.pushed
+    _save_promote_record(run)
 
 
 @dataclass
@@ -88,6 +232,9 @@ class PromoteRun:
     ship_base: str | None = None
     failed_moves: list[str] = field(default_factory=list[str])
     store: state.Store = field(default_factory=lambda: state.Store(config.DEFAULT))
+    pushed: bool = False
+    record: dict[str, Any] | None = None
+    step_evidence: dict[str, dict[str, Any]] = field(default_factory=dict[str, dict[str, Any]])
 
 
 def substitute(text: str, values: dict[str, str]) -> str:
@@ -106,7 +253,7 @@ def step_priority(step: config.Step, project: config.Config = config.DEFAULT) ->
 
 
 def _run_config_step(store: state.Store, common: str, sha: str, step: config.Step, skipped: list[str],
-                     deploy: str | None) -> None:
+                     deploy: str | None, *, evidence: dict[str, Any] | None = None) -> None:
     cfg = store.project
     values = {"sha": sha, "short": sha[:10], "host": deploy or "", "package": str(store.directory / "link-package")}
     environment = {k: v for k, v in os.environ.items() if k not in cfg.install_env_drop}
@@ -128,9 +275,13 @@ def _run_config_step(store: state.Store, common: str, sha: str, step: config.Ste
                 raise LaneError(f"promote of {sha[:10]} went through, but {step.name} cannot run: "
                                 f"{error}") from None
         status = subprocess.run(argv, cwd=path, env={**environment, **extra}).returncode
+        cmd_str = events.command(argv)
+        if evidence is not None:
+            evidence["exit"] = status
+            evidence["command"] = cmd_str
         journal.ledger(f"promote-{step.name} {sha} exit={status}", kind="promote.step",
                        level="error" if status else "info", subject={"type": "commit", "id": sha},
-                       details={"step": step.name, "exit": status, "command": events.command(argv)},
+                       details={"step": step.name, "exit": status, "command": cmd_str},
                        store=store)
         if status:
             skipped_text = ", ".join(skipped) or "none"
@@ -373,7 +524,10 @@ def step_publish_refs(run: PromoteRun) -> int:
         if not run.no_push:
             fetch(run.cwd, run.remote, "promote")
         if run.ship:
-            run.ship_base = gate.main_base(run.cwd, run.remote, project=run.store.project)
+            current_base = gate.main_base(run.cwd, run.remote, project=run.store.project)
+            if not run.ship_base or (not run.pushed and current_base != run.sha):
+                run.ship_base = current_base
+                _record_publish_progress(run)
         moves: list[tuple[str, str]] = []
         for branch in run.branches:
             old = git(run.cwd, "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}^{{commit}}", check=False)
@@ -396,6 +550,8 @@ def step_publish_refs(run: PromoteRun) -> int:
             if subprocess.run(["git", "push", "--atomic", run.remote, *refspecs], cwd=run.cwd).returncode:
                 raise LaneError(f"promote refused: git push {run.remote} {' '.join(refspecs)} failed; "
                                 f"local {' and '.join(run.branches)} unchanged")
+            run.pushed = True
+            _record_publish_progress(run)
         checked_out = {w["branch"]: w["path"] for w in worktree_list(run.cwd) if w.get("branch")}
         for branch, old in moves:
             if old == run.sha:
@@ -404,6 +560,12 @@ def step_publish_refs(run: PromoteRun) -> int:
                                 checked_out=checked_out)
             if error:
                 run.failed_moves.append(error)
+    run.step_evidence["publish_refs"] = {
+        "branches": list(run.branches),
+        "pushed": run.pushed,
+        **({"ship_base": run.ship_base} if run.ship_base else {}),
+        **({"failed_moves": list(run.failed_moves)} if run.failed_moves else {}),
+    }
     pushed = "local only" if run.no_push else f"pushed to {run.remote}"
     journal.ledger(f"promote {run.sha} {'+'.join(run.branches)} {pushed}"
                    + (f" failed: {'; '.join(run.failed_moves)}" if run.failed_moves else ""),
@@ -427,12 +589,15 @@ def step_after_promote(run: PromoteRun) -> None:
 
 def step_release_comments(run: PromoteRun) -> None:
     if run.ship and run.ship_base:
-        tickets.release_comments(run.store, run.cwd, run.common, run.ship_base, run.sha, None)
+        commented = tickets.release_comments(run.store, run.cwd, run.common, run.ship_base, run.sha, None)
+        run.step_evidence["release_comments"] = {"ship_base": run.ship_base, "commented": commented}
 
 
 def step_overall_review(run: PromoteRun) -> None:
     if run.ship and run.ship_base:
-        print(f"lane: {review.start_overall_review(run.store, run.cwd, run.sha, run.ship_base)}")
+        message = review.start_overall_review(run.store, run.cwd, run.sha, run.ship_base)
+        print(f"lane: {message}")
+        run.step_evidence["overall_review"] = {"ship_base": run.ship_base, "message": message}
 
 
 def _install_summary_step(run: PromoteRun) -> None:
@@ -468,24 +633,142 @@ def promote_steps(run: PromoteRun) -> list[tuple[str, PromoteStep]]:
         if not cfg.install:
             steps.append(("install_check", _require_install_steps))
         else:
-            configured = [*cfg.install, *(cfg.deploy if run.deploy else ())]
-            for index, cfg_step in enumerate(configured):
-                skipped = [later.name for later in configured[index + 1:]]
+            configured: list[tuple[str, config.Step]] = [
+                *[(f"install:{step.name}", step) for step in cfg.install],
+                *([(f"deploy:{step.name}", step) for step in cfg.deploy] if run.deploy else []),
+            ]
+            for index, (step_key, cfg_step) in enumerate(configured):
+                skipped = [later.name for _, later in configured[index + 1:]]
 
-                def _run_step(r: PromoteRun, s: config.Step = cfg_step, sk: list[str] = skipped) -> None:
-                    _run_config_step(r.store, r.common, r.sha, s, sk, r.deploy)
+                def _run_step(r: PromoteRun, s: config.Step = cfg_step, sk: list[str] = skipped,
+                              key: str = step_key) -> None:
+                    ev = r.step_evidence.setdefault(key, {})
+                    _run_config_step(r.store, r.common, r.sha, s, sk, r.deploy, evidence=ev)
 
-                steps.append((f"step:{cfg_step.name}", _run_step))
+                steps.append((step_key, _run_step))
             steps.append(("install_summary", _install_summary_step))
     return steps
 
 
+def _can_resume(record: dict[str, Any], run: PromoteRun) -> bool:
+    return (
+        record["status"] != "completed"
+        and record["sha"] == run.sha
+        and record["remote"] == run.remote
+        and record["no_push"] == run.no_push
+        and record["ship"] == run.ship
+        and record["branches"] == run.branches
+    )
+
+
 def promote_sha(run: PromoteRun) -> int:
-    for _name, step in promote_steps(run):
-        status = step(run)
-        if status:
-            return status
-    return 0
+    lock_name = f"promote-{run.sha}"
+    waiting = f"lane: waiting for another promote of {run.sha[:10]} (lock {run.store.directory / f'.{lock_name}.lock'})"
+    with run.store.locked(lock_name, waiting):
+        steps = promote_steps(run)
+        existing = load_promote_record(run.store, run.sha)
+        if (
+            existing is not None
+            and existing["status"] != "completed"
+            and existing["ship"]
+            and existing["pushed"]
+            and not run.ship
+        ):
+            base_note = f" (ship_base {existing['ship_base'][:10]})" if existing.get("ship_base") else ""
+            raise LaneError(
+                f"promote refused: an unfinished --ship promote of {run.sha[:10]} already pushed{base_note}; "
+                f"finish it with {run.store.prog} promote {run.sha[:10]} --ship"
+            )
+        deploy_steps = {f"deploy:{step.name}" for step in run.store.project.deploy}
+        promote_record: dict[str, Any]
+        if existing is not None and _can_resume(existing, run):
+            promote_record = existing
+            deploy_changed = run.install and promote_record["deploy"] != run.deploy
+            promote_record.update(status="running", updated=journal.now())
+            promote_record["install"] = promote_record["install"] or run.install
+            if run.install:
+                promote_record["deploy"] = run.deploy
+            if run.ship and not run.ship_base and promote_record.get("ship_base"):
+                run.ship_base = promote_record["ship_base"]
+            if promote_record.get("pushed"):
+                run.pushed = True
+            recorded_steps: dict[str, dict[str, Any]] = promote_record["steps"]
+            start_index = len(steps)
+            for index, (name, _) in enumerate(steps):
+                entry = recorded_steps.get(name)
+                if entry is None or entry.get("status") != "ok" or (deploy_changed and name in deploy_steps):
+                    start_index = index
+                    break
+            if 0 < start_index < len(steps):
+                print(f"lane: resuming promote of {run.sha[:10]} from {steps[start_index][0]}", flush=True)
+        else:
+            if (
+                existing is not None
+                and existing["status"] != "completed"
+                and run.ship
+                and not run.ship_base
+                and existing.get("ship_base")
+                and existing.get("pushed")
+            ):
+                run.ship_base = existing["ship_base"]
+            now = journal.now()
+            promote_record = {
+                "version": PROMOTE_RECORD_VERSION,
+                "sha": run.sha,
+                "branches": list(run.branches),
+                "remote": run.remote,
+                "ship": run.ship,
+                "no_push": run.no_push,
+                "install": run.install,
+                "deploy": run.deploy,
+                "ship_base": run.ship_base,
+                "pushed": run.pushed,
+                "status": "running",
+                "started": now,
+                "updated": now,
+                "finished": None,
+                "steps": {},
+            }
+            start_index = 0
+        run.record = promote_record
+        _save_promote_record(run)
+        record_steps: dict[str, dict[str, Any]] = promote_record["steps"]
+        for name, step in steps[start_index:]:
+            now = journal.now()
+            record_steps[name] = {"status": "running", "at": now}
+            promote_record["updated"] = now
+            _save_promote_record(run)
+            try:
+                status = step(run)
+            except BaseException as exc:
+                evidence = dict(run.step_evidence.pop(name, {}))
+                evidence.update({"status": "failed", "at": journal.now(), "error": str(exc)})
+                record_steps[name] = evidence
+                promote_record.update(
+                    ship_base=run.ship_base, pushed=run.pushed, status="failed", updated=journal.now()
+                )
+                _save_promote_record(run)
+                raise
+            evidence = dict(run.step_evidence.pop(name, {}))
+            promote_record["ship_base"] = run.ship_base
+            promote_record["pushed"] = run.pushed
+            if status:
+                evidence.update({"status": "failed", "at": journal.now(), "returncode": status})
+                record_steps[name] = evidence
+                promote_record.update(status="failed", updated=journal.now())
+                _save_promote_record(run)
+                return status
+            evidence.update({"status": "ok", "at": journal.now()})
+            record_steps[name] = evidence
+            promote_record["updated"] = journal.now()
+            _save_promote_record(run)
+        if all(entry.get("status") == "ok" for entry in record_steps.values()):
+            finished = journal.now()
+            promote_record.update(status="completed", finished=finished, updated=finished)
+        else:
+            promote_record.update(status="failed", updated=journal.now())
+        _save_promote_record(run)
+        return 0
 
 
 def promote(args: Any, store: state.Store) -> int:

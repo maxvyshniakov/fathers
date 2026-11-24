@@ -15,7 +15,7 @@ from typing import Any
 import unittest
 import unittest.mock
 
-from support import FAKE_PLAN, ROOT, LaneCase, close_process
+from support import FAKE_PLAN, FIXTURE_CONFIG, ROOT, LaneCase, close_process
 
 
 class PromoteGateTests(LaneCase):
@@ -175,6 +175,64 @@ class PromoteGateTests(LaneCase):
         released = self.commit(self.integration, {}, "chore(release-notes): release 0.1.0")
         self.lane("promote", released, "--ship", "--no-push", "--wait", "0")
         self.assertEqual(self.git(self.repo, "rev-parse", "main"), released)
+
+    def test_ship_rerun_after_dirty_main_move_failure_resumes_with_original_ship_base(self):
+        # fathers#58: a push that goes through before local main fails to move must record ship_base so a rerun
+        # resumes from publish_refs and runs release_comments and start_overall_review over the original ship_base..sha.
+        remote = self.tmp / "remote.git"
+        self.git(self.tmp, "init", "-q", "--bare", str(remote))
+        (self.tmp / "no-hooks").mkdir()
+        self.git(self.repo, "config", "core.hooksPath", str(self.tmp / "no-hooks"))
+        self.git(self.repo, "remote", "add", "origin", str(remote))
+        self.git(self.repo, "push", "-q", "origin", "main", "dev")
+        tickets_cfg = (
+            "\n[tickets]\n"
+            "fixes_trailer = true\n"
+            "release_comment = true\n"
+            'repo = "fixture/straylight"\n'
+        )
+        self.commit(self.integration, {".lanefather.toml": FIXTURE_CONFIG + tickets_cfg}, "enable release comments")
+        old_main = self.git(remote, "rev-parse", "main")
+        tip = self.landed("a", {"lib/extra.txt": "a\n"})
+        self.env["LANEFATHER_REVIEW_START"] = ""
+        # Dirty a file in self.repo (where main is checked out) that collides with the incoming commit so
+        # git push succeeds (moving origin/main to tip) while local main refuses to move.
+        self.write(self.repo, "lib/extra.txt", "dirty uncommitted\n")
+        first = self.lane("promote", tip, "--ship", "--wait", "0", ok=False)
+        self.assertIn("the push went through, but these local branches did not move", first)
+        self.assertEqual(self.git(remote, "rev-parse", "main"), tip, "origin/main moved to tip on push")
+        self.assertEqual(self.git(self.repo, "rev-parse", "main"), old_main, "local main did not move yet")
+        record_path = self.state / "promote" / f"promote-{tip}.json"
+        record = json.loads(record_path.read_text())
+        self.assertEqual(record["status"], "failed")
+        self.assertEqual(record["ship_base"], old_main)
+        self.assertTrue(record["pushed"])
+        self.assertEqual(record["steps"]["publish_refs"]["status"], "failed")
+        self.assertNotIn("release_comments", record["steps"])
+        self.assertNotIn("overall_review", record["steps"])
+        # Clean the dirty file in main and rerun promote --ship.
+        (self.repo / "lib" / "extra.txt").unlink()
+        rerun = self.lane("promote", tip, "--ship", "--wait", "0")
+        self.assertIn(f"resuming promote of {tip[:10]} from publish_refs", rerun)
+        self.assertEqual(self.git(self.repo, "rev-parse", "main"), tip)
+        self.assertIn(f"release {tip[:10]}: commented on 1 of 1 issues it fixes (#404)", rerun)
+        self.assertIn(f"overall review of {old_main[:10]}..{tip[:10]} started in the background", rerun)
+        receipt = self.wait_review(f"ship-{tip[:12]}")
+        self.assertEqual((receipt["status"], receipt["base"], receipt["tip"]), ("finished", old_main, tip))
+        gh_log = (self.tmp / "gh.log").read_text()
+        self.assertIn("issue comment 404", gh_log)
+        self.assertIn(f"Shipped to the default branch as [`{tip[:10]}`]", gh_log)
+        finished = json.loads(record_path.read_text())
+        self.assertEqual(finished["status"], "completed")
+        self.assertEqual(finished["ship_base"], old_main)
+        self.assertEqual(finished["steps"]["publish_refs"]["status"], "ok")
+        self.assertEqual(finished["steps"]["release_comments"]["status"], "ok")
+        self.assertEqual(finished["steps"]["release_comments"]["ship_base"], old_main)
+        self.assertEqual(finished["steps"]["release_comments"]["commented"], 1)
+        self.assertEqual(finished["steps"]["overall_review"]["status"], "ok")
+        self.assertEqual(finished["steps"]["overall_review"]["ship_base"], old_main)
+        # Store.lanes(strict=True) (used by list/gc) ignores promote run records.
+        self.lane("list")
 
 
 STEP_STAND_IN = r'''import os, sys
@@ -351,11 +409,40 @@ class PromoteInstallDeployTests(LaneCase):
                                   ("link-package", ["install", "check-installed", "link-package"])):
             with self.subTest(failing=failing):
                 self.steps.unlink(missing_ok=True)
+                (self.state / "promote" / f"promote-{tip}.json").unlink(missing_ok=True)
                 self.env["FIXTURE_FAIL_STEP"] = failing
                 output = self.lane("promote", tip, "--install", "--deploy", "max@link-host", "--wait", "0", ok=False)
                 self.assertEqual([row[0].split()[0] for row in self.ran()], expected)
                 self.assertIn(f"{failing} failed (exit 7)", output)
                 self.assertRegex((self.state / "ledger.log").read_text(), rf"promote-{failing} {tip} exit=7")
+
+    def test_install_rerun_after_step_two_failure_resumes_at_step_two(self):
+        # fathers#58: a rerun of --install after step 2 fails resumes at step 2 without repeating step 1.
+        tip = self.landed("a", {"lib/extra.txt": "a\n"})
+        self.env["FIXTURE_FAIL_STEP"] = "check-installed"
+        first = self.lane("promote", tip, "--install", "--wait", "0", ok=False)
+        self.assertIn("check-installed failed (exit 7)", first)
+        self.assertEqual([row[0].split()[0] for row in self.ran()], ["install", "check-installed"])
+        record_path = self.state / "promote" / f"promote-{tip}.json"
+        record = json.loads(record_path.read_text())
+        self.assertEqual(record["status"], "failed")
+        self.assertEqual(record["steps"]["install:install"]["status"], "ok")
+        self.assertEqual(record["steps"]["install:install"]["exit"], 0)
+        self.assertEqual(record["steps"]["install:check-installed"]["status"], "failed")
+        self.assertEqual(record["steps"]["install:check-installed"]["exit"], 7)
+        # Fix step 2, clear the step log, and rerun --install.
+        del self.env["FIXTURE_FAIL_STEP"]
+        self.steps.unlink()
+        rerun = self.lane("promote", tip, "--install", "--wait", "0")
+        self.assertIn(f"resuming promote of {tip[:10]} from install:check-installed", rerun)
+        self.assertIn(f"Installed {tip[:10]}", rerun)
+        self.assertEqual([row[0].split()[0] for row in self.ran()], ["check-installed"],
+                         "step 1 (install) must not re-execute on rerun")
+        finished = json.loads(record_path.read_text())
+        self.assertEqual(finished["status"], "completed")
+        self.assertEqual(finished["steps"]["install:install"]["status"], "ok")
+        self.assertEqual(finished["steps"]["install:check-installed"]["status"], "ok")
+        self.assertEqual(finished["steps"]["install:check-installed"]["exit"], 0)
 
     def test_install_and_deploy_need_the_push_and_deploy_needs_the_install(self):
         tip = self.landed("a", {"lib/extra.txt": "a\n"})

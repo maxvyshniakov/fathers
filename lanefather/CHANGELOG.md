@@ -8,6 +8,12 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
 
 ### Added
 
+- Recorded and resumable promote/ship runs (fathers#58): `lanefather promote` records each run's step outcomes and
+  evidence in `<state>/promote/promote-<sha>.json`, including `ship_base` captured before push and per-step status
+  for `[[promote.install]]` and `[[promote.deploy]]`. Rerunning an unfinished promote or `--ship` resumes from the
+  first unfinished step and reuses the recorded `ship_base`, so a rerun after a failed local branch move still runs
+  `release_comments` and `overall_review` over the original `ship_base..sha`, and a rerun of `--install` after a
+  failed later step resumes from that step without repeating earlier succeeded steps.
 - `lanefather list --all-projects` shows every repository's lanes in a shared Store, each row naming its project;
   `list --json` gives each lane its `project` (fathers#236).
 - Gone lanes (fathers#237): a planned or active lane whose repository exists but whose branch and worktree are both

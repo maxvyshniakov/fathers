@@ -325,6 +325,18 @@ request carries the effective priority and its source as metadata `lanefather.pr
 `batch (.lanefather.toml [slots.priority] default)`), which `slotfather status` shows. This feature advertises
 `slots.priority`; older engines reject the unknown `[slots]` table.
 
+### Recorded promote runs
+
+Each `lanefather promote` run records its step outcomes, `ship_base` (captured before push), and per-step
+`[[promote.install]]` / `[[promote.deploy]]` status in `<state>/promote/promote-<sha>.json` (fathers#58). Concurrent
+promotes of the same SHA serialize on a per-SHA lock so they cannot interleave or duplicate release comments. Rerunning
+an unfinished promote for the same SHA resumes from the first unfinished step and reuses the recorded `ship_base` when
+`--ship`, `--no-push`, the remote, and the promoted branches match, so a rerun after a failed local branch move still
+runs release comments and the overall review over the original range, and a rerun of `--install` after a failed later
+step resumes from that step without repeating earlier succeeded steps. A non-`--ship` rerun refuses to overwrite an
+unfinished pushed `--ship` record; a damaged or unreadable record is refused rather than overwritten; and a completed
+run starts fresh on a subsequent `promote` invocation.
+
 ### Execution leases after promotion
 
 An install or deploy command that may build can opt into its own execution lease:
