@@ -66,11 +66,12 @@ OVERTAKE_WINDOW = 600  # seconds a waiter that does not fit lets later requests 
 QUEUE_ORDERS = ("backfill", "window")  # `slotfather order`; the first is the default
 
 
-ORDER_DEFAULTS = {"order": "backfill", "safety": 3.0, "limit": 0.0, "fallback": 3600.0, "overrun": 0.5,
+ORDER_DEFAULTS: dict[str, Any] = {
+                  "order": "backfill", "safety": 3.0, "limit": 0.0, "fallback": 3600.0, "overrun": 0.5,
                   "interactive": 1800.0, "batch": 1800.0, "yield_after": 120.0, "idle_cpu": 0.1, "idle_after": 300.0,
                   "aging_batch": 1800.0, "aging_normal": 3600.0, "warn_wait": 1800.0, "warning_admits": 1.0,
                   "reservation_timeout": 1800.0, "memory_share": 0.85, "memory_default_mb": 2048.0,
-                  "load_gate": 1.0}
+                  "memory_budget_mb": 0.0, "load_gate": 1.0, "group_caps": {}}
 
 
 ORDER_KNOBS = {"safety": ("BACKFILL_SAFETY", 1.0, "up"), "limit": ("BACKFILL_LIMIT", 0.0, "limit"),
@@ -94,10 +95,12 @@ ORDER_KNOBS = {"safety": ("BACKFILL_SAFETY", 1.0, "up"), "limit": ("BACKFILL_LIM
                # still hold its slots gives way (schedule.plan()); 0: never. A client's environment can only keep a
                # head longer: a longer time, or 0.
                "reservation_timeout": ("RESERVATION_TIMEOUT", 0.0, "delay"),
-               # fathers#9: expected-peak memory admission budget as a share of RAM (0 disables; <= 1.0) and the
-               # default peak MB assumed for families without history.
+               # fathers#9: expected-peak memory admission budget as a share of RAM (0 disables; <= 1.0), the
+               # default peak MB assumed for families without history, and an explicit memory budget cap in MB
+               # (fathers#251; 0 uses memory_share alone).
                "memory_share": ("MEMORY_SHARE", 0.0, "down"),
                "memory_default_mb": ("MEMORY_DEFAULT_MB", 0.0, "up"),
+               "memory_budget_mb": ("MEMORY_BUDGET_MB", 0.0, "limit"),
                # fathers#184: beside running leases, sustained CPU load holds further grants at this multiple of the
                # cores (schedule.Admission); 0 disables. A client's environment can only lower it (hold sooner),
                # never turn it off.
@@ -189,6 +192,15 @@ LEASE_ENV_PREFIXES = ["SLOTFATHER_"]
 
 
 META_KEY = re.compile(r"[a-z][a-z0-9_.-]{0,31}")
+
+
+GROUP_NAME = re.compile(r"[a-z][a-z0-9_.-]{0,31}")
+
+
+BROWSER_SUITE_RE = re.compile(
+    r"(?<![a-z0-9])(browser|browsers|control|story[-_\s]+checks?|playwright)(?![a-z0-9])",
+    re.IGNORECASE,
+)
 
 
 META_VALUE_MAX = 200

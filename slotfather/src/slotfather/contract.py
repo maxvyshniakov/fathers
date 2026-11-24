@@ -109,6 +109,7 @@ class _StatusEntryBase(TypedDict):
     long_wait: bool
     memory_wait: Optional[str]
     load_wait: Optional[str]
+    group_wait: Optional[str]
 
 
 class StatusEntry(_StatusEntryBase, total=False):
@@ -144,6 +145,7 @@ class StatusSnapshot(_StatusSnapshotBase, total=False):
     """`slotfather status --json` top-level response (version 2)."""
     query: PidQuery
     lease_unknown: list[int]
+    group_caps: dict[str, int]
 
 
 class DashboardRow(TypedDict):

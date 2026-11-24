@@ -6,6 +6,8 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 
 ### Added
 
+- Explicit expected-peak memory budget and per-group concurrency caps (fathers#251): `slotfather order --memory-budget-mb MB` (and `SLOTFATHER_MEMORY_BUDGET_MB`) caps concurrent expected peak RSS alongside `memory_share`, and `advise` now reports effective `memory_gib`, `gib_per_slot`, `recommended_gib_per_slot` (from history peak RSS), `memory_budget_mb`, `memory_expected_mb`, and `group_cap_block` even in `fixed` capacity mode on macOS. `slotfather order --group-cap GROUP=N|off` (and `SLOTFATHER_GROUP_CAPS`) caps concurrent leases per group (matching explicit `group`/`suite`/`kind` metadata and browser/control/story-check suites as `browser`), holding excess waiters with `group-wait=` in `status` and `group_wait` / `group_caps` in `status --json` while non-matching work proceeds.
+
 - Machine samples record who uses the machine outside leases: a sample taken while processes no lease owns use at
   least one core stores the 8 busiest command families with their CPU share, process count and owner (the
   Spawnfather entry or agent session that started them), after taking out each lease's tree, processes carrying

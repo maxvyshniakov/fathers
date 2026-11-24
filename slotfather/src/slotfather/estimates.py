@@ -101,6 +101,22 @@ class Estimates:
                 return _runtype.percentile(recent, 90)
         return None
 
+    def recommended_gib_per_slot(self) -> float | None:
+        """Recommended GiB per slot from the 90th percentile of recorded run peak RSS (rounded up to 0.5 GiB,
+        at least 1.0 GiB), or None when history has no recorded peaks."""
+        import math
+        observed: list[float] = []
+        for key, vals in self.peaks.items():
+            if len(key) == 2 and key[0] == "label":
+                observed.extend(vals)
+        if not observed:
+            return None
+        p90_mb = _runtype.percentile(observed, 90)
+        if p90_mb is None:
+            return None
+        p90_gib = float(p90_mb) / 1024.0
+        return max(1.0, math.ceil(p90_gib * 2.0) / 2.0)
+
     def p90(self, label: str | None, command: str | None) -> float | None:
         """The 90th percentile (runtype.percentile()) of the closest kind's last runs, as of() finds them; None for
         a request like nothing before. The bound a request that passes a blocked head runs by (fathers#160)."""

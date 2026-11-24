@@ -302,6 +302,11 @@ class Reading:
         basis = filled_basis(self.basis)
         newer_keys = _settings.order_extension_keys(self.saved)
         status = status_rows(basis, self.queue)
+        group_caps = self.effective.get("group_caps")
+        if isinstance(group_caps, dict) and group_caps:
+            status.append(("group caps", ", ".join(
+                f"{k}={v}" for k, v in sorted(cast(dict[str, int], group_caps).items())
+            ), "text"))
         if newer_keys:
             status.append(("compatibility", _settings.order_compatibility(newer_keys), "warn"))
         return {"v": VERSION, "tool": "slotfather", "writable": writable, "reason": reason,

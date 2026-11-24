@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import math
 import time
-from typing import Any, Callable, NamedTuple, Optional
+from typing import Any, Callable, NamedTuple, Optional, cast
 
 from . import config as _config
 from . import entry as _entry
@@ -151,6 +151,8 @@ class Plan:
         # fathers#160: waiters that gave way, (entry, the leases that blocked it), past their reserved start by
         # `reservation_timeout` while such leases held their slots: they hold nobody back
         self.dropped: list[tuple[Entry, list[Entry]]] = []
+        # fathers#251: waiters held back by a per-group concurrency cap (id(entry) -> reason)
+        self.group_capped: dict[int, str] = {}
 
     def granted_count(self, entry: Entry) -> int:
         """The slots granted to `entry` in this plan (its range grant, else its requested count)."""
@@ -318,6 +320,8 @@ def plan(waiters: list[Entry], held: list[Entry], slots: int, moment: float, ord
     if order == "backfill":
         waiters = ranked(waiters, settings, moment)
     fallback, safety, overrun, limit = (float(settings[key]) for key in ("fallback", "safety", "overrun", "limit"))
+    group_caps = _group_caps_of(settings)
+    active_groups = _count_active_groups(held, group_caps)
     found = Plan()
     used = sum(_entry.holds(e, slots) for e in held) + other
     extra = None  # slots free at the head's start that it does not need; reserved once a request behind it fits
@@ -347,6 +351,12 @@ def plan(waiters: list[Entry], held: list[Entry], slots: int, moment: float, ord
         return spare
 
     for entry in waiters:
+        if group_caps:
+            cap_reason = _group_cap_wait(entry, active_groups, group_caps)
+            if cap_reason is not None:
+                found.group_capped[id(entry)] = cap_reason
+                found.reason = found.reason or cap_reason
+                continue
         free = max(0, slots - used)
         if found.head is not None:
             if entry["count"] > free:
@@ -371,6 +381,8 @@ def plan(waiters: list[Entry], held: list[Entry], slots: int, moment: float, ord
                 continue
             found.grants.append(entry)
             found.granted_counts[id(entry)] = take
+            if group_caps:
+                _record_active_groups(entry, active_groups, group_caps)
             used += take
             continue
         # A batch waiter defers while normal or interactive work waits (#5): it is no head then, and one for the
@@ -391,6 +403,8 @@ def plan(waiters: list[Entry], held: list[Entry], slots: int, moment: float, ord
             take = _grant_size(entry, free, slots)
             found.grants.append(entry)
             found.granted_counts[id(entry)] = take
+            if group_caps:
+                _record_active_groups(entry, active_groups, group_caps)
             used += take
             continue
         queued = _config.seconds(entry.get("since"))
@@ -714,6 +728,80 @@ class AdviseBlock(NamedTuple):
     memory_short: str | None
     load_block: str | None
     memory_budget_block: str | None
+    memory_budget_mb: float | None = None
+    memory_expected_mb: float = 0.0
+    group_cap_block: str | None = None
+
+
+def entry_groups(entry: Entry) -> tuple[str, ...]:
+    """Concurrency-cap groups matching `entry` (fathers#251): explicit metadata (`group`, `suite`, `kind`) plus
+    browser-suite detection across metadata (`suite`, `kind`, `phase`, `step`), `label`, and `cmd`."""
+    groups: set[str] = set()
+    meta = _entry.meta_of(entry)
+    raw_group = meta.get("group")
+    if raw_group:
+        for token in raw_group.split(","):
+            name = token.strip().lower()
+            if _config.GROUP_NAME.fullmatch(name):
+                groups.add(name)
+    for key in ("suite", "kind"):
+        val = meta.get(key)
+        if not val:
+            continue
+        name = val.strip().lower()
+        if _config.GROUP_NAME.fullmatch(name):
+            groups.add(name)
+        if _config.BROWSER_SUITE_RE.search(val):
+            groups.add("browser")
+    for key in ("phase", "step"):
+        val = meta.get(key)
+        if val and _config.BROWSER_SUITE_RE.search(val):
+            groups.add("browser")
+    for field in ("label", "cmd"):
+        text = entry.get(field)
+        if isinstance(text, str) and _config.BROWSER_SUITE_RE.search(text):
+            groups.add("browser")
+    return tuple(sorted(groups))
+
+
+def _group_caps_of(settings: dict[str, Any]) -> dict[str, int]:
+    """Validated {group: cap} from order settings, ignoring malformed values defensively."""
+    raw = settings.get("group_caps")
+    if not isinstance(raw, dict):
+        return {}
+    found: dict[str, int] = {}
+    for group, cap in cast(dict[Any, Any], raw).items():
+        if isinstance(group, str) and isinstance(cap, int) and not isinstance(cap, bool) and cap >= 1:
+            found[group] = cap
+    return found
+
+
+def _count_active_groups(held: list[Entry], group_caps: dict[str, int]) -> dict[str, int]:
+    active: dict[str, int] = {}
+    if not group_caps:
+        return active
+    for entry in held:
+        _record_active_groups(entry, active, group_caps)
+    return active
+
+
+def _record_active_groups(entry: Entry, active: dict[str, int], group_caps: dict[str, int]) -> None:
+    for group in entry_groups(entry):
+        if group in group_caps:
+            active[group] = active.get(group, 0) + 1
+
+
+def _group_cap_wait(entry: Entry, active_groups: dict[str, int], group_caps: dict[str, int]) -> str | None:
+    """Why a per-group concurrency cap holds `entry` back (fathers#251), or None."""
+    if not group_caps:
+        return None
+    for group in entry_groups(entry):
+        cap = group_caps.get(group)
+        if cap is not None:
+            running = active_groups.get(group, 0)
+            if running >= cap:
+                return f'group "{group}" cap {cap} reached ({running} running)'
+    return None
 
 
 def _load_wait(averages: tuple[float, float, float] | None, cores: int, slots: int, held: int,
@@ -738,17 +826,38 @@ def _load_wait(averages: tuple[float, float, float] | None, cores: int, slots: i
     return None
 
 
-def _budget_wait(held_mb: float, need_mb: float, ram_mb: float | None, share: float) -> str | None:
-    """Why expected peak memory holds a request back beside running leases (fathers#9), or None: when the held
-    leases' expected peak (`held_mb`) and the request's (`need_mb`) exceed `share` of `ram_mb`. Unknown RAM or a share
-    of 0 has no budget. _gate() applies it beside running leases only, and the dashboard's admission and `advise`
-    read the same rule through Admission (fathers#206, fathers#214)."""
-    if ram_mb is None or not ram_mb > 0 or not share > 0:
+def _effective_memory_budget_mb(
+    ram_mb: float | None, share: float, budget_mb: float = 0.0
+) -> tuple[float | None, str]:
+    """Effective expected-peak memory budget in MB and its explanation text: the lower of `ram_mb * share` (when
+    RAM is known and share > 0) and explicit `budget_mb` (when > 0; fathers#251), or (None, "") when neither applies."""
+    share_mb = ram_mb * share if (ram_mb is not None and ram_mb > 0 and share > 0) else None
+    cap_mb = budget_mb if budget_mb > 0 else None
+    if share_mb is not None and cap_mb is not None:
+        if cap_mb < share_mb:
+            return cap_mb, f"{cap_mb:.0f} MB (configured budget)"
+        assert ram_mb is not None
+        return share_mb, f"{share_mb:.0f} MB ({share * 100:.0f}% of {ram_mb:.0f} MB)"
+    if cap_mb is not None:
+        return cap_mb, f"{cap_mb:.0f} MB (configured budget)"
+    if share_mb is not None:
+        assert ram_mb is not None
+        return share_mb, f"{share_mb:.0f} MB ({share * 100:.0f}% of {ram_mb:.0f} MB)"
+    return None, ""
+
+
+def _budget_wait(
+    held_mb: float, need_mb: float, ram_mb: float | None, share: float, budget_mb: float = 0.0
+) -> str | None:
+    """Why expected peak memory holds a request back beside running leases (fathers#9, fathers#251), or None: when
+    the held leases' expected peak (`held_mb`) and the request's (`need_mb`) exceed the effective memory budget.
+    _gate() applies it beside running leases only, and the dashboard's admission and `advise` read the same rule
+    through Admission (fathers#206, fathers#214)."""
+    limit_mb, detail = _effective_memory_budget_mb(ram_mb, share, budget_mb)
+    if limit_mb is None:
         return None
-    budget_mb = ram_mb * share
-    if held_mb + need_mb > budget_mb:
-        return (f"expected memory {held_mb + need_mb:.0f} MB exceeds "
-                f"{budget_mb:.0f} MB ({share * 100:.0f}% of {ram_mb:.0f} MB)")
+    if held_mb + need_mb > limit_mb:
+        return f"expected memory {held_mb + need_mb:.0f} MB exceeds {detail}"
     return None
 
 
@@ -778,6 +887,7 @@ def _gate(
     allowance = kind == "warning" and float(settings.get("warning_admits", 1)) >= 1
     pressed = any(e.get(_entry.PRESSED) for e in held)
     share = float(settings.get("memory_share", _config.ORDER_DEFAULTS["memory_share"]))
+    budget_mb = float(settings.get("memory_budget_mb", _config.ORDER_DEFAULTS["memory_budget_mb"]))
     default_mb = float(settings.get("memory_default_mb", _config.ORDER_DEFAULTS["memory_default_mb"]))
     load_gate = float(settings.get("load_gate", _config.ORDER_DEFAULTS["load_gate"]))
     initial_used = used
@@ -790,6 +900,7 @@ def _gate(
 
     budget_ready = False
     ram_mb: float | None = None
+    limit_mb: float | None = None
     held_mb = 0.0
     load_ready = False
     load_why: str | None = None
@@ -812,15 +923,16 @@ def _gate(
                 else:
                     block = GateBlock("memory", WARNING_WAIT)
         need_mb: float | None = None
-        if block is None and used and share > 0:
+        if block is None and used and (share > 0 or budget_mb > 0):
             if not budget_ready:
                 budget_ready = True
-                ram_mb = host.ram_mb
-                if ram_mb is not None and ram_mb > 0:
+                ram_mb = host.ram_mb if share > 0 else None
+                limit_mb, _ = _effective_memory_budget_mb(ram_mb, share, budget_mb)
+                if limit_mb is not None:
                     held_mb = sum(expected_mb(e) for e in held) + sum(expected_mb(e) for e in admitted)
-            if ram_mb is not None and ram_mb > 0:
+            if limit_mb is not None:
                 need_mb = expected_mb(entry)
-                budget_reason = _budget_wait(held_mb, need_mb, ram_mb, share)
+                budget_reason = _budget_wait(held_mb, need_mb, ram_mb, share, budget_mb)
                 if budget_reason is not None:
                     block = GateBlock("budget", budget_reason)
         if block is None and used and load_gate > 0:
@@ -832,7 +944,7 @@ def _gate(
         if block is None:
             used += max(1, grant_count)
             admitted.append(entry)
-            if budget_ready and ram_mb is not None and ram_mb > 0 and need_mb is not None:
+            if budget_ready and limit_mb is not None and need_mb is not None:
                 held_mb += need_mb
             pressed = pressed or kind != "normal"
         found.append((entry, grant_count, block))
@@ -1007,6 +1119,11 @@ class Admission:
             (self._original(e), [self._original(b) for b in blockers])
             for e, blockers in found.dropped
         ]
+        mapped.group_capped = {
+            id(self._original(e)): found.group_capped[id(e)]
+            for e in self._waiters
+            if id(e) in found.group_capped
+        }
         return mapped
 
     def _plan_with_head(self) -> Plan:
@@ -1080,6 +1197,10 @@ class Admission:
                     )
                 else:
                     gated.append((orig, block))
+        for copy in self._waiters:
+            cap_reason = found.group_capped.get(id(copy))
+            if cap_reason is not None:
+                gated.append((self._original(copy), GateBlock("group_cap", cap_reason)))
         reason = gated[0][1].reason if gated else found.reason
         mapped_plan = self._remap_plan(found)
         mapped_keeper = mapped_plan if keeper is found else self._remap_plan(keeper)
@@ -1134,6 +1255,7 @@ class Admission:
             mapped.reserved = p.reserved
             mapped.blocked = list(p.blocked)
             mapped.dropped = [(back[id(e)], list(blockers)) for e, blockers in p.dropped]
+            mapped.group_capped = {id(back[eid]): r for eid, r in p.group_capped.items()}
             mapped.known = p.known
             return mapped
 
@@ -1222,15 +1344,17 @@ class Admission:
             waited = None if began is None else max(0.0, self._moment - began)
             is_head = copy is found.head
             block = blocks.get(id(copy))
+            group_wait = found.group_capped.get(id(copy))
             result[id(self._originals[id(copy)])] = {
                 "priority": effective_priority(copy, self._settings, self._moment)
                 if self._settings["order"] == "backfill"
                 else _entry.priority_of(copy),
                 "aged": self._settings["order"] == "backfill" and aged(copy, self._settings, self._moment),
-                "est_start": None if block is not None else starts.get(id(copy)),
+                "est_start": None if (block is not None or group_wait is not None) else starts.get(id(copy)),
                 "head": is_head,
                 "memory_wait": block.reason if block is not None and block.kind != "load" else None,
                 "load_wait": block.reason if block is not None and block.kind == "load" else None,
+                "group_wait": group_wait,
                 "reserved": found.reserved if is_head else None,
                 "waited": waited,
                 "long_wait": bool(warn and waited is not None and waited >= warn),
@@ -1265,6 +1389,11 @@ class Admission:
             return free
         max_count = free
         probe_meta: Entry = {"label": label, "cmd": command}
+        group_caps = _group_caps_of(self._settings)
+        if group_caps:
+            active_groups = _count_active_groups(self._held, group_caps)
+            if _group_cap_wait(probe_meta, active_groups, group_caps) is not None:
+                return 0
         if self._used:
             kind, _ = self._host.memory
             allowance = kind == "warning" and float(self._settings.get("warning_admits", 1)) >= 1
@@ -1273,12 +1402,14 @@ class Admission:
                     return 0
                 max_count = 1
             share = float(self._settings.get("memory_share", _config.ORDER_DEFAULTS["memory_share"]))
-            if share > 0:
-                ram_mb = self._host.ram_mb
-                if ram_mb is not None and ram_mb > 0:
+            budget_mb = float(self._settings.get("memory_budget_mb", _config.ORDER_DEFAULTS["memory_budget_mb"]))
+            if share > 0 or budget_mb > 0:
+                ram_mb = self._host.ram_mb if share > 0 else None
+                limit_mb, _ = _effective_memory_budget_mb(ram_mb, share, budget_mb)
+                if limit_mb is not None:
                     held_mb = sum(self.expected_memory(e)[0] for e in self._held)
                     need_mb = self.expected_memory(probe_meta)[0]
-                    if _budget_wait(held_mb, need_mb, ram_mb, share) is not None:
+                    if _budget_wait(held_mb, need_mb, ram_mb, share, budget_mb) is not None:
                         return 0
             load_gate = float(self._settings.get("load_gate", _config.ORDER_DEFAULTS["load_gate"]))
             if (
@@ -1336,13 +1467,15 @@ class Admission:
             self._host.averages, self._host.cores, self._slots, min(self._used, self._slots), self._settings
         )
         share = float(self._settings.get("memory_share", _config.ORDER_DEFAULTS["memory_share"]))
+        budget_mb = float(self._settings.get("memory_budget_mb", _config.ORDER_DEFAULTS["memory_budget_mb"]))
         ram_mb = self._host.ram_mb
+        limit_mb, _ = _effective_memory_budget_mb(ram_mb, share, budget_mb)
         held_mb = sum(self.expected_memory(e)[0] for e in self._held)
         memory_budget_block: str | None = None
-        if self._used and ram_mb is not None and ram_mb > 0 and share > 0:
+        if self._used and limit_mb is not None:
             need_mb = self.expected_memory({"label": "", "cmd": ""})[0]
-            memory_budget_block = _budget_wait(held_mb, need_mb, ram_mb, share)
-        memory_budget_mb = round(ram_mb * share, 1) if (ram_mb is not None and ram_mb > 0 and share > 0) else None
+            memory_budget_block = _budget_wait(held_mb, need_mb, ram_mb, share, budget_mb)
+        memory_budget_mb = round(limit_mb, 1) if limit_mb is not None else None
         memory_expected_mb = round(held_mb, 1)
         admission = self.room(gated=True)
         return DashboardRoom(
@@ -1369,14 +1502,23 @@ class Admission:
             if self._used
             else None
         )
+        share = float(self._settings.get("memory_share", _config.ORDER_DEFAULTS["memory_share"]))
+        budget_mb = float(self._settings.get("memory_budget_mb", _config.ORDER_DEFAULTS["memory_budget_mb"]))
+        ram_mb = self._host.ram_mb
+        limit_mb, _ = _effective_memory_budget_mb(ram_mb, share, budget_mb)
+        held_mb = sum(self.expected_memory(e)[0] for e in self._held) if self._held else 0.0
         memory_budget_block: str | None = None
-        if self._used:
-            share = float(self._settings.get("memory_share", _config.ORDER_DEFAULTS["memory_share"]))
-            ram_mb = self._host.ram_mb
-            if ram_mb is not None and ram_mb > 0 and share > 0:
-                held_mb = sum(self.expected_memory(e)[0] for e in self._held)
-                need_mb = self.expected_memory({"label": label, "cmd": command})[0]
-                memory_budget_block = _budget_wait(held_mb, need_mb, ram_mb, share)
+        if self._used and limit_mb is not None:
+            need_mb = self.expected_memory({"label": label, "cmd": command})[0]
+            memory_budget_block = _budget_wait(held_mb, need_mb, ram_mb, share, budget_mb)
+        memory_budget_mb = round(limit_mb, 1) if limit_mb is not None else None
+        memory_expected_mb = round(held_mb, 1)
+        group_caps = _group_caps_of(self._settings)
+        group_cap_block = (
+            _group_cap_wait({"label": label, "cmd": command}, _count_active_groups(self._held, group_caps), group_caps)
+            if group_caps
+            else None
+        )
         return AdviseBlock(
             queue_room,
             waiting,
@@ -1385,4 +1527,7 @@ class Admission:
             memory_short,
             load_block,
             memory_budget_block,
+            memory_budget_mb,
+            memory_expected_mb,
+            group_cap_block,
         )
