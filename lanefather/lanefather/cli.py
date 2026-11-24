@@ -210,7 +210,7 @@ def parser(project: config.Config = config.DEFAULT) -> Parser:
     ticket = p.add_argument("--ticket", dest="issues", action=ScopeIssue, required=True, metavar="N",
                             help="an issue the lane completes, its merge saying Fixes #N (repeatable; the first is "
                                  "the primary ticket), or none")
-    p.required_unless.append((ticket, ("--partial",)))
+    p.required_unless.append((ticket, ("--partial", "--create")))
     p.add_argument("--partial", dest="issues", action=ScopeIssue, partial=True, metavar="N",
                    help="an issue the lane does only part of, its merge saying Refs #N (repeatable, in order with "
                         "--ticket)")
@@ -219,11 +219,12 @@ def parser(project: config.Config = config.DEFAULT) -> Parser:
                         "(repeatable)")
     p.add_argument("--spec", action="append", metavar="PATH",
                    help="a spec file the lane answers to, relative to the repository (repeatable)")
-    p.add_argument("--claims", nargs="+", required=True, metavar="GLOB")
+    claims_arg = p.add_argument("--claims", nargs="+", action="extend", required=True, metavar="GLOB")
+    p.required_unless.append((claims_arg, ("--create",)))
     p.add_argument("--base", help="integration branch or commit (default: this worktree's branch)")
     p.add_argument("--branch", help="lane branch (default: lane/<id>)")
-    p.add_argument("--after", nargs="+", default=[], metavar="ID",
-                   help="land after these lanes; their claims may overlap")
+    p.add_argument("--after", nargs="+", action="extend", default=[], metavar="ID",
+                   help="land after these lanes; their claims may overlap (repeatable)")
     p.add_argument("--scratch", nargs="+", default=[], metavar="DIR", help="extra scratch dirs done removes")
     p.add_argument("--create", action="store_true", help="create the worktree now instead of adopting one")
     p.add_argument("--fix-of", action="append", metavar="ID,ID",

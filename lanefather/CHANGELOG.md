@@ -294,6 +294,11 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
 
 ### Fixed
 
+- Planned lanes can now be activated with `lanefather start <id> --create` without repeating `--ticket` or `--claims`
+  once every `--after` dependency has landed, creating the worktree from the current base and keeping the lane's
+  existing scope and claims; duplicate `start` refusals on planned or active lanes now point at `start <id> --create`,
+  `land <id>`, or `drop <id>` instead of `done`. Repeating `--after A --after B` now keeps every named dependency
+  instead of only the last flag (fathers#241).
 - A land forced past other lanes' unmarked review findings with `--force-reason` prints each finding it overrides
   (`lane: overridden: <finding>`, worded as the refusal) before merging; before, they reached only the override
   record and the ledger (review of fathers#172).

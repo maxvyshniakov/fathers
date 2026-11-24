@@ -121,6 +121,111 @@ class StartTests(LaneCase):
         self.lane("land", "first")
         self.lane("land", "second")
 
+    def test_planned_lane_activates_with_start_create_after_dependency_lands(self):
+        # fathers#241: a planned lane with --after stays planned after its dependency lands and can become active via
+        # `start <id> --create` without repeating --ticket or --claims.
+        first = self.created("first", "lib/**")
+        self.lane(
+            "start", "second", "--ticket", "405", "--partial", "406",
+            "--base", "integrate/q", "--claims", "lib/api.txt", "--after", "first",
+        )
+        self.assertEqual(self.record("second")["status"], "planned")
+        self.assertIsNone(self.record("second")["worktree"])
+
+        # Duplicate start without --create refuses and does not point at `done`.
+        dup = self.lane(
+            "start", "second", "--ticket", "405", "--base", "integrate/q", "--claims", "lib/api.txt", ok=False,
+        )
+        self.assertIn("lane second exists (planned)", dup)
+        self.assertNotIn("lanefather done", dup)
+        self.assertIn("lanefather start second --create", dup)
+        self.assertIn("lanefather drop second", dup)
+
+        # Activating before `first` lands refuses without pointing at `done`.
+        too_early = self.lane("start", "second", "--create", ok=False)
+        self.assertIn("first", too_early)
+        self.assertNotIn("lanefather done", too_early)
+        self.assertEqual(self.record("second")["status"], "planned")
+
+        # Land `first`, then activate `second` without repeating --ticket or --claims.
+        self.commit(first, {"lib/from-first.txt": "from first\n"})
+        self.lane("check", "first")
+        self.lane("land", "first")
+        integration_tip = self.tip()
+
+        output = self.lane("start", "second", "--create")
+        rec = self.record("second")
+        self.assertEqual(rec["status"], "active")
+        self.assertIsNotNone(rec["worktree"])
+        self.assertEqual(rec["ticket"], "405")
+        self.assertEqual(rec["scope"], [{"issue": "405"}, {"issue": "406", "partial": True}])
+        self.assertEqual(rec["claims"], ["lib/api.txt"])
+        self.assertEqual(rec["after"], ["first"])
+        self.assertEqual(rec["base_sha"], integration_tip)
+        self.assertTrue((pathlib.Path(rec["worktree"]) / "lib/from-first.txt").is_file())
+        self.assertIn(f"Worktree: {rec['worktree']}", output)
+
+        # Calling start --create again on an already-active lane refuses without pointing at `done`.
+        already_active = self.lane("start", "second", "--create", ok=False)
+        self.assertIn("lane second exists (active)", already_active)
+        self.assertNotIn("lanefather done", already_active)
+
+        # Calling start --create on a brand-new lane without --ticket / --claims refuses cleanly.
+        missing_args = self.lane("start", "brand-new", "--create", ok=False)
+        self.assertIn("--ticket", missing_args)
+        self.assertIn("--claims", missing_args)
+        self.assertFalse((self.state / "brand-new.json").exists())
+
+    def test_repeated_after_flags_allow_all_overlaps_and_wait_for_every_lane(self):
+        # fathers#241: `--after A --after B` must keep both A and B, not only the last flag.
+        wt_a = self.created("sk113", "lib/**")
+        wt_b = self.created("sk114", "calls/**")
+
+        self.lane(
+            "start", "sk115", "--ticket", "115", "--base", "integrate/q",
+            "--claims", "lib/api.txt", "calls/x.txt",
+            "--after", "sk113", "--after", "sk114",
+        )
+        rec = self.record("sk115")
+        self.assertEqual(rec["status"], "planned")
+        self.assertEqual(rec["after"], ["sk113", "sk114"])
+
+        # Neither has landed yet.
+        wait_both = self.lane("start", "sk115", "--create", ok=False)
+        self.assertIn("sk113", wait_both)
+        self.assertIn("sk114", wait_both)
+
+        # Land sk113 only; sk115 must still wait for sk114.
+        self.commit(wt_a, {"lib/from-113.txt": "113\n"})
+        self.lane("check", "sk113")
+        self.lane("land", "sk113")
+        wait_b = self.lane("start", "sk115", "--create", ok=False)
+        self.assertNotIn("sk113", wait_b)
+        self.assertIn("sk114", wait_b)
+        self.assertEqual(self.record("sk115")["status"], "planned")
+
+        # Land sk114; now sk115 activates with both landed changes in its worktree.
+        self.commit(wt_b, {"calls/from-114.txt": "foo\n"})
+        self.lane("check", "sk114")
+        self.lane("land", "sk114")
+        self.lane("start", "sk115", "--create")
+        rec = self.record("sk115")
+        self.assertEqual(rec["status"], "active")
+        self.assertEqual(rec["claims"], ["lib/api.txt", "calls/x.txt"])
+        self.assertEqual(rec["ticket"], "115")
+        self.assertTrue((pathlib.Path(rec["worktree"]) / "lib/from-113.txt").is_file())
+        self.assertTrue((pathlib.Path(rec["worktree"]) / "calls/from-114.txt").is_file())
+
+        # Space-separated and repeated --after both work and deduplicate in order.
+        wt_c = self.created("sk116", "docs/**")
+        self.lane(
+            "start", "sk117", "--ticket", "117", "--base", "integrate/q",
+            "--claims", "docs/a.md", "lib/api.txt",
+            "--after", "sk115", "sk116", "--after", "sk115",
+        )
+        self.assertEqual(self.record("sk117")["after"], ["sk115", "sk116"])
+        self.assertTrue(pathlib.Path(wt_c).is_dir())
+
 
 class ProjectCapTests(LaneCase):
     """fathers#149: the lane cap counts the lanes of one repository; another project's lanes in the same state

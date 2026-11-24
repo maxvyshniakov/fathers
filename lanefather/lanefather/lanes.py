@@ -11,6 +11,7 @@ from collections.abc import Iterable, Sequence
 import json
 import os
 from pathlib import Path
+import shlex
 import sys
 from typing import Any, cast
 
@@ -114,6 +115,21 @@ def fix_parent(store: state.Store, record: Record) -> str | None:
     return None
 
 
+def existing_lane_error(prog: str, lane_id: str, existing: Record) -> LaneError:
+    """Refusal when registering an id that already exists and is not done, with a hint that fits its status."""
+    if lifecycle.planned(existing):
+        return LaneError(
+            f"lane {lane_id} exists (planned); activate it with {prog} start {lane_id} --create "
+            f"or remove it with {prog} drop {lane_id}"
+        )
+    if lifecycle.active(existing):
+        return LaneError(
+            f"lane {lane_id} exists (active); land it with {prog} land {lane_id} "
+            f"or remove it with {prog} drop {lane_id}"
+        )
+    return LaneError(f"lane {lane_id} exists ({existing['status']}); finish it with {prog} done {lane_id}")
+
+
 def admit(store: state.Store, record: Record, force_reason: str | None,
           repaired: str | None) -> tuple[admission.Decision, list[str]]:
     """Under the state lock: the existing-lane, dependency, cap, disk and claim rules for registration."""
@@ -121,7 +137,7 @@ def admit(store: state.Store, record: Record, force_reason: str | None,
     lane_id, lane_claims, after = record["id"], record["claims"], record["after"]
     existing = state.read_json(store.record_path(lane_id))
     if existing and not lifecycle.finished(existing):
-        raise LaneError(f"lane {lane_id} exists ({existing['status']}); finish it with {prog} done")
+        raise existing_lane_error(prog, lane_id, existing)
     others = [r for r in store.lanes(strict=True) if r["id"] != lane_id]
     for name in after:
         if name not in {r["id"] for r in others if not lifecycle.finished(r)}:
@@ -208,13 +224,117 @@ def register_admitted(store: state.Store, record: Record, decision: admission.De
     lifetimes.register_quietly(store, store.load(lane_id), "start", skip=("worktree",) if parent is not None else ())
 
 
+def activate_planned(store: state.Store, lane_id: str, *, base: str | None = None,
+                     branch: str | None = None, agent: str | None = None) -> Record:
+    """Create the worktree for an existing planned lane whose `--after` lanes have landed, transition it to
+    `active` while keeping its existing claims and scope, and print its brief header (fathers#241)."""
+    prog = store.prog
+    with store.locked("state"):
+        record = store.load(lane_id)
+        if not lifecycle.planned(record):
+            raise existing_lane_error(prog, lane_id, record)
+        theirs = record.get("common_dir")
+        here = admission.running_common(store.project)
+        if isinstance(theirs, str) and theirs and here and os.path.realpath(theirs) != os.path.realpath(here):
+            checkout = main_checkout(theirs)
+            raise LaneError(
+                f"lane {lane_id} belongs to {state.project_name(theirs)}, not {state.project_name(here)}; "
+                f"run it there ({checkout}): cd {shlex.quote(checkout)} && {prog} start {lane_id} --create"
+            )
+        raw_after: Any = record.get("after")
+        after_ids = (
+            [name for name in cast(list[Any], raw_after) if isinstance(name, str)]
+            if isinstance(raw_after, list)
+            else []
+        )
+        by_id = {r["id"]: r for r in store.lanes(strict=True)}
+        waiting = [
+            f"{name} ({by_id[name]['status'] if name in by_id else 'missing'})"
+            for name in after_ids
+            if not lifecycle.landed(by_id.get(name))
+        ]
+        if waiting:
+            raise LaneError(
+                f"lane {lane_id} is planned after {', '.join(waiting)}; "
+                f"wait for them to land, then run {prog} start {lane_id} --create "
+                f"(or {prog} drop {lane_id} to remove it)"
+            )
+        common = record.get("common_dir")
+        if not isinstance(common, str) or not common or not os.path.isdir(common):
+            raise LaneError(f"lane {lane_id} names no repository that exists ({common or 'none'})")
+        main = main_checkout(common)
+        raw_base = record.get("base")
+        chosen_base = base or (raw_base if isinstance(raw_base, str) and raw_base else None)
+        if not chosen_base:
+            chosen_base = current_branch(main) or git(main, "rev-parse", "HEAD")
+        base_sha = git(main, "rev-parse", "--verify", chosen_base + "^{commit}")
+        integration = next((w["path"] for w in worktree_list(main) if w.get("branch") == chosen_base),
+                           record.get("integration"))
+        raw_branch = record.get("branch")
+        chosen_branch = branch or (raw_branch if isinstance(raw_branch, str) and raw_branch else f"lane/{lane_id}")
+        raw_scratch: Any = record.get("scratch")
+        if isinstance(raw_scratch, list) and raw_scratch and isinstance(raw_scratch[0], str) and raw_scratch[0]:
+            Path(raw_scratch[0]).mkdir(parents=True, exist_ok=True)
+        path = str(worktrees.worktrees_root(common, store.project) / f"lane-{lane_id}")
+        git(main, "worktree", "add", "-q", "-b", chosen_branch, path, base_sha)
+        worktree = os.path.realpath(path)
+        now = journal.now()
+        updated = lifecycle.transition(
+            store, lane_id, "adopt",
+            worktree=worktree,
+            branch=chosen_branch,
+            base=chosen_base,
+            base_sha=base_sha,
+            integration=integration,
+            adopted=now,
+            agent=events.agent_context(agent),
+            agent_now=now,
+            ledger_message=(
+                f"start {lane_id} --create worktree={worktree} branch={chosen_branch} "
+                f"base={chosen_base}@{base_sha[:10]}"
+            ),
+            ledger_details={
+                "worktree": worktree,
+                "branch": chosen_branch,
+                "base": chosen_base,
+                "base_sha": base_sha,
+            },
+        )
+    lifetimes.register_quietly(store, updated, "adopt")
+    raw_claims: Any = updated.get("claims")
+    lane_claims = (
+        [c for c in cast(list[Any], raw_claims) if isinstance(c, str)]
+        if isinstance(raw_claims, list)
+        else []
+    )
+    rules = claims.rules_for(lane_claims, main, store.project)
+    print(header(store, updated, rules))
+    return updated
+
+
 def start(args: Any, store: state.Store) -> int:
-    lane_claims = [c for claim in args.claims for c in claim.split()]
+    existing = state.read_json(store.record_path(args.id))
+    if existing and not lifecycle.finished(existing):
+        if args.create and lifecycle.planned(existing):
+            activate_planned(store, args.id, base=args.base, branch=args.branch, agent=getattr(args, "agent", None))
+            return 0
+        raise existing_lane_error(store.prog, args.id, existing)
+    raw_issues = cast(list[tuple[str, bool]], getattr(args, "issues", None) or [])
+    raw_claims = option_list(getattr(args, "claims", None))
+    if not raw_issues and not raw_claims:
+        raise LaneError(f"start {args.id}: --ticket (or --partial) and --claims are required when registering a new "
+                        "lane")
+    if not raw_issues:
+        raise LaneError(f"start {args.id}: --ticket (or --partial) is required when registering a new lane")
+    if not raw_claims:
+        raise LaneError(f"start {args.id}: --claims is required when registering a new lane")
+    lane_claims = [c for claim in raw_claims for c in claim.split()]
+    after = list(dict.fromkeys(option_list(getattr(args, "after", None))))
     given = getattr(args, "fix_of", None) or ()
     parents = list(dict.fromkeys(name for value in given for name in value.replace(",", " ").split()))
-    items = scope.from_options(cast(list[tuple[str, bool]], getattr(args, "issues", None) or []),
-                               option_list(getattr(args, "decision", None)), option_list(getattr(args, "spec", None)))
-    record, rules = prepare(store, os.getcwd(), args.id, scope.primary(items), lane_claims, args.base, args.after,
+    items = scope.from_options(raw_issues, option_list(getattr(args, "decision", None)),
+                               option_list(getattr(args, "spec", None)))
+    record, rules = prepare(store, os.getcwd(), args.id, scope.primary(items), lane_claims, args.base, after,
                             args.branch, args.scratch, parents=parents, batch_fix=True, items=items)
     register(store, record, rules, args.force_reason, args.create, agent=getattr(args, "agent", None))
     if not parents and "review-fixes" in args.id:
