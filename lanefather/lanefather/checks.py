@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from . import (
     claims,
@@ -358,12 +358,16 @@ def _execute_lane_run(
     lane_plan: dict[str, Any] | None = None,
     min_jobs: int | None = None,
 ) -> tuple[Rows, dict[str, dict[str, Any]], str | None, dict[str, Any] | None, Any, int | None]:
-    """Run the lane's checks that are left and classify the red ones (#568)."""
-    def attempt(selection: dict[str, list[str]] | None) -> tuple[Rows, dict[str, dict[str, Any]], str | None,
-                                                                 dict[str, Any] | None, Any, int | None]:
+    """Run the lane's checks that are left, classify the red ones (#568), and run any checks unblocked by a
+    prerequisite passing its own rerun (fathers#240)."""
+    def attempt(
+        selection: dict[str, list[str]] | None,
+        *,
+        budget: int,
+    ) -> tuple[Rows, dict[str, dict[str, Any]], str | None, dict[str, Any] | None, Any, int | None, set[str]]:
         active_suites = [s for s in suites if selection is None or selection.get(s)]
         if not active_suites:
-            return [], {}, None, None, None, None
+            return [], {}, None, None, None, None, set()
         ids = None if selection is None else [c for s in active_suites for c in selection[s]]
         choice = verify.Selection.checks(ids) if ids is not None else verify.Selection.suites(active_suites)
         run_type = (
@@ -383,26 +387,87 @@ def _execute_lane_run(
         fresh, ran = verify.suite_outcomes(worktree, active_suites, selection, outcome, project=store.project)
         triaged = outcome.triage
         classification, report = None, outcome.report
+        raw_report_checks: Any = (report or {}).get("checks") or []
+        passed_ids: set[str] = set()
+        if not outcome.environment and isinstance(raw_report_checks, list):
+            for raw_row in cast(list[Any], raw_report_checks):
+                if not isinstance(raw_row, dict):
+                    continue
+                row = cast(dict[str, Any], raw_row)
+                if (
+                    row.get("id")
+                    and row.get("status") in ("passed", "skipped")
+                    and not verify.is_dependency_blocked(row)
+                ):
+                    passed_ids.add(str(row["id"]))
         if any(r["status"] != "passed" for r in fresh):
             run_dir = outcome.run_dir
             effective_jobs = outcome.granted_jobs if outcome.granted_jobs is not None else jobs
             with verify.terminable():
                 classification = verify.classify_failures(
-                    store, record, worktree, base, fresh, report, effective_jobs, toolchain, lane_plan=lane_plan
+                    store, record, worktree, base, fresh, report, effective_jobs, toolchain,
+                    lane_plan=lane_plan, rerun_budget=budget,
                 )
             if classification and run_dir is not None:
                 state.write_json(run_dir / "rerun.json", classification)
                 triaged = plan.triage(worktree, run_dir, store.project) or triaged
-        return fresh, ran, triaged, classification, outcome.stopped, outcome.granted_jobs
+        return fresh, ran, triaged, classification, outcome.stopped, outcome.granted_jobs, passed_ids
 
-    fresh, ran, triaged, classification, stopped, granted_jobs = attempt(remaining)
+    def run_with_unblocking(
+        initial_selection: dict[str, list[str]] | None,
+    ) -> tuple[Rows, dict[str, dict[str, Any]], str | None, dict[str, Any] | None, Any, int | None]:
+        rerun_budget = verify.rerun_cap(store.project)
+        fresh, ran, triaged, classification, stopped, granted_jobs, _ = attempt(initial_selection, budget=rerun_budget)
+        rerun_budget = max(0, rerun_budget - verify.reruns_used(classification))
+        if stopped:
+            return fresh, ran, triaged, classification, stopped, granted_jobs
+        wave_fresh, wave_cls = fresh, classification
+        while wave_cls is not None:
+            unblocked_ids, resolved_prereqs = verify.unblocked_checks(wave_cls)
+            if not unblocked_ids:
+                break
+            unblocked_set = set(unblocked_ids)
+            if initial_selection is not None:
+                next_selection = {s: [c for c in ids if c in unblocked_set] for s, ids in initial_selection.items()}
+            else:
+                next_selection = {
+                    r["suite"]: [c for c in r.get("blocked_checks", []) if c in unblocked_set]
+                    for r in wave_fresh
+                }
+            ran_ids = [c for s in suites if next_selection.get(s) for c in next_selection[s]]
+            if not ran_ids:
+                break
+            print(
+                f"lane: {', '.join(resolved_prereqs)} passed rerun by itself; running {len(ran_ids)} "
+                f"unblocked check(s): {', '.join(ran_ids)}",
+                flush=True,
+            )
+            more, ran_more, triaged_more, classified_more, stopped_more, more_jobs, more_passed = attempt(
+                next_selection, budget=rerun_budget,
+            )
+            rerun_budget = max(0, rerun_budget - verify.reruns_used(classified_more))
+            resolved_ids = [*ran_ids, *(c for c in unblocked_ids if c in more_passed and c not in ran_ids)]
+            fresh = verify.joined_results(fresh, more, attempted=resolved_ids)
+            ran = {**ran, **ran_more}
+            triaged = "\n".join(t for t in (triaged, triaged_more) if t) or None
+            assert classification is not None
+            classification = verify.joined_classification(classification, classified_more, resolved=resolved_ids)
+            stopped = stopped_more
+            if more_jobs is not None:
+                granted_jobs = max(granted_jobs, more_jobs) if granted_jobs is not None else more_jobs
+            wave_fresh, wave_cls = more, classified_more
+            if stopped:
+                break
+        return fresh, ran, triaged, classification, stopped, granted_jobs
+
+    fresh, ran, triaged, classification, stopped, granted_jobs = run_with_unblocking(remaining)
     if not (stopped and classification and classification["green"] and remaining is not None):
         return fresh, ran, triaged, classification, stopped, granted_jobs
     rest = {s: [c for c in ids if (ran.get(c) or {}).get("status") == "not_run"] for s, ids in remaining.items()}
     if not any(rest.values()):
         return fresh, ran, triaged, classification, None, granted_jobs
     print("lane: every red first check is red on the base too (pre-existing); running the heavier checks", flush=True)
-    more, ran_more, triaged_more, classified_more, stopped, more_jobs = attempt(rest)
+    more, ran_more, triaged_more, classified_more, stopped, more_jobs = run_with_unblocking(rest)
     return (verify.joined_results(fresh, more), {**ran, **ran_more},
             "\n".join(t for t in (triaged, triaged_more) if t) or None,
             verify.joined_classification(classification, classified_more), stopped,

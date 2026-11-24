@@ -811,10 +811,25 @@ def combined_results(suites: list[str], selected: dict[str, list[str]] | None, f
     return results
 
 
-def joined_results(first: Rows, second: Rows) -> Rows:
-    """Each suite's result over two runs of a lane check (#639): the second run's, red when either run's was, with
-    the failed checks of both."""
+def _suite_runs(row: dict[str, Any]) -> list[dict[str, Any]]:
+    raw_runs: Any = row.get("runs")
+    if isinstance(raw_runs, list) and raw_runs:
+        return [
+            dict(cast(dict[str, Any], item))
+            for item in cast(list[Any], raw_runs)
+            if isinstance(item, dict) and cast(dict[str, Any], item).get("run")
+        ]
+    if row.get("run"):
+        return [{"run": row["run"], **({"lease": row["lease"]} if row.get("lease") else {})}]
+    return []
+
+
+def joined_results(first: Rows, second: Rows, *, attempted: Iterable[str] = ()) -> Rows:
+    """Each suite's result over two runs of a lane check (#639, fathers#240): the second run's, red when either
+    run's was, with the failed checks of both, any blocked checks that did not run in the second pass, every wave's
+    run/lease and log, and coherent failure exit/log."""
     later = {r["suite"]: r for r in second}
+    ran_second = set(attempted)
     joined: Rows = []
     for result in first:
         other = later.pop(result["suite"], None)
@@ -822,8 +837,49 @@ def joined_results(first: Rows, second: Rows) -> Rows:
             joined.append(result)
             continue
         failed = result["failed_checks"] + [c for c in other["failed_checks"] if c not in result["failed_checks"]]
-        joined.append(dict(other, status="failed" if "failed" in (result["status"], other["status"])
-                           else other["status"], failed_checks=failed, first_log=result["log"]))
+        second_ids = (
+            ran_second
+            | set(other.get("checks") or ())
+            | set(other.get("failed_checks") or ())
+            | set(other.get("blocked_checks") or ())
+        )
+        still_blocked = [c for c in result.get("blocked_checks", []) if c not in second_ids]
+        for check_id in other.get("blocked_checks", []):
+            if check_id not in still_blocked:
+                still_blocked.append(check_id)
+        status = ("failed" if "failed" in (result["status"], other["status"])
+                  else "blocked" if still_blocked
+                  else other["status"])
+        prior_logs: list[str] = list(result.get("logs") or ([result["log"]] if result.get("log") else []))
+        all_logs = list(dict.fromkeys([*prior_logs, *([other["log"]] if other.get("log") else [])]))
+        combined_runs: dict[str, dict[str, Any]] = {}
+        for run_entry in (*_suite_runs(result), *_suite_runs(other)):
+            combined_runs.setdefault(str(run_entry["run"]), run_entry)
+        runs_list = list(combined_runs.values())
+        merged = dict(
+            other,
+            status=status,
+            failed_checks=failed,
+            first_log=result.get("first_log") or result["log"],
+        )
+        if status == "failed" and other["status"] != "failed" and result["status"] == "failed":
+            merged["exit"] = result["exit"]
+            merged["log"] = result["log"]
+            if result.get("report") is not None:
+                merged["report"] = result["report"]
+        if len(all_logs) > 1:
+            merged["logs"] = all_logs
+        if len(runs_list) > 1:
+            merged["runs"] = runs_list
+        if still_blocked:
+            merged["blocked_checks"] = still_blocked
+        else:
+            merged.pop("blocked_checks", None)
+        if result.get("checks") is None:
+            merged.pop("checks", None)
+        elif other.get("checks") is not None:
+            merged["checks"] = list(dict.fromkeys([*result["checks"], *other["checks"]]))
+        joined.append(merged)
     return joined + list(later.values())
 
 
@@ -832,9 +888,8 @@ def leases_of(fresh: Rows, classification: dict[str, Any] | None = None) -> list
     reruns' (fathers#92)."""
     found: dict[str, dict[str, Any]] = {}
     for result in fresh:
-        if result.get("run"):
-            found.setdefault(result["run"], {"run": result["run"], **({"lease": result["lease"]}
-                                                                      if result.get("lease") else {})})
+        for entry in _suite_runs(result):
+            found.setdefault(str(entry["run"]), dict(entry))
     for run in (classification or {}).get("runs", []):
         found.setdefault(run["run"], dict(run))
     return list(found.values())
@@ -1088,6 +1143,7 @@ def plan_classification(
     report: dict[str, Any] | None,
     *,
     cap: int = DEFAULT_RERUNS,
+    budget: int | None = None,
     only_supported: bool = False,
 ) -> ClassificationPlan | dict[str, Any] | None:
     """Pure decision: return `None` when nothing is red/blocked, a skipped classification dict on environment failure,
@@ -1106,7 +1162,8 @@ def plan_classification(
                     if is_dependency_blocked(row)}
     unaccounted = sorted({row["id"] for row in (report or {}).get("checks", []) if is_executed_failure(row)}
                          - set(candidates)) + [r["suite"] for r in failed if not r.get("failed_checks")]
-    rerun = candidates[:cap]
+    effective_budget = cap if budget is None else max(0, budget)
+    rerun = candidates[:effective_budget]
     failed_tests_by_check: dict[str, list[str]] = {}
     outside_by_check: dict[str, list[str]] = {}
     if only_supported:
@@ -1118,9 +1175,14 @@ def plan_classification(
             outside = _dedup_strings(initial_row.get("outside_failed_tests") or initial_row.get("unreached_tests"))
             if outside:
                 outside_by_check[check_id] = outside
+    over_budget_reason = (
+        f"the rerun budget ({cap}) was used by earlier checks"
+        if effective_budget < cap
+        else f"only the first {cap} red checks rerun"
+    )
     entries: dict[str, dict[str, Any]] = {
-        c: {"check": c, "class": str(CheckClass.UNCLASSIFIED), "reason": f"only the first {cap} red checks rerun"}
-        for c in candidates[cap:]
+        c: {"check": c, "class": str(CheckClass.UNCLASSIFIED), "reason": over_budget_reason}
+        for c in candidates[effective_budget:]
     }
     for check_id, outside in outside_by_check.items():
         entries[check_id] = {
@@ -1328,10 +1390,14 @@ def classify_failures(
     jobs: int = 1,
     toolchain: Any = UNRESOLVED,
     lane_plan: dict[str, Any] | None = None,
+    *,
+    rerun_budget: int | None = None,
 ) -> dict[str, Any] | None:
     """Rerun the red checks of a lane check (at most LANEFATHER_RERUNS) and classify each; None when nothing is red."""
     only_supported = plan.supports_only(worktree, lane_plan=lane_plan, report=report, project=store.project)
-    planned = plan_classification(fresh, report, cap=rerun_cap(store.project), only_supported=only_supported)
+    planned = plan_classification(
+        fresh, report, cap=rerun_cap(store.project), budget=rerun_budget, only_supported=only_supported,
+    )
     if planned is None or isinstance(planned, dict):
         return planned
     entries = dict(planned.entries)
@@ -1397,12 +1463,15 @@ def classify_failures(
 
 
 def classification_lines(classification: dict[str, Any]) -> list[str]:
-    if classification.get("skipped"):
-        return [f"lane: red checks not classified: {classification['skipped']}"]
-    base = classification["base"][:10]
+    base = str(classification.get("base") or "")[:10]
     stopped_first = classification.get("first")
-    lines = [f"lane: red first checks rerun on the base {base} (#639):" if stopped_first
-             else f"lane: red checks rerun by themselves on the lane, then on its base {base} (#568):"]
+    if classification.get("skipped"):
+        lines = [f"lane: red checks not classified: {classification['skipped']}"]
+        if not classification.get("checks"):
+            return lines
+    else:
+        lines = [f"lane: red first checks rerun on the base {base} (#639):" if stopped_first
+                 else f"lane: red checks rerun by themselves on the lane, then on its base {base} (#568):"]
     for entry in classification["checks"]:
         kind, detail = entry["class"], entry.get("reason", "")
         if kind == CheckClass.REGRESSION:
@@ -1434,10 +1503,126 @@ def classification_lines(classification: dict[str, Any]) -> list[str]:
     return lines
 
 
-def joined_classification(first_cls: dict[str, Any], second_cls: dict[str, Any] | None) -> dict[str, Any]:
-    """The classification of two runs of a lane check (#639): green when both runs' red checks are landable."""
-    if second_cls is None:
-        return first_cls
-    return dict(second_cls, checks=first_cls["checks"] + second_cls.get("checks", []),
-                unaccounted=first_cls["unaccounted"] + second_cls.get("unaccounted", []),
-                green=first_cls["green"] and second_cls["green"])
+def reruns_used(classification: dict[str, Any] | None) -> int:
+    """How many solo-rerun budget slots `classification` consumed (fathers#240)."""
+    if not classification or classification.get("skipped") or classification.get("first"):
+        return 0
+    checks: list[dict[str, Any]] = classification.get("checks") or []
+    used = 0
+    for entry in checks:
+        alone: Any = entry.get("alone")
+        if isinstance(alone, dict):
+            if cast(dict[str, Any], alone).get("status") != "not rerun":
+                used += 1
+        elif (
+            entry.get("class") == CheckClass.UNCLASSIFIED
+            and not str(entry.get("reason", "")).startswith(("only the first ", "the rerun budget ("))
+            and not entry.get("outside_failed_tests")
+        ):
+            used += 1
+    return used
+
+
+def unblocked_checks(classification: dict[str, Any] | None) -> tuple[list[str], list[str]]:
+    """Blocked checks whose failed prerequisites all passed their own rerun (`flaky-under-load`), in report order,
+    together with the prerequisites that unblocked them (fathers#240)."""
+    if not classification or classification.get("skipped"):
+        return [], []
+    checks: list[dict[str, Any]] = classification.get("checks") or []
+    passed_order = [str(e["check"]) for e in checks if e.get("class") == CheckClass.FLAKY_UNDER_LOAD]
+    passed_alone = set(passed_order)
+    if not passed_alone:
+        return [], []
+    blocked_graph = {
+        str(e["check"]): list(e.get("blocked_by") or [])
+        for e in checks
+        if e.get("class") == CheckClass.DEPENDENCY_BLOCKED
+    }
+    unblocked: list[str] = []
+    prereqs_used: set[str] = set()
+    for entry in checks:
+        if entry.get("class") != CheckClass.DEPENDENCY_BLOCKED:
+            continue
+        check_id = str(entry["check"])
+        raw_prereqs: Any = entry.get("prerequisites")
+        prereqs = (
+            [str(p) for p in cast(list[Any], raw_prereqs)]
+            if isinstance(raw_prereqs, list)
+            else failed_prerequisites(check_id, blocked_graph)
+        )
+        if prereqs and all(p in passed_alone for p in prereqs):
+            unblocked.append(check_id)
+            prereqs_used.update(prereqs)
+    resolved_prereqs = [p for p in passed_order if p in prereqs_used]
+    return unblocked, resolved_prereqs
+
+
+def joined_classification(
+    first_cls: dict[str, Any],
+    second_cls: dict[str, Any] | None,
+    *,
+    resolved: Iterable[str] = (),
+) -> dict[str, Any]:
+    """The classification over two runs of a lane check (#639, fathers#240): drops `dependency-blocked` entries for
+    checks in `resolved` that ran in the second pass, recomputes prerequisites on still-blocked checks, combines
+    `checks`, `unaccounted` and `runs`, and is green when no unaccounted failure or non-landable check remains."""
+    resolved_set = set(resolved)
+    first_checks: list[dict[str, Any]] = list(first_cls.get("checks", []))
+    first_runs: list[dict[str, Any]] = list(first_cls.get("runs", []))
+    first_unaccounted: list[str] = list(first_cls.get("unaccounted", []))
+    if second_cls is not None and second_cls.get("skipped"):
+        runs = first_runs + list(second_cls.get("runs", []))
+        return dict(first_cls, checks=first_checks, skipped=second_cls["skipped"], runs=runs, green=False)
+    kept: list[dict[str, Any]] = [
+        e for e in first_checks
+        if not (e.get("class") == CheckClass.DEPENDENCY_BLOCKED and e.get("check") in resolved_set)
+    ]
+    second_checks: list[dict[str, Any]] = [] if second_cls is None else list(second_cls.get("checks", []))
+    replaced = {str(e["check"]) for e in second_checks if e.get("check")}
+    resolved_passed = resolved_set - replaced
+    raw_combined = [e for e in kept if str(e.get("check")) not in replaced] + second_checks
+    known_classes = {
+        str(e["check"]): str(e["class"])
+        for e in raw_combined
+        if e.get("check") and e.get("class")
+    }
+    still_blocked_graph = {
+        str(e["check"]): [str(b) for b in cast(list[Any], e.get("blocked_by") or [])]
+        for e in raw_combined
+        if e.get("class") == CheckClass.DEPENDENCY_BLOCKED and isinstance(e.get("blocked_by") or [], list)
+    }
+    combined_checks: list[dict[str, Any]] = []
+    for entry in raw_combined:
+        if entry.get("class") == CheckClass.DEPENDENCY_BLOCKED:
+            check_id = str(entry["check"])
+            raw_blockers: Any = entry.get("blocked_by") or []
+            blockers = [str(b) for b in cast(list[Any], raw_blockers)] if isinstance(raw_blockers, list) else []
+            roots = [p for p in failed_prerequisites(check_id, still_blocked_graph) if p not in resolved_passed]
+            extra = {
+                k: v for k, v in entry.items()
+                if k not in ("check", "class", "blocked_by", "reason", "prerequisites")
+            }
+            combined_checks.append(
+                dependency_blocked_entry(check_id, blockers, roots, known_classes, **extra)
+            )
+        else:
+            combined_checks.append(entry)
+    second_unaccounted: list[str] = [] if second_cls is None else list(second_cls.get("unaccounted", []))
+    unaccounted = first_unaccounted + [u for u in second_unaccounted if u not in first_unaccounted]
+    runs = first_runs + ([] if second_cls is None else list(second_cls.get("runs", [])))
+    skipped = first_cls.get("skipped")
+    green = (
+        not skipped
+        and bool(combined_checks)
+        and not unaccounted
+        and all(e["class"] in LANDABLE for e in combined_checks)
+    )
+    base_dict = first_cls if second_cls is None else second_cls
+    return dict(
+        base_dict,
+        checks=combined_checks,
+        unaccounted=unaccounted,
+        runs=runs,
+        green=green,
+        **({"skipped": skipped} if skipped else {}),
+    )
