@@ -156,6 +156,16 @@ def verify_path(root: Any, project: config.Config = config.DEFAULT) -> str:
     return os.path.join(root, project.verify)
 
 
+def verifier_error(path: str, error: OSError) -> LaneError:
+    """Clear refusal when the configured `[checks].verify` script or command cannot be executed."""
+    display = os.path.normpath(path)
+    if isinstance(error, FileNotFoundError) and not os.path.exists(path):
+        return LaneError(f"verifier not found: {display} (configure [checks].verify in {config.CONFIG_NAME})")
+    return LaneError(
+        f"cannot run verifier {display}: {error.strerror or error} (configure [checks].verify in {config.CONFIG_NAME})"
+    )
+
+
 def declared_slots(row: dict[str, Any]) -> int | None:
     """Minimum slots a check row declares (`min_slots` or `slots`, fathers#173), or None."""
     for key in ("min_slots", "slots"):
@@ -224,8 +234,12 @@ def plan_for(root: Any, base: str, project: config.Config = config.DEFAULT) -> d
     chose it: every check of the gate for a full plan, and None for a tree whose plan names whole suites. `selected`
     names the suites those checks belong to in the tree's order, `by_suite` the checks of each."""
     inspector = _as_checkout(root, project)
-    argv = [verify_path(inspector.root, inspector.project), "--changed", "--base", base, "--plan", "--json"]
-    result = subprocess.run(argv, cwd=inspector.root, capture_output=True, text=True)
+    verifier = verify_path(inspector.root, inspector.project)
+    argv = [verifier, "--changed", "--base", base, "--plan", "--json"]
+    try:
+        result = subprocess.run(argv, cwd=inspector.root, capture_output=True, text=True)
+    except OSError as error:
+        raise verifier_error(verifier, error) from error
     if result.returncode:
         raise LaneError(f"{inspector.project.verify} --changed --plan in {inspector.root} failed: "
                         f"{result.stderr.strip()}")

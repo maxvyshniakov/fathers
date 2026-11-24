@@ -25,6 +25,7 @@ import uuid
 
 from . import config, history, host, journal, plan, settings, slots, state, worktrees
 from . import results as result_store
+from .errors import LaneError
 from .gitops import git
 from .state import Record
 
@@ -655,6 +656,12 @@ class Run:
         try:
             self._child = subprocess.Popen(self.argv, cwd=self.root, env=self.env,
                                            stdout=handle, stderr=subprocess.STDOUT)
+        except (FileNotFoundError, PermissionError, IsADirectoryError) as error:
+            handle.close()
+            verify_argv = getattr(self, "verify_argv", None)
+            if verify_argv is not None and self.argv == verify_argv:
+                raise plan.verifier_error(verify_argv[0], error) from error
+            raise LaneError(f"cannot start {self.argv[0]}: {error.strerror or error}") from error
         except BaseException:
             handle.close()
             raise

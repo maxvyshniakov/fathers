@@ -135,6 +135,22 @@ class VerifyUnitTests(unittest.TestCase):
             with self.assertRaisesRegex(verify.LeaseTimedOut, r"no lease of 2 slot\(s\) within 12 s"):
                 run.execute()
 
+    def test_run_missing_verifier_raises_lane_error(self):
+        import shutil
+        import tempfile
+
+        from lanefather import config, errors, state, verify
+        scratch = pathlib.Path(tempfile.mkdtemp(prefix="test-missing-verifier-"))
+        self.addCleanup(shutil.rmtree, scratch, True)
+        store = state.Store(config.Config(project="Test"), directory=scratch / "state")
+        with unittest.mock.patch.object(verify, "tree_of", return_value=None):
+            run = verify.Run(
+                scratch, verify.Selection.full(), "missing-verifier", "gate", 1,
+                store=store, wait_for_load=False,
+            )
+            with self.assertRaisesRegex(errors.LaneError, r"verifier not found:.*verify\.sh.*\[checks\]\.verify"):
+                run.execute()
+
 
 class VerifyCallSitePinTests(LaneCase):
     def setUp(self):
