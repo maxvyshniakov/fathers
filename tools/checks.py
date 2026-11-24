@@ -28,9 +28,11 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 import fnmatch
 import json
+import math
 import os
 from pathlib import Path
 import re
+import secrets
 import shutil
 import subprocess
 import sys
@@ -46,6 +48,7 @@ PACKAGES = ("slotfather", "lanefather", "spawnfather", "godfather", "tokenfather
 # Packages whose test files use isolated tempdirs and can safely run in parallel across workers (fathers#209, #219).
 PARALLEL_TEST_PACKAGES = frozenset({"slotfather", "lanefather", "spawnfather", "godfather"})
 MAX_DEFAULT_TEST_WORKERS = 4
+TEST_TIMINGS_RECORD = "fathers-test-timings.json"
 RAN_TESTS_RE = re.compile(r"^Ran (\d+) tests? in ", re.M)
 SKIPPED_TESTS_RE = re.compile(r"\bskipped=(\d+)\b")
 DEFAULT_BASE = "origin/main"
@@ -383,8 +386,113 @@ def _parse_unittest_counts(stderr: str) -> tuple[int, int]:
     return ran, skipped
 
 
+def _test_timings_path(directory: Path, environment: Mapping[str, str]) -> Path | None:
+    """`<git common dir>/fathers-test-timings.json`, or None when `directory` is outside a Git repository."""
+    try:
+        common = runner.common_dir(directory, runner.clean_environment(environment))
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    return common / TEST_TIMINGS_RECORD
+
+
+def _read_timings_document(path: Path) -> dict[str, dict[str, float]]:
+    """Parsed `{package: {relative_path: elapsed_seconds}}` from `path`, or `{}` when missing or corrupt."""
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    packages_raw = raw.get("packages")
+    if not isinstance(packages_raw, dict):
+        return {}
+    packages: dict[str, dict[str, float]] = {}
+    for pkg, entries in packages_raw.items():
+        if not isinstance(pkg, str) or not isinstance(entries, dict):
+            continue
+        cleaned: dict[str, float] = {}
+        for rel, elapsed in entries.items():
+            if (isinstance(rel, str) and isinstance(elapsed, (int, float))
+                    and not isinstance(elapsed, bool) and math.isfinite(elapsed) and elapsed >= 0):
+                cleaned[rel] = float(elapsed)
+        if cleaned:
+            packages[pkg] = cleaned
+    return packages
+
+
+def load_test_timings(path: Path | None, package: str) -> dict[str, float]:
+    """Recorded per-file elapsed seconds for `package`, or `{}` when unavailable or corrupt."""
+    if path is None:
+        return {}
+    return _read_timings_document(path).get(package, {})
+
+
+def _atomic_write_text(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    pending = path.with_name(f".{path.name}.{os.getpid()}.{secrets.token_hex(4)}.tmp")
+    try:
+        pending.write_text(text, encoding="utf-8")
+        os.replace(pending, path)
+    except BaseException:
+        pending.unlink(missing_ok=True)
+        raise
+
+
+def save_test_timings(path: Path | None, package: str, results: Iterable[FileTestResult]) -> None:
+    """Atomically persist per-file elapsed timings for `package`, failing open silently on I/O errors."""
+    if path is None:
+        return
+    items = list(results)
+    if not items:
+        return
+    try:
+        packages = _read_timings_document(path)
+        previous = packages.get(package, {})
+        updated: dict[str, float] = {}
+        for item in items:
+            if item.returncode == 0 and math.isfinite(item.elapsed) and item.elapsed >= 0:
+                updated[item.relative] = round(item.elapsed, 4)
+            elif item.relative in previous:
+                updated[item.relative] = previous[item.relative]
+        if updated:
+            packages[package] = updated
+        else:
+            packages.pop(package, None)
+        payload = json.dumps({"v": 1, "packages": packages}, indent=2, sort_keys=True) + "\n"
+        _atomic_write_text(path, payload)
+    except OSError:
+        return
+
+
+def schedule_test_files(directory: Path, files: list[Path], timings: Mapping[str, float]) -> list[int]:
+    """Indices of `files` ordered longest-first by recorded elapsed time, falling back to file size."""
+    sizes = [file.stat().st_size for file in files]
+    relatives = [file.relative_to(directory).as_posix() for file in files]
+    recorded_seconds = 0.0
+    recorded_bytes = 0
+    for rel, size in zip(relatives, sizes, strict=True):
+        if rel in timings:
+            recorded_seconds += timings[rel]
+            recorded_bytes += size
+    rate = recorded_seconds / recorded_bytes if recorded_bytes > 0 else None
+
+    def sort_key(index: int) -> tuple[float, int, int]:
+        rel = relatives[index]
+        size = sizes[index]
+        if rel in timings:
+            estimate = timings[rel]
+        elif rate is not None:
+            estimate = size * rate
+        else:
+            estimate = float(size)
+        return (-estimate, -size, index)
+
+    return sorted(range(len(files)), key=sort_key)
+
+
 def run_unittest_parallel(directory: Path, discover_args: list[str], environment: dict[str, str],
-                          workers: int) -> int:
+                          workers: int, *, timings_path: Path | None = None,
+                          package: str | None = None) -> int:
     """Run independent unittest files across a bounded subprocess pool with deterministic output and exit code."""
     files, top_level = discover_test_files(directory, discover_args)
     if workers <= 1 or len(files) <= 1:
@@ -395,8 +503,10 @@ def run_unittest_parallel(directory: Path, discover_args: list[str], environment
     pool_size = min(workers, len(files))
     print(f"+ {sys.executable} -m unittest discover {' '.join(discover_args)} "
           f"({len(files)} files, {pool_size} workers)", flush=True)
-    # Schedule largest test files first (LPT) to avoid a long tail while reporting in deterministic sorted order.
-    schedule = sorted(range(len(files)), key=lambda i: (-files[i].stat().st_size, i))
+    # Schedule longest test files first (measured LPT, falling back to file size) while reporting in sorted order.
+    resolved_timings_path = _test_timings_path(directory, environment) if timings_path is None else timings_path
+    package_key = package or directory.name
+    schedule = schedule_test_files(directory, files, load_test_timings(resolved_timings_path, package_key))
     started = time.monotonic()
 
     def run_one(index: int) -> FileTestResult:
@@ -413,6 +523,8 @@ def run_unittest_parallel(directory: Path, discover_args: list[str], environment
 
     with ThreadPoolExecutor(max_workers=pool_size) as pool:
         results = sorted(pool.map(run_one, schedule), key=lambda item: item.index)
+
+    save_test_timings(resolved_timings_path, package_key, results)
 
     elapsed = time.monotonic() - started
     total_ran = sum(item.ran for item in results)
