@@ -274,6 +274,19 @@ class MoreGuardTests(WorktreeCase):
             self.assertEqual(([], []), worktrees.users(str(path), table, {}))
             self.assertIsNone(worktrees.refusal(item, str(self.repo), table, {}, items))
 
+        # Relative argv[0] ("top"), missing system paths, and non-system setuid paths must NOT be exempt.
+        for cmd in ("top -l 1", "/usr/bin/no-such-setuid-binary", "/tmp/setuid-helper"):
+            with self.subTest(cmd=cmd):
+                other = procs.Proc(
+                    pid=999998, ppid=1, pgid=999998, uid=me, cpu=0.0, tty="?",
+                    start="Mon Jan  1 00:00:00 2026", cmd=cmd,
+                )
+                other_table = procs.Table({other.pid: other})
+                with mock.patch.object(worktrees.os, "stat", side_effect=stat_side_effect), \
+                        mock.patch.object(procs, "identities", return_value={other.pid: other.start}):
+                    _, unseen = worktrees.users(str(path), other_table, {}) or ([], [])
+                    self.assertEqual(1, len(unseen), f"{cmd!r} must still count as unknown cwd")
+
 
 class OwnedTests(WorktreeCase):
     def test_own_resource_then_reap_removes_it_and_its_merged_branch(self):

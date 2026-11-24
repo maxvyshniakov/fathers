@@ -34,8 +34,12 @@ class SelectionTests(unittest.TestCase):
         return set(checks.select(list(paths)).checks)
 
     def test_a_package_change_selects_that_package_and_the_cheap_root_checks(self) -> None:
-        self.assertEqual(package("spawnfather") | {"lanefather tests", "common tests"} | ALWAYS,
-                         self.selected("spawnfather/spawnfather/reap.py"))
+        self.assertEqual(
+            package("spawnfather")
+            | {"slotfather tests", "lanefather tests", "godfather tests", "common tests"}
+            | ALWAYS,
+            self.selected("spawnfather/spawnfather/reap.py"),
+        )
         self.assertEqual(package("lanefather") | package("godfather") | ALWAYS,
                          self.selected("lanefather/README.md", "godfather/src/godfather/views/lanes.py"))
 
@@ -48,12 +52,19 @@ class SelectionTests(unittest.TestCase):
         for path in ("spawnfather/spawnfather/events.py", "spawnfather/spawnfather/dashboard.py"):
             with self.subTest(path=path):
                 self.assertEqual(
-                    package("spawnfather") | {"godfather tests", "lanefather tests", "common tests"} | ALWAYS,
+                    package("spawnfather")
+                    | {"slotfather tests", "godfather tests", "lanefather tests", "common tests"}
+                    | ALWAYS,
                     self.selected(path),
                 )
-        for path in ("lanefather/lanefather/events.py", "lanefather/lanefather/dashboard.py"):
+        for path in ("lanefather/lanefather/events.py", "lanefather/lanefather/dashboard.py",
+                     "lanefather/lanefather/cli.py"):
             with self.subTest(path=path):
                 self.assertEqual(package("lanefather") | {"godfather tests"} | ALWAYS, self.selected(path))
+        self.assertEqual(
+            package("godfather") | {"tokenfather tests"} | ALWAYS,
+            self.selected("godfather/tests/fixtures/changelog/sample.md"),
+        )
 
     def test_common_selects_every_package(self) -> None:
         every = set().union(*(package(name) for name in checks.PACKAGES))
@@ -78,17 +89,21 @@ class SelectionTests(unittest.TestCase):
                               "lanefather/docs/adr/0001-real-adapters-before-general-ports.md"])
         self.assertFalse(plan.full)
         self.assertEqual(ALWAYS, set(plan.checks))
-        for path in ("lanefather/install.py", "lanefather/hooks/pre-commit",
-                     "lanefather/lanefather/cli.py", "lanefather/lanefather/README.md",
-                     "lanefather/tests/fixtures/notes.md"):
+        for path in ("lanefather/hooks/pre-commit", "lanefather/tests/fixtures/notes.md"):
             with self.subTest(path=path):
                 self.assertEqual(package("lanefather") | ALWAYS, self.selected(path))
+        self.assertEqual(package("lanefather") | {"common tests"} | ALWAYS, self.selected("lanefather/install.py"))
+        for path in ("lanefather/lanefather/cli.py", "lanefather/lanefather/README.md"):
+            with self.subTest(path=path):
+                self.assertEqual(package("lanefather") | {"godfather tests"} | ALWAYS, self.selected(path))
         for path, extra in (
             ("lanefather/CHANGELOG.md", package("lanefather")),
             ("slotfather/CHANGELOG.md", package("slotfather")),
             ("slotfather/pyproject.toml", package("slotfather")),
+            ("godfather/install.py", package("godfather")),
             ("slotfather/src/slotfather/version.py", package("slotfather") | {"godfather tests", "lanefather tests"}),
-            ("spawnfather/spawnfather/__init__.py", package("spawnfather") | {"lanefather tests"}),
+            ("spawnfather/spawnfather/__init__.py",
+             package("spawnfather") | {"slotfather tests", "lanefather tests", "godfather tests"}),
         ):
             with self.subTest(changelog_path=path):
                 self.assertEqual(extra | {"common tests"} | ALWAYS, self.selected(path))
@@ -149,9 +164,10 @@ class SelectionTests(unittest.TestCase):
         self.assertEqual(tree1, keys1["test hygiene"])
         self.assertTrue(keys1["lanefather tests"].startswith("inputs:"))
 
-        # Editing lanefather/lanefather/cli.py invalidates lanefather & root checks, not sibling packages.
-        (root / "lanefather/lanefather/cli.py").write_text("x = 2\n")
-        subprocess.run([*git, "commit", "-qam", "edit lanefather cli"], check=True)
+        # Editing lanefather/README.md invalidates lanefather & root checks, not sibling packages.
+        (root / "lanefather/README.md").write_text("# lanefather\n")
+        subprocess.run([*git, "add", "lanefather/README.md"], check=True)
+        subprocess.run([*git, "commit", "-qm", "edit lanefather readme"], check=True)
         tree2 = head_tree()
         keys2 = checks.cache_keys(root, tree2, checks.NAMES)
         self.assertNotEqual(keys1["lanefather tests"], keys2["lanefather tests"])
@@ -161,17 +177,41 @@ class SelectionTests(unittest.TestCase):
         self.assertEqual(keys1["godfather tests"], keys2["godfather tests"])
         self.assertEqual(keys1["spawnfather tests"], keys2["spawnfather tests"])
 
-        # Editing lanefather/lanefather/events.py DOES invalidate godfather tests too.
-        (root / "lanefather/lanefather/events.py").write_text("e = 2\n")
-        subprocess.run([*git, "commit", "-qam", "edit lanefather events"], check=True)
+        # Editing lanefather/lanefather/cli.py DOES invalidate godfather tests too (not slotfather/spawnfather).
+        (root / "lanefather/lanefather/cli.py").write_text("x = 2\n")
+        subprocess.run([*git, "commit", "-qam", "edit lanefather cli"], check=True)
         tree3 = head_tree()
         keys3 = checks.cache_keys(root, tree3, checks.NAMES)
         self.assertNotEqual(keys2["godfather tests"], keys3["godfather tests"])
         self.assertEqual(keys2["slotfather tests"], keys3["slotfather tests"])
+        self.assertEqual(keys2["spawnfather tests"], keys3["spawnfather tests"])
 
         # full_tree=True (unowned root files) keys every check on full HEAD^{tree}.
         full_keys = checks.cache_keys(root, tree3, checks.NAMES, full_tree=True)
         self.assertTrue(all(value == tree3 for value in full_keys.values()))
+
+    def test_sibling_package_test_references_are_declared_in_check_inputs(self) -> None:
+        """Drift guard: any package test referencing a sibling package directory must declare it in Check.inputs."""
+        missing: list[str] = []
+        for pkg in checks.PACKAGES:
+            declared = checks.CHECKS_BY_NAME[f"{pkg} tests"].inputs
+            for path in sorted((ROOT / pkg / "tests").glob("*.py")):
+                tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+                for node in ast.walk(tree):
+                    if not (isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div)):
+                        continue
+                    if not (isinstance(node.right, ast.Constant) and isinstance(node.right.value, str)):
+                        continue
+                    sibling = node.right.value
+                    if sibling not in checks.PACKAGES or sibling == pkg:
+                        continue
+                    left = ast.unparse(node.left)
+                    if not (left.endswith(".parent") or ".parents[" in left or left in ("REPOSITORY", "REPO")):
+                        continue
+                    if not any(spec.startswith(f"{sibling}/") for spec in declared):
+                        rel = path.relative_to(ROOT)
+                        missing.append(f"{rel}:{node.lineno} references {sibling} ({left} / {sibling!r})")
+        self.assertEqual([], missing, "undeclared sibling-package test inputs")
 
 
 class PlanTests(unittest.TestCase):
@@ -543,6 +583,13 @@ class ParallelRunnerTests(unittest.TestCase):
             self.assertEqual(2, checks.test_workers({"SLOTFATHER_LEASE": "lease-1", "SLOTFATHER_COUNT": "2"}))
             self.assertEqual(2, checks.test_workers({"FATHERS_VERIFY_SLOTS": "2"}))
             self.assertEqual(4, checks.test_workers({"SLOTFATHER_COUNT": "2"}))  # ignored without SLOTFATHER_LEASE
+            for invalid in ("", "0", "-1", "abc"):
+                with self.subTest(invalid_slot=invalid):
+                    self.assertEqual(4, checks.test_workers({"SLOTFATHER_SLOTS": invalid}))
+                    self.assertEqual(
+                        4, checks.test_workers({"SLOTFATHER_LEASE": "lease-1", "SLOTFATHER_COUNT": invalid}),
+                    )
+                    self.assertEqual(4, checks.test_workers({"FATHERS_VERIFY_SLOTS": invalid}))
         for bad in ("0", "-2", "lots"):
             with self.subTest(bad=bad), self.assertRaises(ValueError):
                 checks.test_workers({"FATHERS_TEST_WORKERS": bad})

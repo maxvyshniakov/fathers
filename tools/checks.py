@@ -14,9 +14,12 @@ package's checks from the changed paths.
   python3 tools/checks.py plan BASE        Lanefather's plan for the changes since BASE (tools/lane-check answers it)
 
 A change under a package selects its lint gate and tests, except package documentation (GLOSSARY.md, docs/**); one
-under common/ selects every package; Slotfather's command and sources also select Godfather's tests, which run them.
-Documentation selects only the cheap root checks, which every selection includes. A path no rule knows selects
-everything. A tree without changes since its base verifies everything.
+under common/ selects every package; cross-package contract edges (Slotfather and Spawnfather sources -> Lanefather
+tests; Slotfather, Spawnfather and Lanefather sources -> Godfather tests; Spawnfather sources -> Slotfather tests;
+package installers, versions and changelogs -> common tests) come from each check's declared `inputs`. Changes to
+`tools/checks.py` or `tools/verify.py` select every check. Documentation selects only the cheap root checks, which
+every selection includes. A path no rule knows selects everything. A tree without changes since its base verifies
+everything.
 """
 from __future__ import annotations
 
@@ -72,10 +75,11 @@ TESTS = {
     "godfather": ["-s", "tests", "-t", "tests"],
     "tokenfather": ["-s", "tests"],
 }
-COMMON_VERSION_INPUTS = tuple(
+COMMON_PACKAGE_INPUTS = tuple(
     path for pkg in PACKAGES for path in (
         f"{pkg}/CHANGELOG.md",
         f"{pkg}/pyproject.toml",
+        f"{pkg}/install.py",
         f"{pkg}/src/{pkg}/version.py",
         f"{pkg}/{pkg}/__init__.py",
     )
@@ -86,18 +90,14 @@ def _package_inputs(name: str, kind: str) -> tuple[str, ...]:
     base = (f"{name}/", "common/", *RUNNER_INPUTS, f".github/workflows/{name}.yml")
     if kind == "lint":
         return (*base, "tools/ruff.toml")
+    if name == "slotfather":
+        return (*base, "spawnfather/spawnfather/")
     if name == "lanefather":
         return (*base, "slotfather/slotfather", "slotfather/src/", "spawnfather/spawnfather/")
     if name == "godfather":
-        return (
-            *base,
-            "slotfather/slotfather",
-            "slotfather/src/",
-            "spawnfather/spawnfather/events.py",
-            "spawnfather/spawnfather/dashboard.py",
-            "lanefather/lanefather/events.py",
-            "lanefather/lanefather/dashboard.py",
-        )
+        return (*base, "slotfather/slotfather", "slotfather/src/", "spawnfather/spawnfather/", "lanefather/lanefather/")
+    if name == "tokenfather":
+        return (*base, "godfather/tests/fixtures/changelog/")
     return base
 
 
@@ -109,7 +109,7 @@ CHECKS = [
     Check("common lint", 0.4, inputs=("common/", "install.py", ".github/workflows/common.yml", *RUNNER_INPUTS)),
     Check("common tests", 0.2, inputs=(
         "common/", "install.py", ".github/workflows/common.yml", *RUNNER_INPUTS,
-        "slotfather/src/", "spawnfather/spawnfather/", *COMMON_VERSION_INPUTS,
+        "slotfather/src/", "spawnfather/spawnfather/", *COMMON_PACKAGE_INPUTS,
     )),
     Check("tools", 0.2),
     Check("test hygiene", 0.2),

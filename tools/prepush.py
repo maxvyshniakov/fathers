@@ -80,10 +80,8 @@ def pending(root: Path, env: Mapping[str, str], sha: str) -> set[str] | None:
     tree = git(root, env, "rev-parse", f"{sha}^{{tree}}")
     if tree is None:
         return None
-    if hasattr(checks, "cache_keys"):
-        keys = checks.cache_keys(root, tree, names, full_tree=bool(getattr(selection, "unowned", None)), env=env)
-        return set(names) - cache.passed_keys(keys)
-    return set(names) - cache.passed(tree)
+    keys = checks.cache_keys(root, tree, names, full_tree=bool(getattr(selection, "unowned", None)), env=env)
+    return set(names) - cache.passed_keys(keys)
 
 
 def check_commit(root: Path, env: Mapping[str, str], sha: str) -> tuple[int, int | None]:

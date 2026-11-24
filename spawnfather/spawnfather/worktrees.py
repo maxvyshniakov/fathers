@@ -50,7 +50,6 @@ import json
 import os
 from pathlib import Path
 import re
-import shutil
 import stat
 import time
 from typing import Any, Callable, Dict, List, Mapping, NamedTuple, Optional, Sequence, Set, Tuple
@@ -252,14 +251,18 @@ def zombie(proc: _procs.Proc) -> bool:
     return "<defunct>" in proc.cmd or (proc.cmd.startswith("(") and proc.cmd.endswith(")"))
 
 
+SYSTEM_BIN_PREFIXES = ("/usr/bin/", "/bin/", "/usr/sbin/", "/sbin/")
+
+
 def _setuid_binary(cmd: str) -> bool:
-    """True when `cmd`'s executable has the setuid/setgid bit set (such as macOS `/usr/bin/top`),
-    so non-root `lsof` / `/proc/PID/cwd` is structurally unable to read its working directory."""
+    """True when `cmd`'s executable is an absolute path under a system bin directory with the setuid/setgid bit set
+    (such as macOS `/usr/bin/top`), so non-root `lsof` / `/proc/PID/cwd` is structurally unable to read its working
+    directory. Relative names are never resolved via PATH."""
     words = cmd.split()
-    if not words:
+    if not words or not os.path.isabs(words[0]):
         return False
-    exe = words[0] if os.path.isabs(words[0]) else shutil.which(words[0])
-    if not exe:
+    exe = os.path.realpath(words[0])
+    if not exe.startswith(SYSTEM_BIN_PREFIXES):
         return False
     try:
         return bool(os.stat(exe).st_mode & (stat.S_ISUID | stat.S_ISGID))

@@ -489,6 +489,7 @@ class VerifyProgressHeartbeatTests(LaneCase):
         queue_hold.touch()
         proc.wait(timeout=30)
         reader.join(timeout=5)
+        self.assertFalse(reader.is_alive(), "stdout reader thread did not finish after process exit")
         output = "".join(lines)
         self.assertEqual(proc.returncode, 0, output)
         queued_lines = [line for line in output.splitlines() if "lane-queued [queued]" in line]
