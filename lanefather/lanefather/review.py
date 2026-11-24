@@ -1034,12 +1034,109 @@ def _effective_lane_review_class(record: Record, store: state.Store | None = Non
     return declared
 
 
-def _read_external_report(
-    report_path: str, alias: str, project: config.Config, *, expected_tip: str = "", expected_tree: str = ""
-) -> tuple[str, list[dict[str, Any]], dict[str, Any]]:
+RECORD_VERDICTS = ("approve", "changes_requested")
+# A reviewer name lanefather does not know becomes part of a file name (`<label>.<reviewer>.md` in a panel).
+EXTERNAL_REVIEWER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+-]{0,63}")
+MAX_REF = 500
+MAX_NOTE = 4000
+
+
+@dataclasses.dataclass(frozen=True)
+class RecordedVerdict:
+    """`review --record`'s `--verdict`, `--ref` and `--note` (fathers#256): what a delegated reviewer concluded and
+    where its review lives."""
+
+    verdict: str | None = None
+    ref: str | None = None
+    note: str | None = None
+
+    def fields(self) -> dict[str, str]:
+        return {key: value for key, value in (("verdict", self.verdict), ("ref", self.ref), ("note", self.note))
+                if value is not None}
+
+
+def recorded_verdict(args: Any) -> RecordedVerdict:
+    """The verdict flags of `args`, validated: a single-line `--ref`, a non-blank `--note`, and `--note` for
+    `changes_requested` without a report file, since that note becomes the finding to mark."""
+    verdict: str | None = getattr(args, "verdict", None)
+    raw_ref: str | None = getattr(args, "ref", None)
+    raw_note: str | None = getattr(args, "note", None)
+    if verdict is not None and verdict not in RECORD_VERDICTS:
+        raise LaneError(f"--verdict {verdict!r}: use {' or '.join(RECORD_VERDICTS)}")
+    ref = raw_ref.strip() if raw_ref is not None else None
+    if ref is not None and (not ref or len(ref) > MAX_REF or any(c in ref for c in "\r\n\t")):
+        raise LaneError(f"--ref: give one line of at most {MAX_REF} characters (a URL or thread link)")
+    note = raw_note.strip() if raw_note is not None else None
+    if note is not None and (not note or len(note) > MAX_NOTE):
+        raise LaneError(f"--note: give a non-blank summary of at most {MAX_NOTE} characters")
+    record_file: Any = getattr(args, "record", None)
+    if record_file is True and verdict is None:
+        raise LaneError("--record without a report FILE requires --verdict approve|changes_requested")
+    if record_file is True and verdict == "changes_requested" and note is None:
+        raise LaneError("--verdict changes_requested without a report FILE requires --note <the requested changes>")
+    return RecordedVerdict(verdict, ref, note)
+
+
+def _external_meta(alias: str, project: config.Config) -> dict[str, Any]:
     cleaned_alias = alias.strip()
     if not cleaned_alias or cleaned_alias.lower() == "both":
         raise LaneError("--record requires a concrete --reviewer <alias> (not blank or 'both')")
+    resolved = reviewer.resolve_reviewer(cleaned_alias, project)
+    if resolved is not None:
+        return {
+            "reviewer": resolved.alias,
+            "model": resolved.id,
+            "effort": resolved.effort,
+            "provider": resolved.provider,
+            "cli": resolved.cli,
+            "options": resolved.options,
+        }
+    if not EXTERNAL_REVIEWER.fullmatch(cleaned_alias):
+        raise LaneError(f"--reviewer {cleaned_alias!r}: an external reviewer's name is letters, digits and . _ + - "
+                        "(at most 64), such as claude-fable-5-2")
+    return {
+        "reviewer": cleaned_alias,
+        "model": cleaned_alias,
+        "effort": "external",
+        "provider": None,
+        "cli": "external",
+        "options": None,
+    }
+
+
+def _verdict_report(given: RecordedVerdict, meta: dict[str, Any], *, tip: str, tree: str
+                    ) -> tuple[str, list[dict[str, Any]]]:
+    """The report of a verdict recorded without a file: `approve` has no findings; `changes_requested` has one P1
+    finding, the note, which holds the gate until it is marked fixed or rejected like any other finding."""
+    findings: list[dict[str, Any]] = []
+    if given.verdict == "changes_requested":
+        note = given.note or ""
+        title = note.splitlines()[0].strip()[:300] if note else "changes requested"
+        detail = note + (f"\n\nReview: {given.ref}" if given.ref else "")
+        findings.append({"n": 1, "severity": "P1", "category": None, "package": None, "file": None, "line": None,
+                         "title": title, "detail": detail[:4000], "mark": None})
+    lines = [f"Review recorded from {meta['reviewer']}: {given.verdict}.", ""]
+    if given.ref:
+        lines += [f"Review: {given.ref}", ""]
+    if given.note:
+        lines += [given.note, ""]
+    block = {"tip": tip, "tree": tree, "verdict": given.verdict,
+             "findings": [{k: f[k] for k in ("severity", "title", "detail")} for f in findings]}
+    text = "\n".join([*lines, "```json", json.dumps(block, indent=2), "```", ""])
+    return text, findings
+
+
+def _read_external_report(
+    report_path: str | bool, alias: str, project: config.Config, *, expected_tip: str = "", expected_tree: str = "",
+    given: RecordedVerdict | None = None,
+) -> tuple[str, list[dict[str, Any]], dict[str, Any]]:
+    given = given or RecordedVerdict()
+    meta = _external_meta(alias, project)
+    if report_path is True or not report_path:
+        if given.verdict is None:
+            raise LaneError("--record without a report FILE requires --verdict approve|changes_requested")
+        text, findings = _verdict_report(given, meta, tip=expected_tip, tree=expected_tree)
+        return text, findings, meta
     path = Path(report_path)
     if not path.is_file():
         raise LaneError(f"--record {report_path}: file does not exist")
@@ -1059,25 +1156,13 @@ def _read_external_report(
         raise LaneError(
             f"--record {report_path}: report tree {report_tree[:10]} does not match target tree {expected_tree[:10]}"
         )
-    resolved = reviewer.resolve_reviewer(cleaned_alias, project)
-    if resolved is not None:
-        meta: dict[str, Any] = {
-            "reviewer": resolved.alias,
-            "model": resolved.id,
-            "effort": resolved.effort,
-            "provider": resolved.provider,
-            "cli": resolved.cli,
-            "options": resolved.options,
-        }
-    else:
-        meta = {
-            "reviewer": cleaned_alias,
-            "model": cleaned_alias,
-            "effort": "external",
-            "provider": None,
-            "cli": "external",
-            "options": None,
-        }
+    blocking = [f for f in findings if f["severity"] in ("P0", *project.review_blocks)]
+    if given.verdict == "approve" and blocking:
+        raise LaneError(f"--verdict approve: {report_path} has {len(blocking)} blocking finding(s) "
+                        f"({', '.join('#' + str(f['n']) for f in blocking)}); record it without --verdict, or "
+                        "--verdict changes_requested")
+    if given.verdict == "changes_requested" and not findings:
+        raise LaneError(f"--verdict changes_requested: {report_path} has no findings to mark")
     return text, findings, meta
 
 
@@ -1101,14 +1186,17 @@ def _record_external_review(
     base: str,
     tip: str,
     tree: str,
-    report_path: str,
+    report_path: str | bool,
     alias: str,
     force: bool = False,
     merge_panel: bool = False,
+    given: RecordedVerdict | None = None,
 ) -> review_record.ReviewRecord:
+    given = given or RecordedVerdict()
     text, findings, meta = _read_external_report(
-        report_path, alias, store.project, expected_tip=tip, expected_tree=tree,
+        report_path, alias, store.project, expected_tip=tip, expected_tree=tree, given=given,
     )
+    source_file = str(Path(report_path).resolve()) if isinstance(report_path, str) and report_path else None
     reviews = store.reviews_dir
     reviews.mkdir(parents=True, exist_ok=True)
     output_name = f"{label}.{meta['reviewer']}.md" if merge_panel else f"{label}.md"
@@ -1122,7 +1210,8 @@ def _record_external_review(
         "tip": tip,
         "tree": tree,
         "output": str(output),
-        "source_file": str(Path(report_path).resolve()),
+        "source_file": source_file,
+        **given.fields(),
         "findings": findings,
         "seconds": 0.0,
         "fallback": None,
@@ -1145,6 +1234,7 @@ def _record_external_review(
             "status": "finished",
             "recorded": True,
             "source_file": payload["source_file"],
+            **given.fields(),
             "reviewer": raw.get("reviewer"),
             "provider": raw.get("provider"),
             "cli": raw.get("cli"),
@@ -1241,7 +1331,7 @@ def audit_lane(args: Any, store: state.Store) -> int:
         tree = git(main, "rev-parse", tip + "^{tree}")
         completed = _record_external_review(
             store, label, fields, base=base, tip=tip, tree=tree,
-            report_path=record_file, alias=alias, force=bool(args.force_reason),
+            report_path=record_file, alias=alias, force=bool(args.force_reason), given=recorded_verdict(args),
         )
     else:
         resolved = scope.resolve(record, base, store.project)
@@ -1323,10 +1413,12 @@ def _check_active_worktree_for_review(record: Record, lane_id: str) -> None:
 
 
 def record_lane_review(args: Any, store: state.Store) -> int:
-    """`lanefather review <id> --record <report file> --reviewer <alias>` (fathers#252)."""
+    """`lanefather review <id> --record [<report file>] --reviewer <alias> [--verdict ...]` (fathers#252,
+    fathers#256). Bound to the lane's tip and tree like a review lanefather ran: a later commit makes it stale."""
     alias = getattr(args, "reviewer", None)
     if not alias or not str(alias).strip():
         raise LaneError("--record requires --reviewer <alias>")
+    given = recorded_verdict(args)
     record = store.load(args.id)
     if lifecycle.planned(record):
         raise LaneError(f"review refused: lane {args.id} is planned; create its worktree and commit changes first")
@@ -1356,6 +1448,10 @@ def record_lane_review(args: Any, store: state.Store) -> int:
         or isinstance(verdict, (review_record.Exempt, review_record.PartialEvidence))
         or elsewhere
     )
+    if isinstance(verdict, review_record.Stale) and not args.force_reason:
+        # The same rule as a review lanefather ran (fathers#256): replacing a review of an older tip is logged.
+        raise LaneError(f"review refused: lane {args.id}'s {existing.summary(prog=store.prog)[1]}; record the review "
+                        f"of the current tip with {store.prog} review {args.id} --record ... --force-reason <why>")
     if has_existing and not args.force_reason and not merge_panel:
         print("\n".join(review_lines(existing, record=record, prog=store.prog)))
         if existing.is_recovered:
@@ -1386,6 +1482,7 @@ def record_lane_review(args: Any, store: state.Store) -> int:
         alias=alias,
         force=bool(args.force_reason),
         merge_panel=merge_panel,
+        given=given,
     )
     if record.get("pre_land_fix"):
         record = store.update(args.id, lambda latest: latest.pop("pre_land_fix", None) is not None)
@@ -2100,7 +2197,7 @@ def _run_overall_target(
         tree = git(main, "rev-parse", sha + "^{tree}")
         completed = _record_external_review(
             store, label, fields, base=base, tip=sha, tree=tree,
-            report_path=record_file, alias=alias, force=bool(args.force_reason),
+            report_path=record_file, alias=alias, force=bool(args.force_reason), given=recorded_verdict(args),
         )
         print("\n".join(review_lines(completed, prog=prog)))
         return 0
@@ -2380,6 +2477,8 @@ def review(args: Any, store: state.Store) -> int:
     has_paths = bool(getattr(args, "paths", None))
     areas_file = getattr(args, "areas", None)
     area_flag = getattr(args, "area", None)
+    if not record_file and any(getattr(args, flag, None) is not None for flag in ("verdict", "ref", "note")):
+        raise LaneError("--verdict, --ref and --note go with --record")
     if (recover_sources or recover_target or recover_range) and not is_recover:
         raise LaneError("--source, --target and --reviewed-range go with --recover")
     if has_lanes and not args.overall:

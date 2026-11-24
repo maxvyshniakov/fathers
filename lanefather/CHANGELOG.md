@@ -8,6 +8,12 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
 
 ### Added
 
+- `lanefather review <id> --record --reviewer NAME --verdict approve|changes_requested [--ref URL] [--note TEXT]`
+  records the verdict of a review delegated outside Lanefather (fathers#256) without a report file, bound to the lane's
+  tip and tree like a review Lanefather ran, so `land`, `promote` and `done` take it without `--force-reason` and a
+  later commit makes it stale. `changes_requested` becomes one P1 finding to mark; `--verdict` with a report file is
+  checked against its findings. `show` and `status` name a recorded review's verdict, reviewer and ref
+  (`review.recorded` in JSON).
 - Historical review evidence recovery without rerunning completed reviews (fathers#179):
   - `lanefather review <id> --recover [--source URL...] [--target REF] [--reviewed-range BASE..TIP]` fetches historical
     review dispositions from explicit GitHub issue/PR comment URLs (or auto-discovers them from linked tickets), verifies

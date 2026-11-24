@@ -613,6 +613,7 @@ class LaneView:
     review_recovered_sources: tuple[str, ...] = ()
     review_missing_facts: tuple[str, ...] = ()
     review_recovery_hint: str | None = None
+    review_recorded: dict[str, Any] | None = None
 
     def _check_status_word(self, *, default: str) -> str:
         if isinstance(self.check, NoReceipt):
@@ -717,6 +718,8 @@ class LaneView:
             review_block["sources"] = list(self.review_recovered_sources)
             review_block["missing_facts"] = list(self.review_missing_facts)
             review_block["summary"] = self.review_words
+        if self.review_recorded:
+            review_block["recorded"] = dict(self.review_recorded)
         if self.review_recovery_hint:
             review_block["recovery_hint"] = self.review_recovery_hint
         return {
@@ -763,6 +766,8 @@ class LaneView:
             review_block["sources"] = list(self.review_recovered_sources)
             review_block["missing_facts"] = list(self.review_missing_facts)
             review_block["summary"] = self.review_words
+        if self.review_recorded:
+            review_block["recorded"] = dict(self.review_recorded)
         if self.review_recovery_hint:
             review_block["recovery_hint"] = self.review_recovery_hint
         return {
@@ -850,6 +855,13 @@ def lane_view(
         if rev_recovered and isinstance(raw_missing_facts, list)
         else ()
     )
+    # A review recorded from outside lanefather (fathers#252, fathers#256): who, the verdict and where it lives.
+    rev_recorded = (
+        {key: rev_raw[key] for key in ("reviewer", "verdict", "ref", "note", "source_file", "tip")
+         if isinstance(rev_raw.get(key), str) and rev_raw.get(key)}
+        if rev_raw.get("recorded") is True and not rev_recovered
+        else None
+    )
     rev_recovery_hint = (
         f"recover historical evidence with {cmd_prog} review {lane_id} --recover before rerunning"
         if bool(record.get("landed"))
@@ -926,4 +938,5 @@ def lane_view(
         review_recovered_sources=rev_recovered_sources,
         review_missing_facts=rev_missing_facts,
         review_recovery_hint=rev_recovery_hint,
+        review_recorded=rev_recorded,
     )

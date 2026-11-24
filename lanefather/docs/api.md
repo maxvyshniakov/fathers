@@ -66,6 +66,8 @@ ledger.log.
   `review.recovered: true`, `review.evidence_source: "historical"`, `review.complete`, `review.sources`,
   `review.missing_facts`, and `review.summary`. A landed lane without an executed review receipt also includes
   `review.recovery_hint` pointing to `lanefather review <id> --recover`.
+- A lane whose review was recorded with `review <id> --record` (fathers#256) adds `review.recorded`:
+  `{"reviewer", "tip", "verdict"?, "ref"?, "note"?, "source_file"?}`; its `review.status` is that of any review.
 - `unknown`: merges in the range when this state directory knows no lane landed there. Run the command where the
   lanes' state lives (the machine and `state_dir` that landed them); a CI clone without it is held, not cleared.
 - `promote` refuses the batch gate on `blocking` (a running review does not hold the gate) and the move of dev on
