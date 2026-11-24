@@ -32,6 +32,7 @@ GRACE = 10.0  # between SIGTERM and SIGKILL (`reap --grace`; setting reap.grace)
 GRACE_MIN = 1.0  # the shortest grace the setting saves (0 is SIGKILL right after SIGTERM, on every path)
 GRACE_MAX = 600.0  # the longest grace the setting saves
 PS_TIMEOUT = 10.0  # a ps or lsof call may take this long
+OWNER_DEAD_DELAY = 2.0  # seconds `reap --if-owner-dead` waits before checking whether the session process exited
 
 # The sweep
 SWEEP_INTERVAL = 3600  # the launchd agent's interval (`sweep --plist --interval`; setting sweep.interval), seconds

@@ -95,17 +95,50 @@ class EdgeTests(Case):
         self.assertEqual({"jwithlog", "jmissing", "jdirlog"}, set(by_id))
         self.assertEqual(137, by_id["jwithlog"].get("exit"))
         self.assertEqual(str(log), by_id["jwithlog"].get("log"))
+        self.assertEqual(log.stat().st_size, by_id["jwithlog"].get("log_size"))
+        self.assertIsInstance(by_id["jwithlog"].get("log_mtime"), float)
         self.assertEqual("Killed: 9", (by_id["jwithlog"].get("log_tail") or [""])[-1])
         self.assertLessEqual(len(by_id["jwithlog"].get("log_tail") or []), 10)
         self.assertNotIn("log_tail", by_id["jmissing"])
         self.assertNotIn("log_tail", by_id["jdirlog"])
+        saved_sweep: Dict[str, Any] = json.loads((self.state / "sweep.json").read_text())
+        saved_gone: List[Dict[str, Any]] = saved_sweep.get("gone") or []
+        saved_by_id = {g["id"]: g for g in saved_gone}
+        self.assertEqual("Killed: 9", (saved_by_id["jwithlog"].get("log_tail") or [""])[-1])
         logged = [json.loads(line) for line in (self.state / "events.jsonl").read_text().splitlines()]
         gone_events = {e["subject"]["id"]: e for e in logged if e["kind"] == "entry.gone"}
         self.assertEqual({"jwithlog", "jmissing", "jdirlog"}, set(gone_events))
         self.assertEqual(137, gone_events["jwithlog"]["details"].get("exit"))
-        self.assertEqual("Killed: 9", gone_events["jwithlog"]["details"]["log_tail"][-1])
+        self.assertEqual(str(log), gone_events["jwithlog"]["details"].get("log"))
+        self.assertEqual(log.stat().st_size, gone_events["jwithlog"]["details"].get("log_size"))
+        self.assertIsInstance(gone_events["jwithlog"]["details"].get("log_mtime"), float)
+        self.assertNotIn("log_tail", gone_events["jwithlog"]["details"], "raw log text must not go into events.jsonl")
         self.assertNotIn("log_tail", gone_events["jmissing"]["details"])
         self.assertNotIn("log_tail", gone_events["jdirlog"]["details"])
+
+    def test_sweep_log_tail_truncates_large_logs_long_lines_and_invalid_utf8(self):
+        me = os.getpid()
+        now = 10_000.0
+        here = table(proc(me, ppid=1, start="Thu Nov 12 09:00:00 2026", cmd="python3"))
+        log = self.tmp / "big.log"
+        # Build >4096 bytes with invalid UTF-8 bytes straddling the 4096-byte tail boundary, plus a >200-char line.
+        prefix = b"old-prefix\n" * 200
+        long_line = b"X" * 260 + b"\n"
+        tail_body = b"".join(f"tail-{i}\n".encode("ascii") for i in range(1, 12))
+        # Pad so invalid UTF-8 sits right at len(content) - 4096.
+        filler_len = max(0, 4096 - len(tail_body) - len(long_line) - 4)
+        content = prefix + b"boundary-" + b"\xff\xfe\xfd\xfc" + b"a" * filler_len + b"\n" + tail_body + long_line
+        self.assertGreater(len(content), 4096)
+        log.write_bytes(content)
+        record = running(4246, "Thu Nov 12 08:30:00 2026", "node big", "jbiglog")
+        record.update(log=str(log))
+        self.store.save(record)
+        report = self.quiet_sweep(table=here, now=now)
+        (item,) = report["gone"]
+        tail = item["log_tail"]
+        self.assertEqual(10, len(tail))
+        self.assertEqual("X" * 200, tail[-1])
+        self.assertEqual("tail-3", tail[0])
 
     def test_reaping_entry_members_are_owned_in_sweep_and_not_reported_as_unowned(self):
         me = os.getpid()

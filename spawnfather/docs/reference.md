@@ -45,7 +45,7 @@ characters. An event follows the change it describes; one that cannot be written
 | `entry.owned` | entry | the command started; `argv`, `cwd`, `ttl`, `keep`, `mode`, `pgid`, `log` |
 | `entry.adopted` | entry | `cmd`, `ttl`, `keep`, `pgid`, `group`; a background call's shell also `auto: "background"`, `tool_use_id` |
 | `entry.exited` | entry | the leader exited and nothing of it remains; `exit` |
-| `entry.gone` | entry | the sweep found an owned process entry with nothing left; `how`, plus `exit` if known and `log`/`log_tail` (last 10 lines) when its log file is readable |
+| `entry.gone` | entry | the sweep found an owned process entry with nothing left; `how`, plus `exit` if known and safe log metadata (`log`, `log_size`, `log_mtime`) when its log file is readable (bounded `log_tail` goes only into local `sweep --json` and `sweep.json`, never `events.jsonl`) |
 | `entry.extended` | entry | `ttl`, `expires` |
 | `entry.handed` | entry | `from`, `to` (kind, session, agent, lane) |
 | `entry.reaped` | entry | `reason`, `result`, `how`, `signals` (`TERM`, `KILL`), `pids` |
@@ -290,7 +290,7 @@ Codex one when the registry never named it) and ends at its TTL or when swept as
 | `PreToolUse` (Bash, command names spawnfather) | writes a claim |
 | `PreToolUse` (Bash, `run_in_background`, not one explicit `spawnfather own`/`own-resource`/`adopt`) | writes a claim and answers with the command rewritten to own its shell (Background Bash calls) |
 | `SubagentStop` | reaps the subagent's explicitly owned entries with `keep: owner`. Auto-owned background calls survive the turn. |
-| `SessionEnd` | for a terminal reason (`prompt_input_exit`, `clear`, `logout`, `bypass_permissions_disabled`, or an omitted reason), records that the session ended (`ended/<session>.json`: one proof the sweep takes that a session is gone) and reaps the session's entries (handed ones belong to their new session); transient/harness reasons such as `other` (fired between turns in T3 Code) or `resume` leave the session and its entries alive |
+| `SessionEnd` | for a terminal reason (`prompt_input_exit`, `clear`, `logout`, `bypass_permissions_disabled`, or an omitted reason), records that the session ended (`ended/<session>.json`: one proof the sweep takes that a session is gone) and reaps the session's entries (handed ones belong to their new session); for `other` (used both by T3 Code between turns and by CLI signal/`-p` exits), schedules a detached reap that checks owner liveness after a short delay and reaps (and records the session ended) only once the owning session process is confirmed gone; transient reasons such as `resume` leave the session and its entries alive |
 | `Stop` | the end of a main-agent turn, not of the session: reaps the session's entries past their TTL |
 
 The hook never blocks and exits 0, and prints only the answer to a background call; a reap runs in a detached

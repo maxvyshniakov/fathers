@@ -42,9 +42,20 @@ class PlanTests(Case):
         missing = hook.plan({"hook_event_name": "SessionEnd", "session_id": "s1"}, self.store)
         self.assertEqual(["reap", "--owner", "s1"], (missing or [])[:3])
 
+    def test_session_end_with_other_schedules_if_owner_dead_reap_without_recording_end(self):
+        self.entry("j1", keep="session")
+        spawned: List[List[str]] = []
+        payload = {"hook_event_name": "SessionEnd", "session_id": "s1", "reason": "other"}
+        expected = ["reap", "--owner", "s1", "--lifecycle", "SessionEnd", "--if-owner-dead",
+                    "--reason", "session-end (other)", "--quiet", "--via", "hook"]
+        self.assertEqual(expected, hook.plan(payload, self.store))
+        self.assertEqual(expected, hook.handle(payload, self.store, spawn=spawned.append))
+        self.assertEqual(1, len(spawned))
+        self.assertIsNone(leftovers.ended(self.store, "s1"))
+
     def test_session_end_with_transient_or_invalid_reason_does_not_reap_or_record_end(self):
         self.entry("j1", keep="session")
-        for reason in ("other", "resume", "", 123, True, ["other"]):
+        for reason in ("resume", "", 123, True, ["other"]):
             with self.subTest(reason=reason):
                 spawned: List[List[str]] = []
                 payload = {"hook_event_name": "SessionEnd", "session_id": "s1", "reason": reason}

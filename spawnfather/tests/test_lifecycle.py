@@ -108,14 +108,25 @@ class HookTests(Case):
         self.assert_no_reap_started()
         self.assertEqual("running", self.state_of(kept["id"]))
         self.assertTrue(self.runs(kept["pid"]))
-        self.hook("SessionEnd", "s1", reason="other")
-        self.assert_no_reap_started()
+        # While the owning session process is still alive (e.g. T3 Code between turns), reason="other" keeps it.
+        fast_env = {**self.session_env, "SPAWNFATHER_OWNER_DEAD_DELAY": "0"}
+        self.hook("SessionEnd", "s1", env=fast_env, reason="other")
         self.assertEqual("running", self.state_of(kept["id"]))
         self.assertTrue(self.runs(kept["pid"]))
         self.assertFalse((self.state / "ended" / "s1.json").exists())
-        self.hook("SessionEnd", "s1", reason="prompt_input_exit")
+        self.hook("SessionEnd", "s1", env=fast_env, reason="prompt_input_exit")
         self.wait_for(lambda: self.state_of(kept["id"]) == "reaped", what="session end reap")
         self.assertFalse(self.runs(kept["pid"]))
+
+    def test_session_end_other_reaps_once_the_owning_session_process_exited(self):
+        kept = self.own_as("agent-a", "--ttl", "1h", "--keep-for", "session")
+        self.claude.terminate()
+        self.claude.wait(timeout=10)
+        fast_env = {**self.session_env, "SPAWNFATHER_OWNER_DEAD_DELAY": "0"}
+        self.hook("SessionEnd", "s1", env=fast_env, reason="other")
+        self.wait_for(lambda: self.state_of(kept["id"]) == "reaped", what="session end (other) reap after exit")
+        self.assertFalse(self.runs(kept["pid"]))
+        self.assertTrue((self.state / "ended" / "s1.json").exists())
 
     def test_a_handed_entry_belongs_to_its_new_session(self):
         entry = self.own_as("agent-a", "--ttl", "1h")

@@ -185,6 +185,7 @@ def parser() -> Parser:
     p.add_argument("--quiet", action="store_true")
     p.add_argument("--via", help=argparse.SUPPRESS)
     p.add_argument("--lifecycle", type=_reap.Lifecycle, help=argparse.SUPPRESS)
+    p.add_argument("--if-owner-dead", action="store_true", help=argparse.SUPPRESS)
 
     p = sub.add_parser("hand", help="hand an entry over to another session or lane")
     p.add_argument("id", nargs="?")
@@ -390,6 +391,18 @@ def version_command(store: Store, args: argparse.Namespace) -> int:
 
 # reap, hand, extend
 
+def _owner_dead_delay() -> float:
+    raw = os.environ.get("SPAWNFATHER_OWNER_DEAD_DELAY")
+    if raw is not None:
+        try:
+            value = float(raw)
+        except ValueError:
+            return defaults.OWNER_DEAD_DELAY
+        if math.isfinite(value) and value >= 0:
+            return value
+    return defaults.OWNER_DEAD_DELAY
+
+
 def reap_command(store: Store, args: argparse.Namespace) -> int:
     chosen = [bool(args.id), bool(args.owner), bool(args.lane), args.pid is not None, bool(args.worktree)]
     if sum(chosen) != 1:
@@ -400,7 +413,7 @@ def reap_command(store: Store, args: argparse.Namespace) -> int:
             raise Usage("--started, --cmd and --tree go with --pid, and --started and --cmd with each other")
         if not math.isfinite(args.started):
             raise Usage("--started must be a finite epoch second")
-        if args.force or args.expired or args.lifecycle is not None:
+        if args.force or args.expired or args.lifecycle is not None or args.if_owner_dead:
             raise Usage("--started takes no --force, --expired or --lifecycle")
         if not (args.reason or "").strip():
             raise Usage("--started needs a --reason")
@@ -416,7 +429,7 @@ def reap_command(store: Store, args: argparse.Namespace) -> int:
         raise Usage("--override needs a reason")
     evidence = {"bases": args.base, "disposable": args.disposable, "override": args.override} if folders else None
     if args.worktree:
-        if args.expired or args.force or args.lifecycle is not None:
+        if args.expired or args.force or args.lifecycle is not None or args.if_owner_dead:
             raise Usage("--worktree takes no --expired, --force or --lifecycle")
         actor = _events.tool(args.via) if args.via else None
         return report([_resources.reap_worktree(store, args.worktree, args.reason,
@@ -424,13 +437,15 @@ def reap_command(store: Store, args: argparse.Namespace) -> int:
                                                 else args.grace, evidence or {}, args.stop_inside, args.dry_run,
                                                 actor)], args)
     if lane_owner:
-        if args.agent or args.lifecycle is not None:
+        if args.agent or args.lifecycle is not None or args.if_owner_dead:
             raise Usage("--owner lane:... takes no --agent or --lifecycle")
         lane_of_option(args.owner, "--owner", "reap")
     lifecycle: Optional[_reap.Lifecycle] = args.lifecycle
     if lifecycle is not None and (args.via != "hook" or not args.owner
                                   or bool(args.agent) != (lifecycle == _reap.Lifecycle.SUBAGENT_STOP)):
         raise Usage("--lifecycle requires the hook owner selector for that event")
+    if args.if_owner_dead and not args.owner:
+        raise Usage("--if-owner-dead goes with --owner SESSION")
     now = time.time()
     table = None
     if args.pid is not None:
@@ -451,6 +466,22 @@ def reap_command(store: Store, args: argparse.Namespace) -> int:
                                          args.via), args)
     if args.expired:
         selected = [e for e in selected if _entry.due(e, now)]
+    if args.if_owner_dead:
+        if not args.dry_run:
+            delay = _owner_dead_delay()
+            if delay > 0:
+                time.sleep(delay)
+        liveness_table = _procs.read_or_none()
+        if liveness_table is None:
+            return report([], args)
+        sessions = _owner.registry()
+        selected = [e for e in selected if _owner.alive(e.get("owner") or {}, liveness_table, sessions) is False]
+        if selected and not args.dry_run and args.owner:
+            from . import leftovers as _leftovers
+            try:
+                _leftovers.record_end(store, args.owner, "other")
+            except OSError:
+                pass
     held = _reap.lane_worktrees(selected, _owner.lane_owner(args.owner)) if lane_owner else None
     allowed = _reap.selector_guard(owner=args.owner, agent=args.agent, lane=args.lane,
                                    lifecycle=lifecycle, expired=args.expired, held=held)

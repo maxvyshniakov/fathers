@@ -197,12 +197,13 @@ def sweep(store: Store, dry_run: bool = False, table: Optional[_procs.Table] = N
                 continue
             if not dry_run:
                 updated = _entry.gone(store, entry["id"], now)
-                details = _gone_details(updated or entry, how)
+                event_details, report_details = _gone_details(updated or entry, how)
                 if updated is not None:
-                    _events.write(store.root, "entry.gone", _events.subject(updated), _events.tool("sweep"), details)
+                    _events.write(store.root, "entry.gone", _events.subject(updated), _events.tool("sweep"),
+                                  event_details)
             else:
-                details = _gone_details(entry, how)
-            report["gone"].append({"id": entry["id"], **details})
+                _, report_details = _gone_details(entry, how)
+            report["gone"].append({"id": entry["id"], **report_details})
             continue
         result = reap_due_or_orphaned(store, entry, now, table, sessions, grace, dry_run)
         if result is not None:
@@ -406,7 +407,8 @@ def record(store: Store, report: Dict[str, Any]) -> None:
                           {k: v for k, v in item.items() if k != "key"}, "warn")
     summary = result_of(report)
     write_atomic(store.root / "sweep.json", {"v": VERSION, "at": report["at"], "result": summary,
-                                              "cpu": report.get("cpu"), "agent_browser": report.get("agent_browser"),
+                                              "gone": report["gone"], "cpu": report.get("cpu"),
+                                              "agent_browser": report.get("agent_browser"),
                                               "worktrees": report.get("worktrees")})
     _events.write(store.root, "sweep.finished", {"type": "sweep", "id": _events.now()}, actor, summary,
                   "error" if report["errors"] else None)
@@ -487,13 +489,24 @@ def worktrees_text(found: Dict[str, Any], dry_run: bool) -> List[str]:
     return lines
 
 
-def _tail_log(path: Any) -> Optional[List[str]]:
-    """Last few lines of an entry's log file, capped in bytes and lines; None if missing, not a regular file,
-    unreadable, or empty."""
+def _read_log_info(path: Any) -> Optional[Tuple[int, float, Optional[List[str]]]]:
+    """Safe metadata (size, mtime) and bounded trailing lines for an entry's log file.
+
+    Returns None if `path` is missing, not a regular file, or unreadable. Checks `stat` before opening (and
+    rechecks `fstat` after opening with O_NONBLOCK | O_NOCTTY) so FIFOs and devices are never blocked on or
+    acquired as a controlling terminal.
+    """
     if not isinstance(path, str) or not path:
         return None
     try:
-        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+        pre = os.stat(path)
+    except OSError:
+        return None
+    if not stat.S_ISREG(pre.st_mode):
+        return None
+    flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOCTTY", 0)
+    try:
+        fd = os.open(path, flags)
     except OSError:
         return None
     try:
@@ -504,8 +517,10 @@ def _tail_log(path: Any) -> Optional[List[str]]:
     try:
         with handle:
             st = os.fstat(handle.fileno())
-            if not stat.S_ISREG(st.st_mode) or st.st_size <= 0:
+            if not stat.S_ISREG(st.st_mode):
                 return None
+            if st.st_size <= 0:
+                return st.st_size, st.st_mtime, None
             truncated = st.st_size > GONE_LOG_BYTES
             if truncated:
                 handle.seek(st.st_size - GONE_LOG_BYTES)
@@ -516,22 +531,34 @@ def _tail_log(path: Any) -> Optional[List[str]]:
     if truncated and len(lines) > 1:
         lines = lines[1:]  # drop the partial line at the seek boundary
     lines = [line[:GONE_LOG_LINE_MAX] for line in lines[-GONE_LOG_LINES:]]
-    return lines or None
+    return st.st_size, st.st_mtime, (lines or None)
 
 
-def _gone_details(entry: Entry, how: str) -> Dict[str, Any]:
-    """What the sweep can record when an owned entry's processes are already gone."""
-    details: Dict[str, Any] = {"how": how}
+def _gone_details(entry: Entry, how: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """Return `(event_details, report_details)` for an owned entry found gone.
+
+    `event_details` (written to `events.jsonl`) carries only safe metadata (`how`, `exit`, `log`, `log_size`,
+    `log_mtime`) and never raw log lines; `report_details` (local `sweep --json` and `sweep.json`) adds `log_tail`.
+    """
+    event_details: Dict[str, Any] = {"how": how}
     code = entry.get("exit")
     if isinstance(code, int) and not isinstance(code, bool):
-        details["exit"] = code
+        event_details["exit"] = code
+    report_details: Dict[str, Any] = dict(event_details)
     log = entry.get("log")
     if isinstance(log, str) and log:
-        tail = _tail_log(log)
-        if tail is not None:
-            details["log"] = log
-            details["log_tail"] = tail
-    return details
+        info = _read_log_info(log)
+        if info is not None:
+            size, mtime, tail = info
+            event_details["log"] = log
+            event_details["log_size"] = size
+            event_details["log_mtime"] = mtime
+            report_details["log"] = log
+            report_details["log_size"] = size
+            report_details["log_mtime"] = mtime
+            if tail is not None:
+                report_details["log_tail"] = tail
+    return event_details, report_details
 
 
 def _age(seconds: Optional[float]) -> str:
