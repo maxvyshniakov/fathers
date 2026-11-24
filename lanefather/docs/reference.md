@@ -166,6 +166,23 @@ in the same lane and marked with `--mark N fixed:<sha|id>` or `rejected:<reason>
   overrides and is logged.
 - `list`, `status` and `show` display `reviewed before land at <sha>` for a lane with a completed pre-land review.
 
+### Stale reviews and delta reviews
+
+A finished lane review is bound to the tree it reviewed (fathers#53). If a lane's own diff at its landed or active tip
+differs from the reviewed commit — ignoring clean integration-branch merges and valid marked pre-land fixes — the
+review verdict is `Stale(reviewed_tip, landed_tip)`:
+
+- `list`, `show`, and `status` report `review stale` (and `review.status = "stale"` in JSON).
+- `promote`, the batch gate, `findings`, and `done` hold a stale lane until a delta review of
+  `reviewed_tip..landed_tip` completes and all blocking findings across both the primary and delta reviews are marked
+  (`--force-reason` overrides `promote` and `findings`, logged).
+- Landing a lane with a stale review (or running `lanefather review <id>` on a stale landed lane) starts a delta review
+  (`kind: "delta"`, `base: reviewed_tip`, `tip: landed_tip`) stored in `<id>.review.json`'s `delta` field. Its findings
+  continue the primary review's numbering so `lanefather review <id> --mark <n> ...` marks findings from either round.
+- A parent lane with a `Stale` review is not eligible for `--fix-of` or `review --fix-lane` (nor exempt via
+  `review_exemption`) until the delta review covers its post-review commits; clean integration merges after the review
+  preserve eligibility.
+
 ### Review findings before landing
 
 `land` refuses if another lane in the same repository has a finished review with an unmarked P1 or P2 finding

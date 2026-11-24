@@ -49,6 +49,9 @@ class ReviewEvent(StrEnum):
     PRE_LAND_FIX = "pre_land_fix"
     FIX_LANE = "fix_lane"
     TICKET = "ticket"
+    DELTA_START = "delta_start"
+    DELTA_FINISH = "delta_finish"
+    DELTA_FAIL = "delta_fail"
 
 
 REVIEW_TRANSITIONS: dict[tuple[ReceiptPhase, ReviewEvent], ReceiptPhase] = {
@@ -64,6 +67,9 @@ REVIEW_TRANSITIONS: dict[tuple[ReceiptPhase, ReviewEvent], ReceiptPhase] = {
     (ReceiptPhase.FINISHED, ReviewEvent.PRE_LAND_FIX): ReceiptPhase.FINISHED,
     (ReceiptPhase.FINISHED, ReviewEvent.FIX_LANE): ReceiptPhase.FINISHED,
     (ReceiptPhase.FINISHED, ReviewEvent.TICKET): ReceiptPhase.FINISHED,
+    (ReceiptPhase.FINISHED, ReviewEvent.DELTA_START): ReceiptPhase.FINISHED,
+    (ReceiptPhase.FINISHED, ReviewEvent.DELTA_FINISH): ReceiptPhase.FINISHED,
+    (ReceiptPhase.FINISHED, ReviewEvent.DELTA_FAIL): ReceiptPhase.FINISHED,
 }
 
 
@@ -143,7 +149,20 @@ class Complete:
     missing_members: tuple[str, ...] = ()
 
 
-ReviewVerdict = Absent | Running | Died | Failed | PartialPanel | Exempt | Unmarked | Complete
+@dataclass(frozen=True)
+class Stale:
+    """The review receipt's reviewed tip does not cover the lane's landed or current tip (fathers#53)."""
+
+    reviewed_tip: str
+    landed_tip: str
+    findings: tuple[dict[str, Any], ...] = ()
+    unmarked: tuple[dict[str, Any], ...] = ()
+    reviewer: Any = None
+    missing_members: tuple[str, ...] = ()
+    delta: ReviewVerdict | None = None
+
+
+ReviewVerdict = Absent | Running | Died | Failed | PartialPanel | Exempt | Unmarked | Complete | Stale
 
 
 # ---------------------------------------------------------------------------
@@ -202,8 +221,251 @@ def receipt_phase(raw: Receipt | None) -> ReceiptPhase:
     return ReceiptPhase.FAILED
 
 
-def derive_verdict(raw: Receipt | None, *, panel_required: bool = False) -> ReviewVerdict:
-    """Evaluate a raw review receipt into one of the 8 `ReviewVerdict` variants."""
+def _git_read(root: str, *args: str) -> str:
+    try:
+        result = subprocess.run(["git", "-C", root, *args], capture_output=True, text=True, timeout=5)
+        return result.stdout.strip() if result.returncode == 0 else ""
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+
+
+def is_clean_integration_merge(
+    main: str,
+    commit: str,
+    int_heads: Sequence[str],
+    reviewed_tip: str,
+) -> tuple[bool, str]:
+    """Whether `commit` is a two-parent merge of an integration commit (ancestor of any commit in `int_heads`)
+    into a descendant of `reviewed_tip` whose tree equals the clean merge of its parents (leaving the lane's own
+    diff unchanged). Returns `(is_clean, first_parent)`."""
+    valid_heads = [h for h in int_heads if h]
+    if not valid_heads:
+        return False, ""
+    parents_out = _git_read(main, "rev-list", "--parents", "-n", "1", commit)
+    if not parents_out:
+        return False, ""
+    parts = parents_out.split()
+    if len(parts) != 3:
+        return False, ""
+    _, p1, p2 = parts
+    if not any(git_ok(main, "merge-base", "--is-ancestor", p2, head) for head in valid_heads):
+        return False, ""
+    if not git_ok(main, "merge-base", "--is-ancestor", reviewed_tip, p1):
+        return False, ""
+    commit_tree = _git_read(main, "rev-parse", "--verify", "--quiet", f"{commit}^{{tree}}")
+    if not commit_tree:
+        return False, ""
+    try:
+        merged = subprocess.run(
+            ["git", "merge-tree", "--write-tree", p1, p2],
+            cwd=main,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False, ""
+    if merged.returncode == 0:
+        first_line = merged.stdout.splitlines()[0].strip() if merged.stdout.splitlines() else ""
+        return (first_line == commit_tree, p1)
+    if merged.returncode == 1:
+        # Merge conflict was manually resolved: treat as unreviewed.
+        return False, ""
+    if merged.returncode != 129:
+        return False, ""
+    # Fallback only when `git merge-tree --write-tree` is unsupported (git < 2.38 usage error 129).
+    mb = _git_read(main, "merge-base", p1, p2)
+    if not mb:
+        return False, ""
+    lane_before = _git_read(main, "diff", "--no-ext-diff", mb, p1)
+    lane_after = _git_read(main, "diff", "--no-ext-diff", p2, commit)
+    return (lane_before == lane_after, p1)
+
+
+def _fixed_shas_of(findings: Sequence[dict[str, Any]]) -> set[str]:
+    fixed: set[str] = set()
+    for finding in findings:
+        raw_mark: Any = finding.get("mark")
+        if not isinstance(raw_mark, dict):
+            continue
+        mark = cast(dict[str, Any], raw_mark)
+        if mark.get("kind") != "fixed":
+            continue
+        merge_sha: Any = mark.get("merge")
+        if isinstance(merge_sha, str) and OID_RE.fullmatch(merge_sha):
+            fixed.add(merge_sha)
+    return fixed
+
+
+def _is_tip_covered(
+    main: str,
+    reviewed_tip: str,
+    reviewed_tree: str,
+    target_tip: str,
+    target_tree: str,
+    fixed_shas: set[str],
+    integration_heads: Sequence[str],
+) -> bool:
+    """Whether `target_tip` adds no unreviewed lane-owned diff beyond `reviewed_tip`, ignoring clean integration
+    merges and valid marked pre-land fixes."""
+    if not git_ok(main, "merge-base", "--is-ancestor", reviewed_tip, target_tip):
+        return False
+    if fixed_shas:
+        for fix_sha in fixed_shas:
+            if not git_ok(main, "merge-base", "--is-ancestor", fix_sha, target_tip):
+                return False
+        if reviewed_tree and target_tree and target_tree == reviewed_tree:
+            return False
+    elif reviewed_tree and target_tree and target_tree == reviewed_tree:
+        return True
+    visited: set[str] = set()
+    queue: list[str] = [target_tip]
+    while queue:
+        sha = queue.pop(0)
+        if sha in visited:
+            continue
+        visited.add(sha)
+        if sha == reviewed_tip or git_ok(main, "merge-base", "--is-ancestor", sha, reviewed_tip):
+            continue
+        parents_out = _git_read(main, "rev-list", "--parents", "-n", "1", sha)
+        if not parents_out:
+            return False
+        parts = parents_out.split()
+        if not parts:
+            return False
+        parents = parts[1:]
+        if len(parents) > 1:
+            is_clean, p1 = is_clean_integration_merge(main, sha, integration_heads, reviewed_tip)
+            if not is_clean:
+                return False
+            queue.append(p1)
+            continue
+        if fixed_shas and any(git_ok(main, "merge-base", "--is-ancestor", sha, fix_sha) for fix_sha in fixed_shas):
+            queue.extend(parents)
+            continue
+        return False
+    return True
+
+
+def _resolve_integration_heads(main: str, record: Record, *, landed_info: dict[str, Any] | None) -> list[str]:
+    heads: list[str] = []
+    if landed_info is not None:
+        prev = landed_info.get("previous")
+        if isinstance(prev, str) and prev:
+            heads.append(prev)
+        int_wt = landed_info.get("integration")
+        if isinstance(int_wt, str) and int_wt and os.path.isdir(int_wt):
+            head = _git_read(int_wt, "rev-parse", "--verify", "--quiet", "HEAD")
+            if head:
+                heads.append(head)
+    rec_int = record.get("integration")
+    if isinstance(rec_int, str) and rec_int and os.path.isdir(rec_int):
+        head = _git_read(rec_int, "rev-parse", "--verify", "--quiet", "HEAD")
+        if head:
+            heads.append(head)
+    base = record.get("base")
+    if isinstance(base, str) and base:
+        base_head = _git_read(main, "rev-parse", "--verify", "--quiet", f"refs/heads/{base}^{{commit}}")
+        if base_head:
+            heads.append(base_head)
+        else:
+            raw_base = _git_read(main, "rev-parse", "--verify", "--quiet", f"{base}^{{commit}}")
+            if raw_base:
+                heads.append(raw_base)
+    return list(dict.fromkeys(heads))
+
+
+def _stale_tips(raw: Receipt, record: Record | None) -> tuple[str, str] | None:
+    """Return `(reviewed_tip, target_tip)` when finished lane review `raw` does not cover `record`'s landed or
+    current active tip (ignoring clean integration merges and valid marked pre-land fixes), else `None`."""
+    if record is None:
+        return None
+    kind = raw.get("kind")
+    if kind is not None and kind != "lane":
+        return None
+    raw_reviewed_tip = raw.get("tip")
+    if not isinstance(raw_reviewed_tip, str) or not raw_reviewed_tip:
+        return None
+    reviewed_tip = raw_reviewed_tip
+    raw_reviewed_tree = raw.get("tree")
+    reviewed_tree = raw_reviewed_tree if isinstance(raw_reviewed_tree, str) else ""
+
+    raw_common = record.get("common_dir")
+    common = raw_common if isinstance(raw_common, str) and raw_common else ""
+    main = main_checkout(common) if common and os.path.isdir(common) else ""
+
+    target_tip = ""
+    target_tree = ""
+    raw_landed: Any = record.get("landed")
+    landed_info = cast(dict[str, Any], raw_landed) if isinstance(raw_landed, dict) else None
+    if landed_info is not None and isinstance(landed_info.get("tip"), str) and landed_info["tip"]:
+        target_tip = landed_info["tip"]
+        raw_ltree = landed_info.get("tree")
+        target_tree = raw_ltree if isinstance(raw_ltree, str) else ""
+    elif lifecycle.active(record) and main:
+        branch = record.get("branch")
+        if isinstance(branch, str) and branch:
+            target_tip = _git_read(main, "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}^{{commit}}")
+            if target_tip:
+                target_tree = _git_read(main, "rev-parse", "--verify", "--quiet", f"{target_tip}^{{tree}}")
+    if not target_tip:
+        return None
+    if reviewed_tip == target_tip:
+        return None
+
+    fixed_shas = _fixed_shas_of(extract_findings(raw))
+    if not fixed_shas and reviewed_tree and target_tree and reviewed_tree == target_tree:
+        return None
+
+    if (
+        main
+        and OID_RE.fullmatch(reviewed_tip)
+        and OID_RE.fullmatch(target_tip)
+        and git_ok(main, "cat-file", "-e", reviewed_tip)
+        and git_ok(main, "cat-file", "-e", target_tip)
+    ):
+        resolved_reviewed_tree = reviewed_tree or _git_read(
+            main, "rev-parse", "--verify", "--quiet", f"{reviewed_tip}^{{tree}}"
+        )
+        resolved_target_tree = target_tree or _git_read(
+            main, "rev-parse", "--verify", "--quiet", f"{target_tip}^{{tree}}"
+        )
+        integration_heads = _resolve_integration_heads(main, record, landed_info=landed_info)
+        if _is_tip_covered(
+            main,
+            reviewed_tip,
+            resolved_reviewed_tree,
+            target_tip,
+            resolved_target_tree,
+            fixed_shas,
+            integration_heads,
+        ):
+            return None
+        return reviewed_tip, target_tip
+
+    return reviewed_tip, target_tip
+
+
+def _matching_delta(raw: Receipt, reviewed_tip: str, target_tip: str) -> Receipt | None:
+    """Return `raw['delta']` when it is a delta receipt covering `reviewed_tip..target_tip`."""
+    raw_delta: Any = raw.get("delta")
+    if not isinstance(raw_delta, dict):
+        return None
+    delta = cast(Receipt, raw_delta)
+    if delta.get("kind") != "delta":
+        return None
+    if delta.get("base") != reviewed_tip or delta.get("tip") != target_tip:
+        return None
+    return delta
+
+
+def derive_verdict(
+    raw: Receipt | None,
+    *,
+    panel_required: bool = False,
+    record: Record | None = None,
+) -> ReviewVerdict:
+    """Evaluate a raw review receipt into one of the 9 `ReviewVerdict` variants."""
     phase = receipt_phase(raw)
     if phase is ReceiptPhase.ABSENT or raw is None:
         return Absent()
@@ -224,6 +486,56 @@ def derive_verdict(raw: Receipt | None, *, panel_required: bool = False) -> Revi
     unmarked = tuple(f for f in findings if not f.get("mark"))
     missing = tuple(missing_members(raw))
     reviewer = raw.get("reviewer")
+
+    stale = _stale_tips(raw, record)
+    if stale is not None:
+        reviewed_tip, landed_tip = stale
+        delta_raw = _matching_delta(raw, reviewed_tip, landed_tip)
+        delta_verdict = (
+            derive_verdict(delta_raw, panel_required=panel_required)
+            if delta_raw is not None
+            else None
+        )
+        if isinstance(delta_verdict, (Complete, Unmarked, PartialPanel, Exempt)):
+            delta_findings = delta_verdict.findings if not isinstance(delta_verdict, Exempt) else ()
+            delta_unmarked = (
+                delta_verdict.unmarked
+                if isinstance(delta_verdict, (Unmarked, PartialPanel))
+                else ()
+            )
+            delta_missing = delta_verdict.missing_members if not isinstance(delta_verdict, Exempt) else ()
+            all_findings = findings + delta_findings
+            all_unmarked = unmarked + delta_unmarked
+            all_missing = missing + delta_missing
+            if all_missing and panel_required:
+                return PartialPanel(
+                    missing_members=all_missing,
+                    findings=all_findings,
+                    unmarked=all_unmarked,
+                    reviewer=reviewer,
+                )
+            if all_unmarked:
+                return Unmarked(
+                    findings=all_findings,
+                    unmarked=all_unmarked,
+                    reviewer=reviewer,
+                    missing_members=all_missing,
+                )
+            return Complete(
+                findings=all_findings,
+                reviewer=reviewer,
+                missing_members=all_missing,
+            )
+        return Stale(
+            reviewed_tip=reviewed_tip,
+            landed_tip=landed_tip,
+            findings=findings,
+            unmarked=unmarked,
+            reviewer=reviewer,
+            missing_members=missing,
+            delta=delta_verdict,
+        )
+
     if missing and panel_required:
         return PartialPanel(
             missing_members=missing,
@@ -262,6 +574,24 @@ def review_words(label: str, verdict: ReviewVerdict, *, prog: str = "lanefather"
         )
     if isinstance(verdict, Failed):
         return False, f"review failed: {verdict.error}; rerun {prog} review {label}"
+    if isinstance(verdict, Stale):
+        span = f"reviewed {verdict.reviewed_tip[:10]}, landed {verdict.landed_tip[:10]}"
+        if isinstance(verdict.delta, Running):
+            return False, (
+                f"review stale ({span}); delta review running since {verdict.delta.started} "
+                f"(pid {verdict.delta.pid}, {verdict.delta.log})"
+            )
+        if isinstance(verdict.delta, Died):
+            return False, (
+                f"review stale ({span}); delta review died (pid {verdict.delta.pid}, {verdict.delta.log}): "
+                f"rerun {prog} review {label}"
+            )
+        if isinstance(verdict.delta, Failed):
+            return False, (
+                f"review stale ({span}); delta review failed: {verdict.delta.error}; "
+                f"rerun {prog} review {label}"
+            )
+        return False, f"review stale ({span}): run {prog} review {label}"
     if isinstance(verdict, Unmarked):
         return False, (
             f"{len(verdict.unmarked)} of {len(verdict.findings)} review findings unmarked "
@@ -454,17 +784,24 @@ class ReviewRecord:
 
     @property
     def has_finished_receipt(self) -> bool:
-        return isinstance(self.verdict, (PartialPanel, Unmarked, Complete))
+        return isinstance(self.verdict, (PartialPanel, Unmarked, Complete, Stale))
+
+    @property
+    def delta_raw(self) -> Receipt | None:
+        if self.raw is None:
+            return None
+        raw_delta: Any = self.raw.get("delta")
+        return cast(Receipt, raw_delta) if isinstance(raw_delta, dict) else None
 
     @property
     def findings(self) -> tuple[dict[str, Any], ...]:
-        if isinstance(self.verdict, (PartialPanel, Unmarked, Complete)):
+        if isinstance(self.verdict, (PartialPanel, Unmarked, Complete, Stale)):
             return self.verdict.findings
         return ()
 
     @property
     def open_findings(self) -> tuple[dict[str, Any], ...]:
-        if isinstance(self.verdict, (PartialPanel, Unmarked)):
+        if isinstance(self.verdict, (PartialPanel, Unmarked, Stale)):
             return self.verdict.unmarked
         return ()
 
@@ -536,12 +873,13 @@ class ReviewRecord:
         *,
         panel_required: bool = False,
         prog: str = "lanefather",
+        record: Record | None = None,
     ) -> ReviewRecord:
         return cls(
             label=label,
             raw=raw,
             phase=receipt_phase(raw),
-            verdict=derive_verdict(raw, panel_required=panel_required),
+            verdict=derive_verdict(raw, panel_required=panel_required, record=record),
             prog=prog,
         )
 
@@ -560,7 +898,7 @@ class ReviewRecord:
         raw = state.read_json(store.receipt_path(label, "review"))
         if not state.receipt_matches_lane(raw, expected):
             raw = None
-        return cls.from_raw(label, raw, panel_required=required, prog=store.project.command)
+        return cls.from_raw(label, raw, panel_required=required, prog=store.project.command, record=record)
 
     @classmethod
     def all(
@@ -614,6 +952,12 @@ class ReviewRecord:
         if parent_record.get("common_dir") != common:
             raise LaneError(f"{refusal}: lane {lane_id} is from another repository")
         rev = cls.load(store, lane_id, record=parent_record)
+        if isinstance(rev.verdict, Stale):
+            raise LaneError(
+                f"{refusal}: lane {lane_id}'s review is stale "
+                f"(reviewed {rev.verdict.reviewed_tip[:10]}, landed {rev.verdict.landed_tip[:10]}); "
+                f"run {store.prog} review {lane_id} to cover the post-review commits first"
+            )
         if not rev.open_findings or rev.raw is None:
             raise LaneError(f"{refusal}: lane {lane_id} has no finished review with unmarked findings")
         return rev
@@ -633,6 +977,7 @@ class ReviewRecord:
         force: bool = False,
         owner_pid: int | None = None,
         lane_created: str | None = None,
+        record: Record | None = None,
     ) -> ReviewRecord:
         """The single writer of `<label>.review.json`."""
         with store.locked(f"review-{label}"):
@@ -647,6 +992,14 @@ class ReviewRecord:
                     f"review {label}: stale worker pid {owner_pid} cannot {event.value} receipt owned by "
                     f"pid {raw_existing.get('pid')}"
                 )
+            if event in (ReviewEvent.DELTA_FINISH, ReviewEvent.DELTA_FAIL) and owner_pid is not None:
+                raw_delta: Any = raw_existing.get("delta") if isinstance(raw_existing, dict) else None
+                delta_pid = cast(dict[str, Any], raw_delta).get("pid") if isinstance(raw_delta, dict) else None
+                if delta_pid != owner_pid:
+                    raise StaleReviewRunError(
+                        f"delta review {label}: stale worker pid {owner_pid} cannot {event.value} delta owned by "
+                        f"pid {delta_pid}"
+                    )
             existing = (
                 raw_existing
                 if state.receipt_matches_lane(raw_existing, lane_created)
@@ -678,6 +1031,7 @@ class ReviewRecord:
                 updated,
                 panel_required=store.project.review_panel_required,
                 prog=store.project.command,
+                record=record,
             )
 
     @classmethod
@@ -832,6 +1186,239 @@ class ReviewRecord:
         )
 
     @classmethod
+    def begin_delta(
+        cls,
+        store: state.Store,
+        label: str,
+        fields: dict[str, Any],
+        *,
+        base: str,
+        tip: str,
+        tree: str,
+        pid: int,
+        log: str | None,
+        effort: str,
+        started: str | None = None,
+        force: bool = False,
+        record: Record | None = None,
+    ) -> ReviewRecord:
+        started_at = started or journal.now()
+        lane_created = state.lane_created_of(record)
+
+        def _build(existing: Receipt | None) -> Receipt:
+            assert existing is not None
+            prev_delta: Any = existing.get("delta")
+            if isinstance(prev_delta, dict):
+                prev_dict = cast(Receipt, prev_delta)
+                prev_phase = receipt_phase(prev_dict)
+                if prev_phase is ReceiptPhase.RUNNING and prev_dict.get("pid") != pid and not force:
+                    raise LaneError(
+                        f"delta review {label}: already running (pid {prev_dict.get('pid')})"
+                    )
+                if (
+                    prev_phase is ReceiptPhase.FINISHED
+                    and prev_dict.get("base") == base
+                    and prev_dict.get("tip") == tip
+                    and not force
+                ):
+                    raise LaneError(
+                        f"delta review {label}: already finished for {base[:10]}..{tip[:10]}"
+                    )
+            delta_entry: Receipt = {
+                "kind": "delta",
+                "base": base,
+                "tip": tip,
+                "tree": tree,
+                **fields,
+                "status": ReceiptPhase.RUNNING.value,
+                "pid": pid,
+                "log": log,
+                "started": started_at,
+                "effort": effort,
+            }
+            return {**existing, "delta": delta_entry}
+
+        return cls._transition(
+            store,
+            label,
+            ReviewEvent.DELTA_START,
+            _build,
+            owner_pid=pid,
+            lane_created=lane_created,
+            record=record,
+        )
+
+    @classmethod
+    def spawn_and_begin_delta(
+        cls,
+        store: state.Store,
+        label: str,
+        fields: dict[str, Any],
+        *,
+        base: str,
+        tip: str,
+        tree: str,
+        cmd: Sequence[str],
+        cwd: str,
+        env: dict[str, str],
+        log: Path,
+        effort: str,
+        started: str | None = None,
+        record: Record | None = None,
+    ) -> ReviewRecord:
+        lane_created = state.lane_created_of(record)
+
+        def _build(existing: Receipt | None) -> Receipt:
+            assert existing is not None
+            prev_delta: Any = existing.get("delta")
+            if isinstance(prev_delta, dict) and receipt_phase(cast(Receipt, prev_delta)) is ReceiptPhase.RUNNING:
+                raise LaneError(
+                    f"delta review {label}: already running (pid {cast(Receipt, prev_delta).get('pid')})"
+                )
+            log.parent.mkdir(parents=True, exist_ok=True)
+            with open(log, "w", encoding="utf-8") as out:
+                child = subprocess.Popen(
+                    list(cmd),
+                    cwd=cwd,
+                    stdin=subprocess.DEVNULL,
+                    stdout=out,
+                    stderr=subprocess.STDOUT,
+                    start_new_session=True,
+                    env=env,
+                )
+            delta_entry: Receipt = {
+                "kind": "delta",
+                "base": base,
+                "tip": tip,
+                "tree": tree,
+                **fields,
+                "status": ReceiptPhase.RUNNING.value,
+                "pid": child.pid,
+                "log": str(log),
+                "started": started or journal.now(),
+                "effort": effort,
+            }
+            return {**existing, "delta": delta_entry}
+
+        return cls._transition(
+            store,
+            label,
+            ReviewEvent.DELTA_START,
+            _build,
+            lane_created=lane_created,
+            record=record,
+        )
+
+    @classmethod
+    def finish_delta(
+        cls,
+        store: state.Store,
+        label: str,
+        payload: dict[str, Any],
+        *,
+        owner_pid: int | None = None,
+        finished: str | None = None,
+        record: Record | None = None,
+    ) -> ReviewRecord:
+        lane_created = state.lane_created_of(record)
+
+        def _build(existing: Receipt | None) -> Receipt:
+            assert existing is not None
+            raw_prev: Any = existing.get("delta")
+            prev_delta = cast(Receipt, raw_prev) if isinstance(raw_prev, dict) else {}
+            primary_nums = [
+                int(f["n"])
+                for f in extract_findings(existing)
+                if isinstance(f.get("n"), int) and not isinstance(f.get("n"), bool)
+            ]
+            offset = max(primary_nums, default=0)
+            merged_delta: Receipt = {
+                **prev_delta,
+                **payload,
+                "kind": "delta",
+                "status": ReceiptPhase.FINISHED.value,
+            }
+            if offset > 0:
+                renumbered: list[dict[str, Any]] = []
+                for f in extract_findings(merged_delta):
+                    raw_n = f.get("n")
+                    if isinstance(raw_n, int) and not isinstance(raw_n, bool):
+                        renumbered.append({**f, "n": raw_n + offset})
+                    else:
+                        renumbered.append(dict(f))
+                merged_delta["findings"] = renumbered
+                raw_panel: Any = merged_delta.get("panel")
+                if isinstance(raw_panel, list):
+                    panel_copy: list[Any] = []
+                    for entry in cast(list[Any], raw_panel):
+                        if isinstance(entry, dict):
+                            entry_dict = dict(cast(dict[str, Any], entry))
+                            raw_nums: Any = entry_dict.get("numbers")
+                            if isinstance(raw_nums, list):
+                                entry_dict["numbers"] = [
+                                    (n + offset if isinstance(n, int) and not isinstance(n, bool) else n)
+                                    for n in cast(list[Any], raw_nums)
+                                ]
+                            panel_copy.append(entry_dict)
+                        else:
+                            panel_copy.append(entry)
+                    merged_delta["panel"] = panel_copy
+            merged_delta.setdefault("fallback", None)
+            if finished is not None or "finished" not in merged_delta:
+                merged_delta["finished"] = finished or journal.now()
+            return {**existing, "delta": merged_delta}
+
+        return cls._transition(
+            store,
+            label,
+            ReviewEvent.DELTA_FINISH,
+            _build,
+            owner_pid=owner_pid,
+            lane_created=lane_created,
+            record=record,
+        )
+
+    @classmethod
+    def fail_delta(
+        cls,
+        store: state.Store,
+        label: str,
+        error: str,
+        *,
+        extra: dict[str, Any] | None = None,
+        owner_pid: int | None = None,
+        finished: str | None = None,
+        record: Record | None = None,
+    ) -> ReviewRecord:
+        lane_created = state.lane_created_of(record)
+
+        def _build(existing: Receipt | None) -> Receipt:
+            assert existing is not None
+            raw_prev: Any = existing.get("delta")
+            prev_delta = cast(Receipt, raw_prev) if isinstance(raw_prev, dict) else {}
+            merged_delta: Receipt = {
+                **prev_delta,
+                **(extra or {}),
+                "kind": "delta",
+                "status": ReceiptPhase.FAILED.value,
+                "error": error,
+            }
+            merged_delta.setdefault("fallback", None)
+            if finished is not None or "finished" not in merged_delta:
+                merged_delta["finished"] = finished or journal.now()
+            return {**existing, "delta": merged_delta}
+
+        return cls._transition(
+            store,
+            label,
+            ReviewEvent.DELTA_FAIL,
+            _build,
+            owner_pid=owner_pid,
+            lane_created=lane_created,
+            record=record,
+        )
+
+    @classmethod
     def mark(
         cls,
         store: state.Store,
@@ -851,20 +1438,42 @@ class ReviewRecord:
             def _build(existing: Receipt | None) -> Receipt:
                 assert existing is not None
                 findings_copy = [dict(f) for f in extract_findings(existing)]
-                by_number = {int(f["n"]): f for f in findings_copy if "n" in f}
+                raw_delta: Any = existing.get("delta")
+                has_finished_delta = (
+                    isinstance(raw_delta, dict)
+                    and cast(Receipt, raw_delta).get("status") == ReceiptPhase.FINISHED.value
+                )
+                delta_copy = dict(cast(Receipt, raw_delta)) if has_finished_delta else None
+                delta_findings_copy = (
+                    [dict(f) for f in extract_findings(delta_copy)] if delta_copy is not None else []
+                )
+                # Map finding number -> (finding_dict, is_delta)
+                by_number: dict[int, tuple[dict[str, Any], bool]] = {
+                    int(f["n"]): (f, False) for f in findings_copy if "n" in f
+                }
+                for f in delta_findings_copy:
+                    if "n" in f:
+                        n_val = int(f["n"])
+                        if n_val not in by_number or by_number[n_val][0].get("mark"):
+                            by_number[n_val] = (f, True)
                 for number, value in raw_marks:
-                    finding = by_number.get(int(number)) if number.isdigit() else None
-                    if finding is None:
+                    found_entry = by_number.get(int(number)) if number.isdigit() else None
+                    if found_entry is None:
                         available = ", ".join(str(n) for n in by_number) or "none"
                         raise LaneError(f"--mark {number}: the review of {lane_id} has findings {available}")
+                    finding, is_delta_finding = found_entry
                     kind, _, detail = value.partition(":")
                     detail = detail.strip()
                     if kind == "fixed":
                         fix_sha = _resolve_fix_merge(store, common, detail, marking_lane_id=lane_id)
                         reviewed_sha = (
-                            pre_land.reviewed_sha
-                            if pre_land is not None
-                            else (loaded.reviewed_tip if loaded.is_pre_land else "")
+                            ""
+                            if is_delta_finding
+                            else (
+                                pre_land.reviewed_sha
+                                if pre_land is not None
+                                else (loaded.reviewed_tip if loaded.is_pre_land else "")
+                            )
                         )
                         if reviewed_sha:
                             main = main_checkout(common)
@@ -908,10 +1517,15 @@ class ReviewRecord:
                     else:
                         raise LaneError(f"--mark {number} {value}: use fixed:<merge> or rejected:<reason>")
                 for app in applied:
-                    by_number[app.finding_n]["mark"] = app.to_dict()
-                return {**existing, "findings": findings_copy}
+                    by_number[app.finding_n][0]["mark"] = app.to_dict()
+                updated_receipt: Receipt = {**existing, "findings": findings_copy}
+                if delta_copy is not None:
+                    updated_receipt["delta"] = {**delta_copy, "findings": delta_findings_copy}
+                return updated_receipt
 
-            updated_rev = cls._transition(store, lane_id, ReviewEvent.MARK, _build, lane_created=lane_created)
+            updated_rev = cls._transition(
+                store, lane_id, ReviewEvent.MARK, _build, lane_created=lane_created, record=record
+            )
         return MarkResult(review=updated_rev, applied=tuple(applied))
 
     @classmethod
@@ -927,6 +1541,12 @@ class ReviewRecord:
         lane_created = state.lane_created_of(record)
         with store.locked(f"review-{lane_id}"):
             loaded = cls.load(store, lane_id, record=record)
+            if isinstance(loaded.verdict, Stale):
+                raise LaneError(
+                    f"hand-over refused: lane {lane_id}'s review is stale "
+                    f"(reviewed {loaded.verdict.reviewed_tip[:10]}, current {loaded.verdict.landed_tip[:10]}); "
+                    f"rerun {store.prog} review {lane_id} --force-reason <why>"
+                )
             open_items = loaded.open_findings
             if not open_items or loaded.raw is None:
                 raise LaneError(f"hand-over refused: lane {lane_id} has no finished review with unmarked findings")

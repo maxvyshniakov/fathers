@@ -497,8 +497,21 @@ def step_batch_gate(run: PromoteRun) -> None:
 
 def step_review_refusals(run: PromoteRun) -> None:
     prog = run.store.prog
-    refusals = review_gate.review_refusals(run.store, run.cwd, run.common, run.sha)
+    report = review_gate.gate_report(run.store, run.cwd, run.common, run.sha)
+    refusals = [e["text"] for e in report["unfinished"]] + [e["text"] for e in report["blocking"]]
     if refusals and not run.force_reason:
+        if not review.review_start_manual(run.store.project):
+            for entry in report["unfinished"]:
+                lane_id = entry.get("lane")
+                if not isinstance(lane_id, str) or not lane_id:
+                    continue
+                rec = state.read_json(run.store.record_path(lane_id))
+                if rec is None:
+                    continue
+                rev = review_record.ReviewRecord.load(run.store, lane_id, record=rec)
+                if isinstance(rev.verdict, review_record.Stale) and rev.verdict.delta is None:
+                    msg = review.start_lane_review(run.store, rec)
+                    print(f"lane: {lane_id}: {msg}", flush=True)
         raise LaneError("promote refused: dev waits for the review of every lane landed since dev:\n- "
                         + "\n- ".join(refusals) + "\nMark each finding with "
                         + review_record.mark_help("<id>", prog=prog)

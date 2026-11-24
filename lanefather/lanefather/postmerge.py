@@ -249,6 +249,8 @@ def decide_completion(
         refusal = (
             words
             if isinstance(review_verdict, review_record.Absent)
+            else f"its {words}"
+            if isinstance(review_verdict, review_record.Stale)
             else f"its {words}: mark each finding with {review_record.mark_help(lane_id, prog)}"
         )
         if mode is CompletionMode.AUTO_AFTER_SMOKE:

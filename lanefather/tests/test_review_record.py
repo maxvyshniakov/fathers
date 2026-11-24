@@ -434,5 +434,112 @@ class PreLandFixMarkAndStaleWorkerIntegrationTests(LaneCase):
             self.assertEqual((still_running.get("status"), still_running.get("pid")), ("running", other_pid))
 
 
+class StaleAndDeltaReviewRecordTests(unittest.TestCase):
+    """fathers#53: Stale verdict, synthetic fix_parent refusal, and delta review state transitions."""
+
+    def setUp(self) -> None:
+        self.tmp = pathlib.Path(tempfile.mkdtemp(prefix="lane-stale-rec-"))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.store = state.Store(config.Config(project="Alpha"), directory=self.tmp / "state")
+        self.store.directory.mkdir(parents=True, exist_ok=True)
+
+    def test_synthetic_stale_parent_is_refused_by_fix_parent_and_review_exemption(self) -> None:
+        parent: state.Record = {
+            "id": "reused",
+            "status": "landed",
+            "common_dir": "/nonexistent/repo/.git",
+            "created": "2026-11-17T00:00:00Z",
+            "landed": {"merge": "merge-two", "tip": "tip-two", "tree": "tree-two"},
+        }
+        self.store.save(parent)
+        state.write_json(
+            self.store.receipt_path("reused", "review"),
+            {
+                "version": 1,
+                "label": "reused",
+                "kind": "lane",
+                "lane": "reused",
+                "lane_created": parent["created"],
+                "status": "finished",
+                "tip": "tip-one",
+                "tree": "tree-one",
+                "reviewer": "sol",
+                "findings": [{"n": 1, "severity": "P2", "title": "bug", "mark": None}],
+            },
+        )
+        loaded = ReviewRecord.load(self.store, "reused", record=parent)
+        self.assertIsInstance(loaded.verdict, review_record.Stale)
+        assert isinstance(loaded.verdict, review_record.Stale)
+        self.assertEqual((loaded.verdict.reviewed_tip, loaded.verdict.landed_tip), ("tip-one", "tip-two"))
+        self.assertFalse(loaded.allows_promote)
+
+        with self.assertRaisesRegex(LaneError, "review is stale"):
+            ReviewRecord.fix_parent(self.store, "reused", "/nonexistent/repo/.git", "review exemption refused")
+
+        fix_rec: state.Record = {
+            "id": "reused-fix",
+            "status": "active",
+            "common_dir": "/nonexistent/repo/.git",
+            "review_fix_of": "reused",
+            "review_fix_of_all": ["reused"],
+        }
+        self.assertIsNone(review.review_exemption(fix_rec, self.store))
+
+    def test_delta_review_lifecycle_numbering_and_stale_worker_fencing(self) -> None:
+        rec: state.Record = {
+            "id": "a",
+            "status": "landed",
+            "common_dir": "/nonexistent/repo/.git",
+            "created": "2026-11-17T00:00:00Z",
+            "landed": {"merge": "m2", "tip": "tip-two", "tree": "tree-two"},
+        }
+        self.store.save(rec)
+        state.write_json(
+            self.store.receipt_path("a", "review"),
+            {
+                "version": 1,
+                "label": "a",
+                "kind": "lane",
+                "lane": "a",
+                "lane_created": rec["created"],
+                "status": "finished",
+                "tip": "tip-one",
+                "tree": "tree-one",
+                "reviewer": "sol",
+                "findings": [
+                    {"n": 1, "severity": "P2", "title": "p1", "mark": {"kind": "rejected", "reason": "ok"}}
+                ],
+            },
+        )
+        pid = os.getpid()
+        started = ReviewRecord.begin_delta(
+            self.store, "a", {}, base="tip-one", tip="tip-two", tree="tree-two", pid=pid, log=None, effort="medium",
+            record=rec,
+        )
+        self.assertIsInstance(started.verdict, review_record.Stale)
+        assert isinstance(started.verdict, review_record.Stale)
+        self.assertIsInstance(started.verdict.delta, Running)
+
+        with self.assertRaises(StaleReviewRunError):
+            ReviewRecord.finish_delta(
+                self.store, "a", {"reviewer": "sol", "findings": []}, owner_pid=pid + 999, record=rec
+            )
+
+        finished = ReviewRecord.finish_delta(
+            self.store,
+            "a",
+            {"reviewer": "sol", "findings": [{"n": 1, "severity": "P2", "title": "delta bug", "mark": None}]},
+            owner_pid=pid,
+            record=rec,
+        )
+        self.assertIsInstance(finished.verdict, Unmarked)
+        self.assertEqual([f["n"] for f in finished.findings], [1, 2])
+        self.assertEqual([f["n"] for f in finished.open_findings], [2])
+
+        marked = ReviewRecord.mark(self.store, rec, [("2", "rejected:fixed elsewhere")])
+        self.assertIsInstance(marked.review.verdict, Complete)
+        self.assertTrue(marked.review.allows_promote)
+
+
 if __name__ == "__main__":
     unittest.main()

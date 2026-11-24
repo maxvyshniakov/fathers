@@ -8,6 +8,15 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
 
 ### Added
 
+- Stale review verdict and delta reviews (fathers#53): `ReviewRecord` / `derive_verdict` now binds finished lane
+  reviews to the reviewed tip/tree and returns `Stale(reviewed_tip, landed_tip)` when a landed or active lane's own
+  diff changed after the reviewed commit (ignoring clean integration-branch merges and valid marked pre-land fixes).
+  When a lane lands with a stale review (or `lanefather review <id>` runs on a stale landed lane), Lanefather runs a
+  delta review (`kind: "delta"`, `base: reviewed_tip`, `tip: landed_tip`) stored under `delta` in `<id>.review.json`
+  with unified finding numbering so `review <id> --mark` marks findings from both rounds. `list`, `show`, and `status`
+  report `review stale`; `promote`, `findings`, and `done` hold a stale lane until the delta review is complete and all
+  findings are marked; and `fix_parent` / `--fix-of` / `review --fix-lane` refuse a stale parent until its post-review
+  commits are covered while preserving eligibility when only clean integration merges followed the review.
 - Pre-land lane review (fathers#242): `lanefather review <id>` works on an active lane with a clean worktree and
   commits beyond its base, recording `tip`, `tree` and `pre_land: true` on the review receipt. Findings can be fixed
   in the same lane and marked with `--mark N fixed:<sha|id>` or `rejected:<reason>` before landing. When the pre-land
