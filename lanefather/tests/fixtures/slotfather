@@ -195,6 +195,12 @@ def main(argv):
                 payload["run"] = {"slot_range": True}
             print(json.dumps(payload))
             return 0
+    if command == "history" and rest == ["export"]:
+        history_file = os.environ.get("FAKE_SLOTFATHER_HISTORY")
+        if history_file and os.path.exists(history_file):
+            with open(history_file, encoding="utf-8") as handle:
+                sys.stdout.write(handle.read())
+            return 0
     print("usage: fake slotfather run|yield|advise|slots|status|available|capabilities", file=sys.stderr)
     return 2
 
