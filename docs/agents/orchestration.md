@@ -32,6 +32,8 @@ Findings past reviews in `fathers` missed (in addition to [checks](checks.md#rev
 ## Implementer brief (fathers-specific)
 
 - Work only in the lane's worktree and claims; another package's files belong to its own lane.
-- Heavy commands through `slotfather run` with `--ticket` and a label ([checks](checks.md#heavy-checks)).
+- Heavy commands through `slotfather run` with `--ticket` and a label ([checks](checks.md#heavy-checks)). Do NOT wrap
+  `lanefather check`, `lanefather land`, or `lanefather promote` in `slotfather run --`: they lease slots for
+  themselves, and an outer 1-slot lease pins the whole run and its verifier to a single slot.
 - Changing a `tools/check.py` means changing all four copies; baselines only shrink.
 - A user-visible change adds its package's changelog entry in the same commit.

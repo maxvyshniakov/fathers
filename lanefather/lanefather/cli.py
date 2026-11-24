@@ -289,7 +289,8 @@ def parser(project: config.Config = config.DEFAULT) -> Parser:
     p.add_argument("--json", action="store_true", help="the version-1 scope: lane, ticket and scope")
     p.set_defaults(run=lanes.scope_command)
     p = add(root, commands, "check", "In the lane's worktree, on a clean committed tree: the checks the tree's plan "
-            "selects for the lane's diff, and the receipt for the tree (lanefather.checks).", prog=prog)
+            "selects for the lane's diff, and the receipt for the tree (lanefather.checks). Leases Slotfather slots "
+            "for itself; run directly, never wrapped in `slotfather run --`.", prog=prog)
     p.add_argument("id")
     p.add_argument("--rerun", action="store_true", help="run every suite even if a receipt covers the tree")
     p.add_argument("--agent", type=agent_kind,
@@ -315,7 +316,8 @@ def parser(project: config.Config = config.DEFAULT) -> Parser:
         else "Unmarked findings from earlier finished reviews are reported without holding the merge (fathers#177)."
     )
     p = add(root, commands, "land", "After a current green receipt: merge, start the review and run the post-merge "
-            f"smoke. {land_review}", prog=prog)
+            f"smoke. {land_review} Leases Slotfather slots for itself; run directly, never wrapped in "
+            "`slotfather run --`.", prog=prog)
     p.add_argument("id")
     p.add_argument("--into", help="integration worktree (default: the worktree on the lane's base branch)")
     p.add_argument("-m", "--message")
@@ -448,7 +450,8 @@ def parser(project: config.Config = config.DEFAULT) -> Parser:
     p.add_argument("--json", action="store_true", help="machine-readable removals, retained paths and errors")
     p.set_defaults(run=gc.collect)
     p = add(root, commands, "promote", "Fast-forwards local dev (and main) to the SHA and pushes it "
-            "(lanefather.promote).", prog=prog)
+            "(lanefather.promote). Leases Slotfather slots for itself; run directly, never wrapped in "
+            "`slotfather run --`.", prog=prog)
     p.add_argument("sha")
     p.add_argument("--ship", action="store_true", help="also main: pushes <sha>:dev and <sha>:main together")
     p.add_argument("--no-push", action="store_true",

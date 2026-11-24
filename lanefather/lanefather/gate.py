@@ -6,7 +6,7 @@ from pathlib import Path
 import subprocess
 from typing import Any
 
-from . import config, host, journal, plan, receipts, state, verify, worktrees
+from . import config, host, journal, plan, receipts, slots, state, verify, worktrees
 from . import results as result_store
 from .errors import LaneError
 from .gitops import common_dir, git
@@ -123,6 +123,7 @@ def run_batch_gate(store: state.Store, cwd: str, common: str, sha: str, jobs: in
     info = host.host(store.project)
     decision = host.given_jobs(jobs, "--jobs") if jobs else host.gate_jobs(info)
     job_count = int(decision["jobs"])
+    slots.warn_outer_lease("promote", job_count, prog=store.prog)
     outcome = verify.Run(
         path, verify.Selection.full(), label, "gate", job_count,
         store=store, meta={"sha": sha[:10]}, ticket=None, run_type=gate_meta(path, store.project),

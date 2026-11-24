@@ -75,7 +75,10 @@ on a branch is never planned against another branch it merged.
 A red check reruns by itself on the lane and, when it is red again, then on its base (never both at once: two
 copies of a check with a fixed port or path collide), each under a lease of the lane check's own size (one or two
 slots) at the rerun's [slot priority](#slot-priorities) (interactive by default) that waits at most
-`LANEFATHER_RERUN_WAIT` seconds; only the perf suite asks for the whole machine.
+`LANEFATHER_RERUN_WAIT` seconds; only the perf suite asks for the whole machine. When a lane renames or adds a check
+that `base` does not define (whether detected from `plan_module` or from the base verifier rejecting or omitting the
+unknown check id, fathers#253), it is classified `regression` with `base.status = "absent"` (`the base defines no such
+check`), never `pre-existing`, and any other red checks that do exist on `base` still run there for their own verdicts.
 
 Only checks that ran and failed rerun: the first `LANEFATHER_RERUNS` (default 5) of them, in report order, and the
 rest stay `unclassified`. A check the report marks `blocked`, or `skipped` with a non-empty `blocked_by`, did not run
@@ -364,7 +367,10 @@ self-contained configuration in the README for a Repo-Kit consumer.
 
 ### Slot priorities
 
-Every verification run lanefather starts asks Slotfather for slots at its phase's priority. The built-in
+Every verification run lanefather starts asks Slotfather for slots at its phase's priority. `lanefather check`,
+`lanefather land`, and `lanefather promote` lease slots for themselves and must be run directly, never wrapped in
+`slotfather run --`: an outer lease (especially a 1-slot lease) pins the whole command and its verifier to the outer
+lease's slot count, and Lanefather warns on stderr when it detects one (fathers#253). The built-in
 priorities: `check` normal; `post-merge`, `gate` and `rerun` interactive; `perf` batch. A project lowers or raises
 them in `.lanefather.toml`, and an orchestrator for one invocation in the environment, without code changes:
 
@@ -483,7 +489,7 @@ land's comment as the lane's evidence. The capability is `tickets.lifecycle`.
 
 ```
 <verify> --changed --base B --plan --json   {full, paths, unowned, checks: [{id, suite, paths, producer}], suites, reasons, capabilities?}
-<verify> --checks A,B [--only T1,T2] | --suites S --keep-going --jobs N
+<verify> --checks A,B [--base B] [--only T1,T2] | --suites S --keep-going --jobs N
                                              prints `Verification report: <report.json>`
 <verify> --keep-going --jobs N               the full gate; prints `Verified tree <tree> stamped`
 ```
@@ -530,7 +536,9 @@ solo-pass (`flaky-under-load`) classification is unchanged.
 When a verifier advertises `"only"` (`capabilities`) and reports
 `failed_tests: [...]` on a failing check (fathers#147), red-check reruns pass `--only <test,...>` to both the lane
 and base reruns, record `"tests"` in `classification.checks` and `classification.runs`, and keep a check
-`"unclassified"` if a red test is outside `failed_tests`; otherwise argv and receipts are unchanged. Lanefather hands each run its run id and tree in the slot meta
+`"unclassified"` if a red test is outside `failed_tests`; otherwise argv and receipts are unchanged. Scoped (non-full)
+lane check runs and their solo reruns also pass `--base <ref>` alongside `--checks` so verifiers can apply diff-scoped
+arguments to selected checks (fathers#253). Lanefather hands each run its run id and tree in the slot meta
 (`run`, `tree`) with `plan` and `checks` (fathers#107).
 
 When Slotfather advertises `slot-range` via `slotfather capabilities --json` (fathers#43), lane checks pass the
