@@ -25,8 +25,8 @@ TOOL = cliconvention.Tool("lanefather", (sys.executable, "-m", "lanefather"), (
     Command("project-hook"), Command("start"), Command("next"), Command("adopt"), Command("check"), Command("land"),
     Command("promote"), Command("sync"), Command("perf"), Command("shipped"), Command("review"), Command("findings"),
     Command("done"), Command("gc"), Command("show"), Command("status", json=()), Command("settings"),
-    Command("results"), Command("stats"), Command("list"), Command("wait"), Command("drop"), Command("recheck"),
-    Command("smoke"), Command("keep"), Command("scope"),
+    Command("results"), Command("stats"), Command("list"), Command("wait"), Command("drop"), Command("park"),
+    Command("unpark"), Command("abandon"), Command("recheck"), Command("smoke"), Command("keep"), Command("scope"),
 ))
 # fathers#175 gave the usage errors the convention's two lines; nothing is expected to fail.
 EXPECTED: dict[str, str] = {}

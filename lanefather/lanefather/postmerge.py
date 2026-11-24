@@ -166,7 +166,11 @@ def decide_completion(
 
     if stage not in lifecycle.AWAITING_DONE:
         reason = f"it is {stage}"
-        refusal = f"lane {lane_id} is {stage}, not landed"
+        refusal = (
+            f"lane {lane_id} is {stage}, not landed; "
+            f"use {prog} park {lane_id} --reason REASON or {prog} abandon {lane_id} --reason REASON "
+            f"(or {prog} drop {lane_id} if empty)"
+        )
         return CompletionDecision(
             action=CompletionAction.NOOP if is_auto else CompletionAction.REFUSE,
             mode=mode,

@@ -100,11 +100,16 @@ COMMANDS: dict[str, Command] = {
     "done": Command("clean up a landed lane: worktree, branches, scratch", "<id> | --finished [--dry-run]",
                     "fix-login"),
     "drop": Command("remove a lane that adds nothing to its base", "<id> [<id> ...]", "fix-login"),
+    "park": Command("park a lane on park/<id>; frees cap, claims, worktree",
+                    "<id> --reason REASON", "fix-login --reason 'waiting on API'"),
+    "unpark": Command("resume a parked lane from park/<id>", "<id> [--base REF]", "fix-login"),
+    "abandon": Command("abandon an unlanded lane and remove its worktree and claims",
+                       "<id> --reason REASON [--keep-branch REF]", "fix-login --reason 'superseded'"),
     "recheck": Command("rerun a landed lane's red post-merge smoke", "<id> [--slots N]", "fix-login"),
-    "smoke": Command("post-merge smoke status, rerun a red/killed smoke, or accept it",
+    "smoke": Command("post-merge smoke status, rerun or accept",
                      "<id> [--rerun [--slots N] | --accept REASON]", "fix-login --rerun"),
     "keep": Command("keep a lane from auto-done; --off releases it", "<id> [--off]", "fix-login"),
-    "list": Command("this repository's lanes that are not done: claims, receipts, load",
+    "list": Command("this repository's non-done lanes: claims, receipts, load",
                     "[--all] [--all-projects] [--json]", "--json"),
     "show": Command("one lane's details, read-only",
                     "<id> [--json] [--state-dir DIR] [--project-dir DIR]", "fix-login --json"),
@@ -350,6 +355,28 @@ def parser(project: config.Config = config.DEFAULT) -> Parser:
             "nothing: done's cleanup, with no override; refuses otherwise. Several ids drop each in turn.", prog=prog)
     p.add_argument("id", nargs="+")
     p.set_defaults(run=done.drop)
+    p = add(root, commands, "park", "Saves the lane's branch tip on park/<id>, removes its worktree and lane branch, "
+            "keeps its receipts, and marks it done with outcome parked (does not satisfy --after).", prog=prog)
+    p.add_argument("id")
+    p.add_argument("--reason", required=True, help="why the lane is parked")
+    p.set_defaults(run=done.park)
+    p = add(root, commands, "unpark", "Re-registers a parked lane from park/<id>, preserving its scope, claims and "
+            "base, and creates a fresh worktree.", prog=prog)
+    p.add_argument("id")
+    p.add_argument("--base", help="integration branch or commit (default: the parked lane's base)")
+    p.add_argument("--agent", type=agent_kind,
+                   help="the agent unparking the lane (e.g. claude-code, codex, antigravity, t3-code)")
+    p.add_argument("--force-reason", help="unpark despite the lane cap or disk floor; logged")
+    p.set_defaults(run=lanes.unpark)
+    p = add(root, commands, "abandon", "Marks a planned or active lane done with outcome abandoned and removes its "
+            "worktree, branch, scratch and claims. Refuses when the branch has commits not merged anywhere unless "
+            "--keep-branch or --force-reason is given.", prog=prog)
+    p.add_argument("id")
+    p.add_argument("--reason", required=True, help="why the lane is abandoned")
+    p.add_argument("--keep-branch", metavar="REF",
+                   help="save the lane's branch tip at REF (e.g. park/<id>) before removing it")
+    p.add_argument("--force-reason", help="discard unmerged commits or uncommitted changes; logged")
+    p.set_defaults(run=done.abandon)
     p = add(root, commands, "recheck", "On the integration tip that holds its merge; green replaces the red result "
             "(lanefather.land).", prog=prog)
     p.add_argument("id")
@@ -597,7 +624,10 @@ def _run_smoke(args: Any, store: state.Store) -> int:
 
 # The commands that act on one registered lane (fathers#236): from another repository's checkout they refuse, as
 # they would act from the wrong checkout. show is read-only and names the lane's project, so it reads any lane.
-LANE_COMMANDS = ("check", "wait", "land", "review", "done", "drop", "recheck", "smoke", "keep", "scope")
+LANE_COMMANDS = (
+    "check", "wait", "land", "review", "done", "drop", "park", "unpark", "abandon", "recheck", "smoke", "keep",
+    "scope",
+)
 
 
 def lane_ids(args: Any) -> list[str]:

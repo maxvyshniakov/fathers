@@ -309,8 +309,12 @@ def merge(
             raise LaneError(f"land refused: lane {lane_id} is {record['status']}" +
                             ("; it has no worktree yet" if lifecycle.planned(record) else ""))
         for name in record["after"]:
-            if not lifecycle.landed(store.load(name)):
-                raise LaneError(f"land refused: lane {lane_id} is declared to land after {name}, which has not landed")
+            dep = store.load(name)
+            if not lifecycle.landed(dep):
+                raise LaneError(
+                    f"land refused: lane {lane_id} is declared to land after {name}, which has not landed "
+                    f"({lifecycle.display_state(dep)})"
+                )
         main = main_checkout(record["common_dir"])
         tip = git(main, "rev-parse", "--verify", record["branch"] + "^{commit}")
         tree = git(main, "rev-parse", tip + "^{tree}")

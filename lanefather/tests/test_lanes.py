@@ -781,5 +781,164 @@ class ScopeTests(LaneCase):
         self.assertNotIn("scope", record)
 
 
+class ParkAndAbandonTests(LaneCase):
+    """Parking and abandoning lanes as explicit outcomes, never as landed (fathers#57)."""
+
+    def write_queue(self, text: str) -> pathlib.Path:
+        path = self.tmp / "queue.toml"
+        path.write_text(text)
+        self.env["LANEFATHER_QUEUE"] = str(path)
+        return path
+
+    def test_park_blocks_queue_after_and_unpark_then_land_unblocks_it(self):
+        from lanefather import lifecycle
+
+        wt = pathlib.Path(self.created("p", "lib/**"))
+        tip = self.commit(wt, {"lib/api.txt": "foo\nparked work\n"})
+        self.lane("check", "p")
+        receipt_path = self.state / "p.receipt.json"
+        self.assertTrue(receipt_path.exists())
+
+        self.write_queue(
+            'base = "integrate/q"\n\n'
+            '[[lane]]\n'
+            'id = "dep"\n'
+            'ticket = 505\n'
+            'claims = ["lib/**"]\n'
+            'after = ["p"]\n'
+        )
+
+        # Also start a planned lane depending on p to verify activate_planned refuses parked dependency.
+        self.lane("start", "planned-dep", "--ticket", "506", "--base", "integrate/q",
+                  "--claims", "lib/**", "--after", "p")
+
+        park_out = self.lane("park", "p", "--reason", "waiting on upstream API")
+        self.assertIn("Lane p parked at park/p", park_out)
+        self.assertFalse(wt.exists())
+        self.assertNotIn("lane/p", self.git(self.repo, "branch", "--list"))
+        self.assertEqual(self.git(self.repo, "rev-parse", "refs/heads/park/p"), tip)
+        self.assertTrue(receipt_path.exists(), "park keeps receipts")
+
+        rec = self.record("p")
+        self.assertEqual(rec["status"], "done")
+        self.assertEqual(rec["outcome"], "parked")
+        self.assertEqual(rec["parked"]["ref"], "park/p")
+        self.assertEqual(rec["parked"]["tip"], tip)
+        self.assertEqual(rec["parked"]["reason"], "waiting on upstream API")
+        self.assertFalse(lifecycle.landed(rec))
+
+        # list --all shows the parked outcome.
+        self.assertIn("done (parked)", self.lane("list", "--all"))
+
+        # Queue next skips dependants with "waits for p (parked)".
+        next_out = self.lane("next", ok=False)
+        self.assertIn("waits for p (parked)", next_out)
+
+        # Planned dependant cannot activate while p is parked.
+        act_out = self.lane("start", "planned-dep", "--create", ok=False)
+        self.assertIn("p (parked)", act_out)
+
+        # wait --for landed exits 3 (cannot land while parked).
+        wait_res = subprocess.run(
+            [sys.executable, "-m", "lanefather", "wait", "p", "--for", "landed", "--timeout", "0"],
+            cwd=self.integration, env=self.env, capture_output=True, text=True,
+        )
+        self.assertEqual(wait_res.returncode, 3, wait_res.stdout + wait_res.stderr)
+
+        # Drop planned-dep so claims are free for unpark.
+        self.lane("drop", "planned-dep")
+
+        # Unpark p: recreates worktree from park/p, preserves scope/claims/base, does not inherit old receipt.
+        unpark_out = self.lane("unpark", "p")
+        self.assertIn("Lane p: ticket #404", unpark_out)
+        self.assertNotIn("park/p", self.git(self.repo, "branch", "--list"))
+        resumed = self.record("p")
+        self.assertEqual(resumed["status"], "active")
+        self.assertEqual(resumed["claims"], ["lib/**"])
+        self.assertEqual(resumed["base"], "integrate/q")
+        new_wt = pathlib.Path(resumed["worktree"])
+        self.assertTrue(new_wt.exists())
+        self.assertEqual(self.git(new_wt, "rev-parse", "HEAD"), tip)
+
+        # Old receipt is not inherited thanks to fathers#54 lane_created.
+        self.assertIn("no receipt", self.lane("land", "p", ok=False))
+
+        # Re-check and land p -> dependant in queue becomes ready.
+        self.lane("check", "p")
+        self.lane("land", "p")
+        self.assertTrue(lifecycle.landed(self.record("p")))
+        ready_out = self.lane("next")
+        self.assertIn("Lane dep: ticket #505", ready_out)
+
+    def test_abandon_empty_and_unmerged_lanes_with_keep_branch_and_force_reason(self):
+        from lanefather import lifecycle
+
+        # 1. Abandon an empty lane: removes worktree, branch, scratch, claims.
+        wt_empty = pathlib.Path(self.created("empty-ab", "lib/**"))
+        self.write(self.record("empty-ab")["scratch"][0], "note.log", "scratch")
+        out = self.lane("abandon", "empty-ab", "--reason", "no longer needed")
+        self.assertIn("Lane empty-ab abandoned", out)
+        self.assertFalse(wt_empty.exists())
+        self.assertNotIn("lane/empty-ab", self.git(self.repo, "branch", "--list"))
+        rec_empty = self.record("empty-ab")
+        self.assertFalse(pathlib.Path(rec_empty["scratch"][0]).exists())
+        self.assertEqual(rec_empty["status"], "done")
+        self.assertEqual(rec_empty["outcome"], "abandoned")
+        self.assertFalse(lifecycle.landed(rec_empty))
+        self.assertIn("done (abandoned)", self.lane("list", "--all"))
+
+        # Queue entry after an abandoned lane is never ready.
+        self.write_queue(
+            'base = "integrate/q"\n\n'
+            '[[lane]]\n'
+            'id = "after-ab"\n'
+            'ticket = 510\n'
+            'claims = ["lib/**"]\n'
+            'after = ["empty-ab"]\n'
+        )
+        self.assertIn("waits for empty-ab (abandoned)", self.lane("next", ok=False))
+
+        # 2. Abandon a lane with unmerged commits: refused -> succeeds with --keep-branch park/<id>.
+        wt1 = pathlib.Path(self.created("u1", "lib/**"))
+        tip1 = self.commit(wt1, {"lib/api.txt": "foo\nunmerged 1\n"})
+        refused = self.lane("abandon", "u1", "--reason", "superseded", ok=False)
+        self.assertIn("abandon refused", refused)
+        self.assertIn("--keep-branch park/u1", refused)
+        self.assertIn("--force-reason", refused)
+        self.assertTrue(wt1.exists())
+        self.assertEqual(self.record("u1")["status"], "active")
+
+        kept_out = self.lane("abandon", "u1", "--reason", "superseded", "--keep-branch", "park/u1")
+        self.assertIn("branch kept at park/u1", kept_out)
+        self.assertFalse(wt1.exists())
+        self.assertNotIn("lane/u1", self.git(self.repo, "branch", "--list"))
+        self.assertEqual(self.git(self.repo, "rev-parse", "refs/heads/park/u1"), tip1)
+        rec1 = self.record("u1")
+        self.assertEqual(rec1["status"], "done")
+        self.assertEqual(rec1["outcome"], "abandoned")
+        self.assertEqual(rec1["abandoned"]["kept_branch"], "park/u1")
+        self.assertFalse(lifecycle.landed(rec1))
+
+        # 3. Abandon a lane with unmerged commits using --force-reason (audited via journal.override).
+        wt2 = pathlib.Path(self.created("u2", "lib/**"))
+        self.commit(wt2, {"lib/api.txt": "foo\nunmerged 2\n"})
+        self.lane("abandon", "u2", "--reason", "spike failed", "--force-reason", "discard spike")
+        self.assertFalse(wt2.exists())
+        self.assertNotIn("lane/u2", self.git(self.repo, "branch", "--list"))
+        rec2 = self.record("u2")
+        self.assertEqual(rec2["status"], "done")
+        self.assertEqual(rec2["outcome"], "abandoned")
+        self.assertFalse(lifecycle.landed(rec2))
+        self.assertTrue(any(o.get("reason") == "discard spike" for o in rec2.get("overrides", [])))
+        self.assertIn("override abandon u2: discard spike", (self.state / "ledger.log").read_text())
+
+    def test_done_on_unlanded_lane_names_park_and_abandon(self):
+        self.created("unlanded", "lib/**")
+        out = self.lane("done", "unlanded", ok=False)
+        self.assertIn("not landed", out)
+        self.assertIn("park unlanded", out)
+        self.assertIn("abandon unlanded", out)
+
+
 if __name__ == "__main__":
     unittest.main()

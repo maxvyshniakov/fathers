@@ -36,7 +36,7 @@ class HelpTests(unittest.TestCase):
         done = lanefather("--help")
         self.assertEqual(done.returncode, 0, done.stderr)
         lines = done.stdout.splitlines()
-        self.assertLessEqual(len(lines), 45, done.stdout)
+        self.assertLessEqual(len(lines), 48, done.stdout)
         self.assertLessEqual(max(len(line) for line in lines), 80, done.stdout)
         from lanefather import cli
         names = list(cli.COMMANDS)

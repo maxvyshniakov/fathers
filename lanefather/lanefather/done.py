@@ -454,7 +454,7 @@ def holders(record: Record, store: state.Store, spawnfather: lifetimes.Spawnfath
 
 
 def remove(record: Record, store: state.Store, spawnfather: lifetimes.Spawnfather, main: str, proof: lifetimes.Evidence,
-           *, verb: str, holding: str | None) -> tuple[int, list[str]]:
+           *, verb: str, holding: str | None, keep_branches: tuple[str, ...] = ()) -> tuple[int, list[str]]:
     """Have Spawnfather stop what the lane left behind and remove its worktree, build directories and scratch, then
     remove its branches and the shared cache partitions built from it: the bytes freed and what went. The agent's
     harness branch goes only when `holding` (the integration tip for done, the base for drop) holds it. A reap
@@ -464,8 +464,9 @@ def remove(record: Record, store: state.Store, spawnfather: lifetimes.Spawnfathe
     freed, removed = 0, list[str]()
     scratch = [str(p) for p in record.get("scratch", []) if p]
     harness = f"worktree-{os.path.basename(worktree)}" if worktree else None
+    kept_set = set(keep_branches)
     branches = [b for b in (record["branch"], harness)
-                if b and git_ok(main, "rev-parse", "--verify", "--quiet", "refs/heads/" + b)]
+                if b and b not in kept_set and git_ok(main, "rev-parse", "--verify", "--quiet", "refs/heads/" + b)]
     unowned = on_demand(spawnfather, record, clean_stale_base=True)
     if unowned:
         raise LaneError(f"{verb} refused: Spawnfather does not own what the lane holds:\n- "
@@ -758,6 +759,215 @@ def drop_lane(lane_id: str, store: state.Store, *, dry_run: bool = False) -> str
     print(f"Lane {lane_id} dropped ({why}): claims released, {freed / 1e9:.1f} GB freed")
     print_removed(removed)
     return why
+
+
+def _merged_anywhere(main: str, commit: str, *, exclude: set[str], base_shas: list[str]) -> bool:
+    """Whether `commit` is reachable from `base_shas` or any local/remote branch outside `exclude`."""
+    for base in base_shas:
+        if git_ok(main, "merge-base", "--is-ancestor", commit, base):
+            return True
+    refs = git(main, "for-each-ref", "--contains", commit, "--format=%(refname)",
+               "refs/heads/", "refs/remotes/", check=False).splitlines()
+    for ref in refs:
+        short = ref.removeprefix("refs/heads/")
+        if short not in exclude:
+            return True
+    return False
+
+
+def park(args: Any, store: state.Store) -> int:
+    """`park ID --reason REASON` (fathers#57): save the lane's tip on `park/<id>`, free cap/claims/worktree."""
+    park_lane(args.id, args.reason, store)
+    return 0
+
+
+def park_lane(lane_id: str, reason: str, store: state.Store) -> dict[str, Any]:
+    """Save `lane_id`'s current branch tip on `park/<id>`, remove its worktree and lane branch, keep receipts,
+    and transition `planned|active -> done` with `outcome='parked'` (fathers#57)."""
+    prog = store.prog
+    cleaned_reason = reason.strip()
+    if not cleaned_reason:
+        raise LaneError("park refused: --reason must not be empty")
+    park_ref = f"park/{lane_id}"
+    with store.locked("state"):
+        record = store.load(lane_id)
+        if lifecycle.awaiting_done(record):
+            raise LaneError(f"park refused: lane {lane_id} is {record['status']}: {prog} done {lane_id} finishes it")
+        if not lifecycle.occupying(record):
+            raise LaneError(f"park refused: lane {lane_id} is already {lifecycle.display_state(record)}")
+        common = record.get("common_dir")
+        if not isinstance(common, str) or not common or not os.path.isdir(common):
+            raise LaneError(f"lane {lane_id} names no repository that exists ({common or 'none'})")
+        main = main_checkout(common)
+        spawnfather = lifetimes.client()
+        if spawnfather is None:
+            raise LaneRefused(f"park {lane_id} refused: {lifetimes.INSTALL_HINT}; nothing was removed")
+        refusals: list[str] = []
+        worktree = record.get("worktree")
+        tip = git(main, "rev-parse", "--verify", "--quiet", "refs/heads/" + str(record["branch"]), check=False)
+        head = ""
+        if isinstance(worktree, str) and worktree and os.path.isdir(worktree):
+            changes = git(worktree, "status", "--porcelain", "--untracked-files=all").splitlines()
+            if changes:
+                shown = ", ".join(line.split(None, 1)[-1] for line in changes[:5]) + (
+                    f" and {len(changes) - 5} more" if len(changes) > 5 else "")
+                refusals.append(f"{worktree} has uncommitted or untracked changes: {shown}; commit or discard first")
+            head = git(worktree, "rev-parse", "--verify", "--quiet", "HEAD", check=False)
+            if tip and head and head != tip:
+                refusals.append(f"{worktree} is at {head[:10]}, not {record['branch']} ({tip[:10]})")
+        if not tip:
+            tip = head
+        if not tip:
+            raw_base_sha = record.get("base_sha")
+            if isinstance(raw_base_sha, str) and raw_base_sha and git_ok(
+                main, "rev-parse", "--verify", "--quiet", raw_base_sha + "^{commit}"
+            ):
+                tip = raw_base_sha
+            else:
+                tip = git(main, "rev-parse", "--verify", "--quiet", str(record.get("base")) + "^{commit}", check=False)
+        if not tip:
+            raise LaneError(f"park refused: lane {lane_id} has no branch tip or base commit to park")
+        proof = evidence(store, [tip], None)
+        held, hard_refusals, _ = holders(
+            record, store, spawnfather, main, proof, verb="park", clean_stale_base=not refusals
+        )
+        refusals += held + hard_refusals
+        if refusals:
+            raise LaneError("park refused:\n- " + "\n- ".join(refusals))
+        git(main, "branch", "-f", park_ref, tip)
+        freed, removed = remove(
+            record, store, spawnfather, main, proof, verb="park", holding=tip, keep_branches=(park_ref,)
+        )
+        now = journal.now()
+        parked_info: dict[str, Any] = {"ref": park_ref, "tip": tip, "reason": cleaned_reason, "at": now}
+        lifecycle.transition(
+            store, lane_id, "park",
+            done=now, outcome="parked", parked=parked_info, freed_bytes=freed,
+            ledger_message=(f"park {lane_id} ref={park_ref} tip={tip[:10]}: {cleaned_reason} "
+                            f"freed={freed // 2**20} MiB removed={' '.join(removed) or '-'}"),
+            ledger_details={"ref": park_ref, "tip": tip, "reason": cleaned_reason,
+                            "freed_bytes": freed, "removed": removed},
+        )
+    print(f"Lane {lane_id} parked at {park_ref} ({tip[:10]}): claims released, {freed / 1e9:.1f} GB freed; "
+          f"resume with {prog} unpark {lane_id}")
+    print_removed(removed)
+    return parked_info
+
+
+def abandon(args: Any, store: state.Store) -> int:
+    """`abandon ID --reason REASON [--keep-branch REF] [--force-reason REASON]` (fathers#57)."""
+    abandon_lane(args.id, args.reason, store, keep_branch=args.keep_branch, force_reason=args.force_reason)
+    return 0
+
+
+def abandon_lane(lane_id: str, reason: str, store: state.Store, *,
+                 keep_branch: str | None = None, force_reason: str | None = None) -> dict[str, Any]:
+    """Transition `planned|active -> done` with `outcome='abandoned'`, removing worktree, branch, scratch and claims.
+    Refuses when the branch has commits not merged anywhere unless `keep_branch` or `force_reason` is given."""
+    prog = store.prog
+    cleaned_reason = reason.strip()
+    if not cleaned_reason:
+        raise LaneError("abandon refused: --reason must not be empty")
+    kept_ref = keep_branch.strip() if isinstance(keep_branch, str) else None
+    if keep_branch is not None and not kept_ref:
+        raise LaneError("abandon refused: --keep-branch must not be empty")
+    with store.locked("state"):
+        record = store.load(lane_id)
+        if lifecycle.awaiting_done(record):
+            raise LaneError(
+                f"abandon refused: lane {lane_id} is {record['status']}: {prog} done {lane_id} finishes it"
+            )
+        if not lifecycle.occupying(record):
+            raise LaneError(f"abandon refused: lane {lane_id} is already {lifecycle.display_state(record)}")
+        common = record.get("common_dir")
+        if not isinstance(common, str) or not common or not os.path.isdir(common):
+            raise LaneError(f"lane {lane_id} names no repository that exists ({common or 'none'})")
+        main = main_checkout(common)
+        if kept_ref is not None and not git_ok(main, "check-ref-format", "--branch", kept_ref):
+            raise LaneError(f"abandon refused: invalid branch name {kept_ref!r} for --keep-branch")
+        spawnfather = lifetimes.client()
+        if spawnfather is None:
+            raise LaneRefused(f"abandon {lane_id} refused: {lifetimes.INSTALL_HINT}; nothing was removed")
+        base_shas: list[str] = []
+        base_tip = git(main, "rev-parse", "--verify", "--quiet", str(record.get("base")) + "^{commit}", check=False)
+        if base_tip:
+            base_shas.append(base_tip)
+        raw_base_sha = record.get("base_sha")
+        if (isinstance(raw_base_sha, str) and raw_base_sha and raw_base_sha not in base_shas
+                and git_ok(main, "rev-parse", "--verify", "--quiet", raw_base_sha + "^{commit}")):
+            base_shas.append(raw_base_sha)
+        worktree = record.get("worktree")
+        harness = f"worktree-{os.path.basename(worktree)}" if isinstance(worktree, str) and worktree else None
+        own_branches = {b for b in (record.get("branch"), harness) if isinstance(b, str) and b}
+        tip = git(main, "rev-parse", "--verify", "--quiet", "refs/heads/" + str(record["branch"]), check=False)
+        head = ""
+        refusals: list[str] = []
+        vouched: list[str] = list(base_shas)
+        if isinstance(worktree, str) and worktree and os.path.isdir(worktree):
+            changes = git(worktree, "status", "--porcelain", "--untracked-files=all").splitlines()
+            if changes:
+                shown = ", ".join(line.split(None, 1)[-1] for line in changes[:5]) + (
+                    f" and {len(changes) - 5} more" if len(changes) > 5 else "")
+                refusals.append(f"{worktree} has uncommitted or untracked changes: {shown}")
+            head = git(worktree, "rev-parse", "--verify", "--quiet", "HEAD", check=False)
+        if tip:
+            tip_merged = _merged_anywhere(main, tip, exclude=own_branches, base_shas=base_shas)
+            if tip_merged or kept_ref is not None:
+                vouched.append(tip)
+            else:
+                refusals.append(
+                    f"{record['branch']} ({tip[:10]}) has commits not merged anywhere; "
+                    f"pass --keep-branch park/{lane_id} or --force-reason"
+                )
+        if head and head != tip:
+            head_merged = _merged_anywhere(main, head, exclude=own_branches, base_shas=base_shas)
+            if head_merged or kept_ref is not None:
+                vouched.append(head)
+            else:
+                refusals.append(
+                    f"{worktree} is at {head[:10]}, with commits not merged anywhere; "
+                    f"pass --keep-branch park/{lane_id} or --force-reason"
+                )
+        proof = evidence(store, vouched, force_reason)
+        held, hard_refusals, _ = holders(
+            record, store, spawnfather, main, proof, verb="abandon",
+            clean_stale_base=not refusals or bool(force_reason),
+        )
+        refusals += held
+        if hard_refusals:
+            raise LaneError("abandon refused:\n- " + "\n- ".join(refusals + hard_refusals))
+        if refusals and not force_reason:
+            raise LaneError("abandon refused:\n- " + "\n- ".join(refusals))
+        override_entry: dict[str, Any] | None = None
+        if refusals:
+            override_entry = journal.override(
+                "abandon", record, force_reason, refusals, audited=False, store=store,
+            )
+        save_tip = tip or head or (base_shas[0] if base_shas else "")
+        if kept_ref is not None and save_tip:
+            git(main, "branch", "-f", kept_ref, save_tip)
+        freed, removed = remove(
+            record, store, spawnfather, main, proof, verb="abandon",
+            holding=save_tip or None, keep_branches=(kept_ref,) if kept_ref is not None else (),
+        )
+        now = journal.now()
+        abandoned_info: dict[str, Any] = {
+            "reason": cleaned_reason, "at": now, "tip": tip or None, "kept_branch": kept_ref,
+        }
+        lifecycle.transition(
+            store, lane_id, "abandon",
+            done=now, outcome="abandoned", abandoned=abandoned_info, freed_bytes=freed,
+            overrides=[override_entry] if override_entry is not None else None,
+            ledger_message=(f"abandon {lane_id}: {cleaned_reason}"
+                            + (f" kept={kept_ref}" if kept_ref else "")
+                            + f" freed={freed // 2**20} MiB removed={' '.join(removed) or '-'}"),
+            ledger_details={"reason": cleaned_reason, "tip": tip or None, "kept_branch": kept_ref,
+                            "freed_bytes": freed, "removed": removed},
+        )
+    print(f"Lane {lane_id} abandoned ({cleaned_reason}): claims released, {freed / 1e9:.1f} GB freed"
+          + (f"; branch kept at {kept_ref}" if kept_ref else ""))
+    print_removed(removed)
+    return abandoned_info
 
 
 def footprint(record: Record) -> int:

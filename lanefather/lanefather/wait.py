@@ -35,10 +35,10 @@ def reached(record: Record | None, target: str, first: Record | None) -> bool | 
                                                    and first is not None
                                                    and first.get("created") == record.get("created"))
     if target == "landed":
-        if lifecycle.awaiting_done(record):
+        if lifecycle.landed(record):
             return True
         if lifecycle.finished(record):
-            return True if record.get("landed") else None
+            return None
         return False
     return lifecycle.finished(record)
 
