@@ -124,6 +124,9 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 
 ### Fixed
 
+- Worktree and directory removal guards no longer refuse when an unrelated setuid/setgid host binary (such as macOS
+  `/usr/bin/top`) has an unreadable working directory under non-root `lsof`; normal processes whose working directory
+  cannot be read still refuse removal.
 - `spawnfather hook` now treats `SessionEnd` as an immediate session end only for terminal reasons
   (`prompt_input_exit`, `clear`, `logout`, `bypass_permissions_disabled`, or an omitted reason). For `reason: "other"`
   (used both by T3 Code between turns and by Claude Code on CLI signal/`-p` exits), it schedules a detached reap that

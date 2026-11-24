@@ -23,6 +23,7 @@ from __future__ import annotations
 from collections import deque
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
+import hashlib
 import json
 import math
 import os
@@ -65,6 +66,7 @@ class Step:
     memory: float = 0.0  # GiB at its peak: what the scheduler fits beside the running steps
     timeout: float = 15  # minutes; 0 for no limit
     cwd: Path | None = None
+    inputs: tuple[str, ...] = ()  # repo-relative paths/prefixes (ending in '/'); empty => full tree
 
 
 @dataclass(frozen=True)
@@ -555,6 +557,21 @@ class Verified:
                 found.add(fields[4])
         return found
 
+    def passed_keys(self, keys: Mapping[str, str]) -> set[str]:
+        """The names in `keys` (name -> cache key) that have already passed under this toolchain."""
+        if not keys:
+            return set()
+        try:
+            text = self.path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            return set()
+        by_key: dict[str, set[str]] = {}
+        for line in text.splitlines():
+            fields = line.split("\t")
+            if len(fields) == 5 and fields[0] == "v1" and tuple(fields[2:4]) == self.key:
+                by_key.setdefault(fields[1], set()).add(fields[4])
+        return {name for name, key in keys.items() if name in by_key.get(key, ())}
+
     def commit_passed(self, sha: str) -> bool:
         return "pre-push" in self.passed(f"commit:{sha}")
 
@@ -590,15 +607,46 @@ def common_dir(root: Path, env: Mapping[str, str] | None = None) -> Path:
     return Path(git(root, "rev-parse", "--path-format=absolute", "--git-common-dir", env=env))
 
 
+def tree_keys(root: Path, tree: str, steps: Sequence[Step], *,
+              env: Mapping[str, str] | None = None) -> dict[str, str]:
+    """Per-step cache key for `tree`: full `tree` when a step declares no `inputs`, else `inputs:<sha256>` over the
+    git object type and hash of each declared input path in `tree`."""
+    normalized = {step.name: sorted({spec.rstrip("/") for spec in step.inputs if spec.rstrip("/")}) for step in steps}
+    all_paths = sorted({path for paths in normalized.values() for path in paths})
+    if not all_paths:
+        return {step.name: tree for step in steps}
+    payload = "".join(f"{tree}:{path}\n" for path in all_paths)
+    result = subprocess.run(
+        ["git", "cat-file", "--batch-check=%(objecttype) %(objectname)"],
+        cwd=root, env=None if env is None else dict(env), input=payload, capture_output=True, text=True, check=True,
+    )
+    lines = result.stdout.splitlines()
+    if len(lines) != len(all_paths):
+        raise ValueError(f"git cat-file returned {len(lines)} lines for {len(all_paths)} paths")
+    resolved = {path: ("missing" if line.endswith(" missing") else line)
+                for path, line in zip(all_paths, lines, strict=True)}
+    keys: dict[str, str] = {}
+    for step in steps:
+        paths = normalized[step.name]
+        if not paths:
+            keys[step.name] = tree
+            continue
+        digest = hashlib.sha256("\n".join(f"{path}\t{resolved[path]}" for path in paths).encode("utf-8")).hexdigest()
+        keys[step.name] = f"inputs:{digest}"
+    return keys
+
+
 def gate(steps: Sequence[Step], *, root: Path, keep_going: bool = False, use_cache: bool = True,
-         env: Mapping[str, str] | None = None, out: TextIO | None = None) -> int:
-    """Runs `steps` in `root`, skipping those that passed on this tree before; records the ones that pass. The cache
-    is read and written only for a clean checkout whose HEAD and status are the same after the run."""
+         full_tree: bool = False, env: Mapping[str, str] | None = None, out: TextIO | None = None) -> int:
+    """Runs `steps` in `root`, skipping those that passed on their input tree before; records the ones that pass. The
+    cache is read and written only for a clean checkout whose HEAD and status are the same after the run."""
     environment = clean_environment(os.environ if env is None else env)
     stream = sys.stdout if out is None else out
     before = checkout(root, environment)
     cache = Verified(common_dir(root, environment)) if use_cache and before.clean else None
-    done = cache.passed(before.tree) if cache else set()
+    keys = ({step.name: before.tree for step in steps} if full_tree
+            else tree_keys(root, before.tree, steps, env=environment)) if cache else {}
+    done = cache.passed_keys(keys) if cache else set()
     todo = [step for step in steps if step.name not in done]
     for step in steps:
         if step.name in done:
@@ -611,7 +659,12 @@ def gate(steps: Sequence[Step], *, root: Path, keep_going: bool = False, use_cac
     outcome = run(todo, memory=machine_budget(environment), keep_going=keep_going, env=environment, out=stream)
     if cache and not outcome.forced:
         if checkout(root, environment) == before:
-            cache.record(before.tree, [result.name for result in outcome.results if result.status == "ok"])
+            by_key: dict[str, list[str]] = {}
+            for result in outcome.results:
+                if result.status == "ok":
+                    by_key.setdefault(keys[result.name], []).append(result.name)
+            for key, names in by_key.items():
+                cache.record(key, names)
         else:
             stream.write("verify: the checkout changed during the run; no check is recorded as passed\n")
             stream.flush()
