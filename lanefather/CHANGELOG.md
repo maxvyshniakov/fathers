@@ -393,15 +393,17 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
 
 - Scoped check runs and outer-lease / renamed-check base rerun handling (fathers#253):
   - `verify.Selection.checks(..., base=...)` now passes `--base <ref>` alongside `--checks` for scoped (non-full)
-    lane checks and their solo reruns so verifiers such as `package-kit-lane` see `full: false` and apply scope
-    arguments for selected checks; full runs, post-merge smokes, and base reruns omit `--base`.
-  - `lanefather check`, `land`, and `promote` now detect when they are invoked inside an outer 1-slot (or
-    smaller-than-needed) Slotfather lease (`SLOTFATHER_SLOTS` / `SLOTFATHER_COUNT`) and warn on stderr that they lease
+    lane checks and their solo reruns when the verifier advertises `"base"` in `capabilities` (or `CAPABILITIES`), so
+    verifiers such as `package-kit-lane` can scope the selected checks against the base; verifiers without `"base"`,
+    full runs, post-merge smokes, and base reruns omit `--base`.
+  - `lanefather check`, `land`, and `promote` now detect when they are invoked inside an outer Slotfather lease
+    (`SLOTFATHER_LEASE`, reading `SLOTFATHER_SLOTS` / `SLOTFATHER_COUNT` when set) and warn on stderr that they lease
     for themselves and must not be wrapped in `slotfather run --`; CLI help and docs state the same rule.
   - Base reruns without a Python `plan_module` now detect when a check name changed or does not exist on `base`
-    (rejected as unknown by the base verifier, or omitted from a valid base report), probing multi-check selections
+    (rejected by a short CLI unknown-check error, or omitted from a valid base report), probing multi-check selections
     individually so checks that exist on base still get their real verdict while absent/renamed checks are classified
-    `regression` with `base.status = "absent"` (`the base defines no such check`), never `pre-existing`.
+    `regression` with `base.status = "absent"` (`the base defines no such check`), never `pre-existing`. Real crashes
+    and tracebacks stay `unclassified`.
 - Red checks are no longer classified `pre-existing` (landable) merely because the base rerun of the same check id
   also failed (fathers#113): `lanefather check` now requires valid, strictly-typed `failure_evidence` v1
   (`version: 1`, `comparable: true`, `context`, and complete `cases` with `id` and `signature`) across the original

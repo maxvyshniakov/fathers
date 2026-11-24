@@ -536,9 +536,11 @@ solo-pass (`flaky-under-load`) classification is unchanged.
 When a verifier advertises `"only"` (`capabilities`) and reports
 `failed_tests: [...]` on a failing check (fathers#147), red-check reruns pass `--only <test,...>` to both the lane
 and base reruns, record `"tests"` in `classification.checks` and `classification.runs`, and keep a check
-`"unclassified"` if a red test is outside `failed_tests`; otherwise argv and receipts are unchanged. Scoped (non-full)
-lane check runs and their solo reruns also pass `--base <ref>` alongside `--checks` so verifiers can apply diff-scoped
-arguments to selected checks (fathers#253). Lanefather hands each run its run id and tree in the slot meta
+`"unclassified"` if a red test is outside `failed_tests`; otherwise argv and receipts are unchanged. When a verifier
+advertises `"base"` (`capabilities` or `CAPABILITIES`), scoped (non-full) lane check runs and their solo reruns also
+pass `--base <ref>` alongside `--checks` so the verifier can scope the selected checks against the base (fathers#253);
+base reruns omit `--base` because they run the check against `base` itself. Lanefather hands each run its run id and
+tree in the slot meta
 (`run`, `tree`) with `plan` and `checks` (fathers#107).
 
 When Slotfather advertises `slot-range` via `slotfather capabilities --json` (fathers#43), lane checks pass the

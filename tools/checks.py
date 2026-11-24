@@ -173,7 +173,7 @@ def plan(root: Path, base: str) -> dict[str, object]:
     why = (["A path no rule knows changed: every check runs."] if selection.full
            else ["Each changed package's checks, and the root checks."])
     return {"v": 1, "full": selection.full, "paths": paths, "unowned": selection.unowned, "suites": ["verify"],
-            "reasons": {"verify": why},
+            "reasons": {"verify": why}, "capabilities": ["base"],
             "checks": [{"id": f"verify:{encode(name)}", "suite": "verify", "paths": chosen, "producer": False}
                        for name, chosen in selection.checks.items()]}
 

@@ -126,8 +126,8 @@ class PlanTests(unittest.TestCase):
         root = self.repository()
         plan = checks.plan(root, "HEAD~1")
         self.assertEqual({"v": 1, "full": False, "unowned": [], "suites": ["verify"],
-                          "paths": ["lanefather/new.py", "spawnfather/reap.py"]},
-                         {key: plan[key] for key in ("v", "full", "unowned", "suites", "paths")})
+                          "paths": ["lanefather/new.py", "spawnfather/reap.py"], "capabilities": ["base"]},
+                         {key: plan[key] for key in ("v", "full", "unowned", "suites", "paths", "capabilities")})
         rows = {row["id"]: row for row in plan["checks"]}
         self.assertEqual({"id": "verify:spawnfather%20lint", "suite": "verify", "paths": ["spawnfather/reap.py"],
                           "producer": False}, rows["verify:spawnfather%20lint"])

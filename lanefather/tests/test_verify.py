@@ -115,7 +115,15 @@ class VerifyUnitTests(unittest.TestCase):
                 self.assertFalse(slots.warn_outer_lease("check", 2))
             self.assertEqual(buf.getvalue(), "")
 
-        # Outer 1-slot lease via SLOTFATHER_SLOTS warns even when wanted is 1 or 2.
+        # Outer lease without a slot count still warns.
+        with unittest.mock.patch.dict(os.environ, {"SLOTFATHER_LEASE": "/tmp/l"}, clear=True):
+            self.assertIsNone(slots.lease_count())
+            buf_unknown = io.StringIO()
+            with unittest.mock.patch("sys.stderr", buf_unknown):
+                self.assertTrue(slots.warn_outer_lease("check", 2))
+            self.assertIn("running inside an outer Slotfather lease,", buf_unknown.getvalue())
+
+        # Outer 1-slot lease via SLOTFATHER_SLOTS warns with slot count and needed budget.
         with unittest.mock.patch.dict(os.environ, {"SLOTFATHER_LEASE": "/tmp/l", "SLOTFATHER_SLOTS": "1"}, clear=True):
             self.assertEqual(slots.lease_count(), 1)
             buf = io.StringIO()
@@ -124,7 +132,7 @@ class VerifyUnitTests(unittest.TestCase):
             self.assertIn("outer Slotfather lease of 1 slot (needed 2)", buf.getvalue())
             self.assertIn("must not be wrapped in `slotfather run --`", buf.getvalue())
 
-        # Outer 2-slot lease smaller than needed (3) warns; >= needed (2) stays silent.
+        # Outer 2-slot lease warns both when smaller than needed (with needed) and when >= needed (without needed).
         with unittest.mock.patch.dict(os.environ, {"SLOTFATHER_LEASE": "/tmp/l", "SLOTFATHER_COUNT": "2"}, clear=True):
             self.assertEqual(slots.lease_count(), 2)
             buf_small = io.StringIO()
@@ -133,8 +141,9 @@ class VerifyUnitTests(unittest.TestCase):
             self.assertIn("2 slots (needed 3)", buf_small.getvalue())
             buf_ok = io.StringIO()
             with unittest.mock.patch("sys.stderr", buf_ok):
-                self.assertFalse(slots.warn_outer_lease("check", 2))
-            self.assertEqual(buf_ok.getvalue(), "")
+                self.assertTrue(slots.warn_outer_lease("check", 2))
+            self.assertIn("outer Slotfather lease of 2 slots,", buf_ok.getvalue())
+            self.assertNotIn("needed", buf_ok.getvalue())
 
     def test_terminable_restores_handler_and_exits_on_sigterm(self):
         from lanefather import verify
@@ -216,14 +225,13 @@ class VerifyCallSitePinTests(LaneCase):
     def test_pins_argv_and_slot_env_across_all_six_verify_call_sites(self):
         from lanefather import results
 
-        # 1. check (selected checks) + 2. post-merge smoke
+        # 1. check (selected checks) + 2. post-merge smoke (verifier without "base" capability gets no --base)
         wt = self.created("a", "lib/**")
-        base_a = self.tip()
         self.commit(wt, {"lib/api.txt": "foo\nbaz\n"})
         self.lane("check", "a")
         check_call = self.captured()[-1]
-        self.assertEqual(check_call["argv"][:5], ["verify.sh", "--checks", "structure-check,lib-check", "--base", base_a])
-        self.assertEqual(check_call["argv"][5:7], ["--keep-going", "--jobs"])
+        self.assertEqual(check_call["argv"][:3], ["verify.sh", "--checks", "structure-check,lib-check"])
+        self.assertEqual(check_call["argv"][3:5], ["--keep-going", "--jobs"])
         self.assertEqual(check_call["env"]["LANEFATHER_SLOT_LABEL"], "lane-a")
         self.assertEqual(check_call["env"]["LANEFATHER_SLOT_PRIORITY"], "normal")
         self.assertEqual(check_call["env"]["LANEFATHER_SLOT_TICKET"], "404")
@@ -252,7 +260,6 @@ class VerifyCallSitePinTests(LaneCase):
 
         # 3. rerun (alone) + 4. base rerun (regression triggers both alone and base reruns)
         wt_b = self.created("b", "native/**")
-        base_b = self.tip()
         self.commit(wt_b, {"native/straylight-core/corpus.txt": "bad\n"})
         self.write(wt_b, "checks/native.sh", "#!/usr/bin/env bash\nexit 1\n").chmod(0o755)
         self.commit(wt_b, {}, "break native check")
@@ -261,8 +268,8 @@ class VerifyCallSitePinTests(LaneCase):
         alone_call = next(c for c in calls if c["env"]["LANEFATHER_SLOT_LABEL"] == "lane-b-alone")
         base_call = next(c for c in calls if c["env"]["LANEFATHER_SLOT_LABEL"] == "lane-b-base")
 
-        self.assertEqual(alone_call["argv"][:5], ["verify.sh", "--checks", "native-check", "--base", base_b])
-        self.assertEqual(alone_call["argv"][5:7], ["--keep-going", "--jobs"])
+        self.assertEqual(alone_call["argv"][:3], ["verify.sh", "--checks", "native-check"])
+        self.assertEqual(alone_call["argv"][3:5], ["--keep-going", "--jobs"])
         self.assertEqual(alone_call["env"]["LANEFATHER_SLOT_PRIORITY"], "interactive")
         self.assertEqual(alone_call["env"]["LANEFATHER_SLOT_TICKET"], "404")
         alone_meta = json.loads(alone_call["env"]["LANEFATHER_SLOT_META"])

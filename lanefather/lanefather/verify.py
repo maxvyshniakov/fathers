@@ -1313,22 +1313,39 @@ def keep_run(store: state.Store, run: Path | None, label: str) -> Path | None:
     return kept
 
 
-_UNKNOWN_CHECK_RE = re.compile(
-    r"\b(?:unknown|unrecognized|invalid|missing)\s+(?:verification\s+)?(?:check|checks|step|steps)\b"
-    r"|\bno\s+such\s+(?:verification\s+)?(?:check|step)\b",
+_UNKNOWN_CHECK_MAX_LINES = 12
+_CLI_ERROR_PREFIX = r"^(?:[A-Za-z0-9_./-]+:\s*){0,2}"
+_UNKNOWN_CHECK_LINE_RE = re.compile(
+    _CLI_ERROR_PREFIX
+    + r"(?:"
+    r"(?:unknown|unrecognized)\s+(?:verification\s+)?(?:check|checks|step|steps)\b"
+    r"|no\s+such\s+(?:verification\s+)?(?:check|step)\b"
+    r"|check(?:s)?\s+not\s+found\b"
+    r")",
     re.I,
+)
+_CRASH_OR_TRACEBACK_RE = re.compile(
+    r"^(?:Traceback \(most recent call last\):|File \".*\", line \d+|(?:ERROR|FAIL|FAILED)\b|[A-Za-z_]\w*Error:)",
 )
 
 
 def _unknown_check_log(log: Path | None) -> bool:
-    """Whether a base rerun log that wrote no verification report rejected an unknown check/step name (fathers#253)."""
+    """Whether a short CLI-rejection base rerun log refused an unknown check/step name (fathers#253).
+
+    Logs that look like tracebacks, exceptions, or test output return False so real crashes stay unclassified.
+    """
     if log is None:
         return False
     try:
         text = log.read_text(errors="replace")
     except OSError:
         return False
-    return bool(_UNKNOWN_CHECK_RE.search(text))
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if not lines or len(lines) > _UNKNOWN_CHECK_MAX_LINES:
+        return False
+    if any(_CRASH_OR_TRACEBACK_RE.match(line) for line in lines):
+        return False
+    return any(_UNKNOWN_CHECK_LINE_RE.match(line) for line in lines)
 
 
 def run_rerun(
@@ -1707,6 +1724,7 @@ def classify_failures(
 ) -> dict[str, Any] | None:
     """Rerun the red checks of a lane check (at most LANEFATHER_RERUNS) and classify each; None when nothing is red."""
     only_supported = plan.supports_only(worktree, lane_plan=lane_plan, report=report, project=store.project)
+    base_supported = plan.supports_base(worktree, lane_plan=lane_plan, report=report, project=store.project)
     planned = plan_classification(
         fresh, report, cap=rerun_cap(store.project), budget=rerun_budget, only_supported=only_supported,
     )
@@ -1723,7 +1741,7 @@ def classify_failures(
     if planned.active_rerun and not planned.first:
         alone_jobs = rerun_jobs(jobs, minimum=rerun_min_slots(planned.active_rerun, lane_plan, fresh,
                                                               project=store.project))
-        alone_base = base if base and not (lane_plan or {}).get("full") else None
+        alone_base = base if base and not (lane_plan or {}).get("full") and base_supported else None
         alone_run_id, alone_report, log, _, problem = run_rerun(
             store, worktree, planned.active_rerun, f"lane-{record['id']}-alone", alone_jobs,
             meta=lane_meta(store, record), ticket=lane_ticket(record), toolchain=toolchain,

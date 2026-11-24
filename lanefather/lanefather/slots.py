@@ -67,19 +67,23 @@ def lease_count() -> int | None:
 
 
 def warn_outer_lease(command: str, wanted: int | None = None, *, prog: str = "lanefather") -> bool:
-    """Warn on stderr when a self-leasing command runs inside an outer Slotfather lease that pins its worker
-    budget (fathers#253). Returns True when a warning was emitted."""
+    """Warn on stderr when a self-leasing command runs inside an outer Slotfather lease (fathers#253).
+    Returns True when a warning was emitted."""
+    if not leased():
+        return False
     held = lease_count()
-    if held is None:
-        return False
-    if held > 1 and (wanted is None or held >= wanted):
-        return False
-    slot_word = "slot" if held == 1 else "slots"
-    budget = f" (needed {wanted})" if wanted is not None and held < wanted else ""
+    if held is not None:
+        slot_word = "slot" if held == 1 else "slots"
+        budget = f" (needed {wanted})" if wanted is not None and held < wanted else ""
+        detail = (
+            f"an outer Slotfather lease of {held} {slot_word}{budget}, which pins the whole {command} "
+            f"(and its verifier) to {held} {slot_word}"
+        )
+    else:
+        detail = f"an outer Slotfather lease, which pins the whole {command} (and its verifier) to that lease"
     print(
-        f"lane: warning: `{prog} {command}` is running inside an outer Slotfather lease of {held} {slot_word}"
-        f"{budget}, which pins the whole {command} (and its verifier) to {held} {slot_word}; `{prog} check`, "
-        f"`{prog} land` and `{prog} promote` lease for themselves and must not be wrapped in `slotfather run --`",
+        f"lane: warning: `{prog} {command}` is running inside {detail}; `{prog} check`, `{prog} land` and "
+        f"`{prog} promote` lease for themselves and must not be wrapped in `slotfather run --`",
         file=sys.stderr,
     )
     return True

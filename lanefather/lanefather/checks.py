@@ -252,7 +252,8 @@ def select(
 
 def run(store: state.Store, prepared: Prepared, selection: Selected) -> CheckRun:
     """Execute the remaining checks through `verify.Run` and classify any red checks."""
-    slots.warn_outer_lease("check", selection.decision["jobs"], prog=store.prog)
+    if selection.remaining is None or any(selection.remaining.values()):
+        slots.warn_outer_lease("check", selection.decision["jobs"], prog=store.prog)
     started = journal.now()
     fresh, ran, triaged, classification, stopped, granted_jobs = _execute_lane_run(
         store, prepared.record, prepared.worktree, selection.base, selection.suites, selection.remaining,
@@ -383,7 +384,13 @@ def _execute_lane_run(
         if not active_suites:
             return [], {}, None, None, None, None, set()
         ids = None if selection is None else [c for s in active_suites for c in selection[s]]
-        scoped_base = base if base and not (lane_plan or {}).get("full") else None
+        scoped_base = (
+            base
+            if base
+            and not (lane_plan or {}).get("full")
+            and plan.supports_base(worktree, lane_plan=lane_plan, project=store.project)
+            else None
+        )
         choice = (
             verify.Selection.checks(ids, base=scoped_base)
             if ids is not None

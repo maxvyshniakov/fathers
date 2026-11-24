@@ -334,6 +334,7 @@ class LaneTests(unittest.TestCase):
                               (["--suites", "browser"], "unknown suite selection"),
                               (["--checks", "verify:a", "--suites", "verify"], "choose --checks or --suites"),
                               (["--base", "main"], "plan flags require --plan"),
+                              (["--suites", "verify", "--base", "main"], "plan flags require --plan"),
                               (["--changed"], "plan flags require --plan"),
                               (["--json"], "plan flags require --plan"),
                               (["--plan"], "a plan takes --changed --base REF --plan --json"),
