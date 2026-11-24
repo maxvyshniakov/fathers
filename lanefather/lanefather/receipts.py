@@ -25,6 +25,8 @@ from .state import Record
 
 Receipt = dict[str, Any]
 ReceiptKind = Literal["check", "receipt", "first", "post-merge", "recheck", "review", "gate", "perf"]
+Stale = review_record.Stale
+review_verdict = review_record.derive_verdict
 
 LANE_KINDS: tuple[str, ...] = ("receipt", "first", "post-merge", "recheck", "review")
 ALL_KINDS: tuple[str, ...] = ("check", "receipt", "first", "post-merge", "recheck", "review", "gate", "perf")
@@ -592,6 +594,7 @@ class LaneView:
     review_pre_land: bool = False
     review_tip: str | None = None
     review_pre_land_current: bool = True
+    review_has_delta: bool = False
 
     def _check_status_word(self, *, default: str) -> str:
         if isinstance(self.check, NoReceipt):
@@ -615,6 +618,8 @@ class LaneView:
             return "running"
         if isinstance(self.review, review_record.Exempt):
             return "exempt"
+        if isinstance(self.review, review_record.Stale):
+            return "stale"
         if isinstance(self.review, (review_record.PartialPanel, review_record.Unmarked, review_record.Complete)):
             return "finished"
         return self.review.raw_status or "not started"
@@ -628,24 +633,30 @@ class LaneView:
             return "stopped"
         if isinstance(self.review, review_record.Exempt):
             return "exempt"
+        if isinstance(self.review, review_record.Stale):
+            return "stale"
         if isinstance(self.review, (review_record.PartialPanel, review_record.Unmarked, review_record.Complete)):
             return "finished"
         return self.review.raw_status or "not started"
 
     def pre_land_reviewed_text(self) -> str | None:
-        """Short summary for a lane with a completed pre-land review (fathers#242)."""
-        if self.review_pre_land and isinstance(self.review, review_record.Complete) and self.review_tip:
-            if self.is_active and not self.review_pre_land_current:
+        """Short summary for a lane with a completed pre-land review (fathers#242, fathers#53)."""
+        if self.review_pre_land and self.review_tip and not self.review_has_delta:
+            if isinstance(self.review, review_record.Complete):
+                return f"reviewed before land at {self.review_tip[:10]}"
+            if self.is_active and isinstance(self.review, review_record.Stale):
                 return f"reviewed before land at {self.review_tip[:10]} (stale)"
-            return f"reviewed before land at {self.review_tip[:10]}"
         return None
 
     def list_receipt_text(self) -> str:
         """The `receipt` summary string rendered by `list` and `list --json`."""
         pre_land_text = self.pre_land_reviewed_text()
+        stale_active = self.is_active and isinstance(self.review, review_record.Stale)
         if isinstance(self.check, NoReceipt):
             if self.is_active and pre_land_text:
                 return f"no receipt, {pre_land_text}"
+            if stale_active:
+                return f"no receipt, {self.review_words}"
             return "no receipt"
         text = self._check_status_word(default="?")
         if self.is_active and isinstance(self.check, StaleTree):
@@ -656,6 +667,8 @@ class LaneView:
             text += f", {pre_land_text or self.review_words}"
         elif self.is_active and pre_land_text:
             text += f", {pre_land_text}"
+        elif stale_active:
+            text += f", {self.review_words}"
         return text
 
     def for_list(self, record: Record) -> dict[str, Any]:
@@ -685,6 +698,10 @@ class LaneView:
             pre_land_text = self.pre_land_reviewed_text()
             if pre_land_text:
                 review_block["summary"] = pre_land_text
+        if isinstance(self.review, review_record.Stale):
+            review_block["reviewed_tip"] = self.review.reviewed_tip
+            review_block["landed_tip"] = self.review.landed_tip
+            review_block.setdefault("summary", self.review_words)
         return {
             "version": 1,
             "id": self.id,
@@ -717,6 +734,10 @@ class LaneView:
             pre_land_text = self.pre_land_reviewed_text()
             if pre_land_text:
                 review_block["summary"] = pre_land_text
+        if isinstance(self.review, review_record.Stale):
+            review_block["reviewed_tip"] = self.review.reviewed_tip
+            review_block["landed_tip"] = self.review.landed_tip
+            review_block.setdefault("summary", self.review_words)
         return {
             "id": self.id,
             "status": self.status,
@@ -781,31 +802,7 @@ def lane_view(
     _, words = rev.summary(prog=prog or store.project.command)
     findings = rev.findings
     open_count = len(rev.open_findings)
-    pre_land_current = True
-    if (
-        lifecycle.active(record)
-        and rev.is_pre_land
-        and isinstance(review_v, review_record.Complete)
-        and rev.reviewed_tip
-        and root
-        and branch_str
-    ):
-        branch_tip = _git_read(root, "rev-parse", "--verify", "--quiet", f"refs/heads/{branch_str}^{{commit}}")
-        if branch_tip and branch_tip != rev.reviewed_tip:
-            fixed_shas: set[str] = set()
-            for finding in findings:
-                raw_mark: Any = finding.get("mark")
-                if not isinstance(raw_mark, dict):
-                    continue
-                mark = cast(dict[str, Any], raw_mark)
-                merge_sha: Any = mark.get("merge")
-                if mark.get("kind") == "fixed" and isinstance(merge_sha, str) and merge_sha:
-                    fixed_shas.add(merge_sha)
-            if branch_tip in fixed_shas:
-                pre_land_current = True
-            else:
-                parents = _git_read(root, "rev-list", "--parents", "-n", "1", branch_tip).split()[1:]
-                pre_land_current = len(parents) == 2 and (parents[0] == rev.reviewed_tip or parents[0] in fixed_shas)
+    pre_land_current = not isinstance(review_v, review_record.Stale)
 
     raw_post = record.get("post_merge")
     post_dict = cast(dict[str, Any], raw_post) if isinstance(raw_post, dict) else None
@@ -869,4 +866,5 @@ def lane_view(
         review_pre_land=rev.is_pre_land,
         review_tip=rev.reviewed_tip or None,
         review_pre_land_current=pre_land_current,
+        review_has_delta=rev.matching_delta(record) is not None,
     )

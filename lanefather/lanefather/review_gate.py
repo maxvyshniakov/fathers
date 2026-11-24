@@ -334,7 +334,7 @@ def gate_report(store: state.Store, cwd: str, common: str, sha: str,
             report["unfinished"].append({"lane": record["id"], "ticket": record["ticket"],
                                          "text": f"lane {record['id']} ({ticket_ref}): {words}"})
             continue
-        if isinstance(verdict, review_record.PartialPanel):
+        if isinstance(verdict, (review_record.PartialPanel, review_record.Stale)):
             report["unfinished"].append({"lane": record["id"], "ticket": record["ticket"],
                                          "text": f"lane {record['id']} ({ticket_ref}): {words}"})
         if eff_cls == "double":

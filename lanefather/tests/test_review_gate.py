@@ -368,28 +368,222 @@ class PreLandReviewGateTests(LaneCase):
         refused = self.lane("land", "a", ok=False)
         self.assertIn("no valid reviewed commit SHA", refused)
 
-    def test_forced_land_with_stale_pre_land_review_clears_stale_receipt_and_audits_promoted(self):
-        # P2 #8: Forced land with unreviewed commits clears stale pre-land receipt (no auto-done,
-        # fresh post-land review required) and logs unreviewed override when landing onto dev.
+    def test_forced_land_with_stale_pre_land_review_keeps_stale_receipt_and_audits_promoted(self):
+        # fathers#53 + #242: Forced land with unreviewed commits keeps the primary receipt as Stale
+        # (requiring a delta review of reviewed_tip..landed_tip, no auto-done) and logs unreviewed override
+        # when landing onto dev.
         dev_wt = self.repo / ".claude" / "worktrees" / "dev"
         self.git(self.repo, "worktree", "add", "-q", "-b", "dev", str(dev_wt))
         self.lane("start", "a", "--ticket", "404", "--base", "dev", "--claims", "lib/**", "--create")
         worktree = self.record("a")["worktree"]
-        self.commit(worktree, {"lib/api.txt": "foo\nbar\n"})
+        reviewed_sha = self.commit(worktree, {"lib/api.txt": "foo\nbar\n"})
         self.lane("check", "a")
         self.lane("review", "a")
-        self.commit(worktree, {"lib/api.txt": "foo\nbar\nextra\n"}, "unreviewed extra")
+        landed_sha = self.commit(worktree, {"lib/api.txt": "foo\nbar\nextra\n"}, "unreviewed extra")
         self.lane("check", "a")
 
         forced = self.lane("land", "a", "--into", str(dev_wt), "--force-reason", "hotfix override")
         self.assertIn("post-merge green", forced)
-        self.assertIn("review not started", forced)
-        # Must NOT auto-finish with the stale pre-land review.
+        self.assertIn("delta review not started", forced)
+        # Must NOT auto-finish with the stale pre-land review; primary receipt is preserved for delta review.
         self.assertEqual(self.record("a")["status"], "landed")
-        self.assertFalse((self.state / "a.review.json").exists())
+        self.assertTrue((self.state / "a.review.json").exists())
+        self.assertEqual(self.review("a")["tip"], reviewed_sha)
+        self.assertEqual(self.record("a")["landed"]["tip"], landed_sha)
         ledger = (self.state / "ledger.log").read_text()
         self.assertIn("override land a onto dev unreviewed: hotfix override", ledger)
         self.assertNotIn("land a onto dev:", ledger)
+
+
+class StaleReviewDeltaGateTests(LaneCase):
+    """fathers#53: stale review verdict, delta review of reviewed_tip..landed_tip, and review gate enforcement."""
+
+    def test_stale_review_refuses_promote_and_findings_until_delta_review_and_marks_complete(self):
+        self.git(self.repo, "branch", "dev")
+        worktree = self.created("a", "lib/**")
+        reviewed_sha = self.commit(worktree, {"lib/api.txt": "foo\nv1\n"}, "reviewed commit")
+        self.lane("check", "a")
+        self.lane("review", "a")
+
+        landed_sha = self.commit(worktree, {"lib/api.txt": "foo\nv1\nv2\n"}, "post-review commit")
+        self.lane("check", "a")
+        land_out = self.lane("land", "a", "--force-reason", "land with post-review commit")
+        self.assertIn("delta review not started", land_out)
+        self.assertEqual(self.record("a")["status"], "landed")
+        sha = self.tip()
+
+        # findings and promote must refuse with the stale reason (overridable with --force-reason).
+        findings_out = self.lane("findings", sha, ok=False)
+        self.assertIn("review stale", findings_out)
+        self.assertIn(reviewed_sha[:10], findings_out)
+        self.assertIn(landed_sha[:10], findings_out)
+        findings_json = json.loads(self.lane("findings", sha, "--json", ok=None))
+        self.assertTrue(findings_json["held"])
+        self.assertEqual([u["lane"] for u in findings_json["unfinished"]], ["a"])
+
+        promote_out = self.lane("promote", sha, "--no-push", "--wait", "0", ok=False)
+        self.assertIn("review stale", promote_out)
+        self.assertNotEqual(self.git(self.repo, "rev-parse", "dev"), sha)
+
+        # Run the delta review of reviewed_sha..landed_sha with one P2 finding.
+        self.review_text.write_text("### P2 — lib/api.txt:3 — Delta bug\nFix delta.\n")
+        delta_out = self.lane("review", "a")
+        self.assertIn("Delta review of a", delta_out)
+        self.assertIn(reviewed_sha[:10], delta_out)
+        self.assertIn(landed_sha[:10], delta_out)
+        receipt = self.review("a")
+        self.assertEqual(receipt["tip"], reviewed_sha)
+        self.assertEqual(receipt["delta"]["kind"], "delta")
+        self.assertEqual(receipt["delta"]["base"], reviewed_sha)
+        self.assertEqual(receipt["delta"]["tip"], landed_sha)
+        self.assertEqual(receipt["delta"]["status"], "finished")
+        self.assertEqual(len(receipt["delta"]["findings"]), 1)
+
+        # Unmarked delta finding still holds findings and promote.
+        after_delta = json.loads(self.lane("findings", sha, "--json", ok=None))
+        self.assertTrue(after_delta["held"])
+        self.assertEqual(after_delta["unfinished"], [])
+        self.assertEqual(len(after_delta["blocking"]), 1)
+
+        # Mark the delta finding and promote passes.
+        self.lane("review", "a", "--mark", "1", "rejected:acceptable")
+        self.assertFalse(json.loads(self.lane("findings", sha, "--json"))["held"])
+        self.lane("promote", sha, "--no-push", "--wait", "0")
+        self.assertEqual(self.git(self.repo, "rev-parse", "dev"), sha)
+
+    def test_clean_integration_merge_after_review_is_not_stale(self):
+        self.git(self.repo, "branch", "dev")
+        worktree = self.created("a", "lib/**")
+        self.commit(worktree, {"lib/api.txt": "foo\nv1\n"}, "reviewed commit")
+        self.lane("check", "a")
+        self.lane("review", "a")
+
+        # Advance integration branch and merge cleanly into lane a.
+        self.commit(self.integration, {"docs/unrelated.md": "unrelated\n"}, "integration advance")
+        self.git(worktree, "merge", "--no-ff", "-m", "Merge integrate/q into lane/a", "integrate/q")
+        self.lane("check", "a")
+        land_out = self.lane("land", "a")
+        self.assertIn("review kept", land_out)
+        self.assertNotIn("stale", land_out)
+        sha = self.tip()
+
+        self.assertFalse(json.loads(self.lane("findings", sha, "--json"))["held"])
+        self.lane("promote", sha, "--no-push", "--wait", "0")
+        self.assertEqual(self.git(self.repo, "rev-parse", "dev"), sha)
+
+    def test_merge_ours_integration_triggers_stale_and_refuses_land_and_gate(self):
+        # P1 #2: git merge -s ours integrate/q keeps reviewed_tree == target_tree while wiping out integration commits.
+        self.git(self.repo, "branch", "dev")
+        worktree = self.created("a", "lib/**")
+        self.commit(worktree, {"lib/api.txt": "foo\nv1\n"}, "reviewed commit")
+        self.lane("check", "a")
+        self.lane("review", "a")
+
+        self.commit(self.integration, {"docs/int.md": "important integration change\n"}, "int advance")
+        self.git(worktree, "merge", "-s", "ours", "--no-ff", "-m", "Evil ours merge", "integrate/q")
+        self.lane("check", "a")
+
+        refused = self.lane("land", "a", ok=False)
+        self.assertIn("land refused", refused)
+        self.assertIn("unreviewed merge commits", refused)
+
+        self.lane("land", "a", "--force-reason", "override ours merge")
+        sha = self.tip()
+        findings_out = self.lane("findings", sha, ok=False)
+        self.assertIn("review stale", findings_out)
+
+    def test_side_branch_no_ff_merge_forced_land_stays_stale_and_requires_delta(self):
+        # P1 #1: after landing, integration HEAD contains the side-branch merge, so _resolve_integration_heads
+        # must trust ONLY landed.previous and keep the lane Stale until delta review completes.
+        self.git(self.repo, "branch", "dev")
+        worktree = self.created("a", "lib/**", "calls/**")
+        reviewed_sha = self.commit(worktree, {"lib/api.txt": "foo\nv1\n"}, "reviewed commit")
+        self.lane("check", "a")
+        self.lane("review", "a")
+
+        self.git(worktree, "checkout", "-b", "side-branch", reviewed_sha)
+        self.commit(worktree, {"calls/side.txt": "foo\nv1\n"}, "side commit")
+        self.git(worktree, "checkout", "lane/a")
+        self.git(worktree, "merge", "--no-ff", "-m", "Merge side-branch", "side-branch")
+        self.lane("check", "a")
+
+        land_out = self.lane("land", "a", "--force-reason", "force side merge")
+        self.assertIn("delta review not started", land_out)
+        self.assertEqual(self.record("a")["status"], "landed")
+        sha = self.tip()
+        self.assertIn("review stale", self.lane("findings", sha, ok=False))
+
+        self.review_text.write_text("No findings.\n")
+        self.lane("review", "a")
+        self.assertFalse(json.loads(self.lane("findings", sha, "--json"))["held"])
+        self.lane("promote", sha, "--no-push", "--wait", "0")
+        self.assertEqual(self.git(self.repo, "rev-parse", "dev"), sha)
+
+    def test_post_land_followup_fix_mark_after_clean_integration_merge_passes_promote(self):
+        # P1 #3a: marking a finding fixed:<followup-lane> after a clean integration merge must NOT flip parent to Stale.
+        self.git(self.repo, "branch", "dev")
+        self.review_text.write_text("### P2 — calls/a.txt:1 — Needs fix\nFix it.\n")
+        wt = self.created("clean", "calls/**")
+        self.commit(wt, {"calls/a.txt": "foo\n"}, "c1")
+        self.lane("check", "clean")
+        self.lane("review", "clean")
+
+        self.commit(self.integration, {"docs/other.md": "other\n"}, "integration advance")
+        self.git(wt, "merge", "--no-ff", "-m", "Merge integrate/q", "integrate/q")
+        self.lane("check", "clean")
+        self.lane("land", "clean", "--force-reason", "land for follow-up fix")
+
+        wt_fix = self.created("clean-fix", "calls/**", "--fix-of", "clean")
+        self.commit(wt_fix, {"calls/a.txt": "foo\nfoo\n"}, "fix finding")
+        self.lane("check", "clean-fix")
+        self.lane("land", "clean-fix")
+        self.lane("review", "clean", "--mark", "1", "fixed:clean-fix")
+
+        sha = self.tip()
+        self.assertFalse(json.loads(self.lane("findings", sha, "--json"))["held"])
+        self.lane("promote", sha, "--no-push", "--wait", "0")
+        self.assertEqual(self.git(self.repo, "rev-parse", "dev"), sha)
+
+    def test_post_land_self_mark_and_delta_advancement_checks_and_unmarked_delta_preservation(self):
+        # P1 #3b + P1 #4: post-land --mark fixed:<landed_tip> and fixed:<lane_id> are refused, delta findings
+        # require strict advancement past delta.tip / landed.merge, and unmarked delta P1 is never dropped.
+        self.git(self.repo, "branch", "dev")
+        self.review_text.write_text("### P2 — lib/api.txt:1 — Primary bug\nPrimary.\n")
+        wt = self.created("a", "lib/**")
+        self.commit(wt, {"lib/api.txt": "foo\nv1\n"}, "v1")
+        self.lane("check", "a")
+        self.lane("review", "a")
+        landed_tip = self.commit(wt, {"lib/api.txt": "foo\nv1\nv2\n"}, "v2")
+        self.lane("check", "a")
+        self.lane("land", "a", "--force-reason", "land stale")
+
+        self.review_text.write_text("### P1 — lib/api.txt:3 — Delta P1\nCritical delta bug.\n")
+        self.lane("review", "a")
+
+        # Cannot mark primary finding fixed by landed_tip or lane id itself.
+        self.assertIn(
+            "is the landed lane itself",
+            self.lane("review", "a", "--mark", "1", f"fixed:{landed_tip}", ok=False),
+        )
+        self.assertIn(
+            "already landed",
+            self.lane("review", "a", "--mark", "1", "fixed:a", ok=False),
+        )
+        # Cannot mark delta finding (#2) fixed by lane id or landed_tip.
+        self.assertIn(
+            "already landed",
+            self.lane("review", "a", "--mark", "2", "fixed:a", ok=False),
+        )
+        self.assertIn(
+            "does not advance past",
+            self.lane("review", "a", "--mark", "2", f"fixed:{landed_tip}", ok=False),
+        )
+        # Even after marking primary finding #1 rejected, unmarked delta P1 #2 still blocks findings.
+        self.lane("review", "a", "--mark", "1", "rejected:handled")
+        sha = self.tip()
+        report = json.loads(self.lane("findings", sha, "--json", ok=None))
+        self.assertTrue(report["held"])
+        self.assertEqual([b["n"] for b in report["blocking"]], [2])
 
 
 if __name__ == "__main__":

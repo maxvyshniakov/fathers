@@ -66,6 +66,8 @@ def latest_logs(directory: Path, ids: set[str]) -> dict[str, dict[str, str]]:
                     continue
                 if rest in ids:
                     owner, phase = rest, name
+                elif name == "review" and rest.endswith("-delta") and rest.removesuffix("-delta") in ids:
+                    owner, phase = rest.removesuffix("-delta"), name
                 elif name == "check":
                     for suffix, kind in (("-alone", "rerun"), ("-base", "base")):
                         if rest.endswith(suffix) and rest.removesuffix(suffix) in ids:

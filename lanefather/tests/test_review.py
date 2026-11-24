@@ -1232,5 +1232,92 @@ class ReusedLaneIdReviewTests(LaneCase):
         self.assertEqual(list_json["lanes"][0]["receipt"], "no receipt")
 
 
+class StaleReviewAndDeltaTests(LaneCase):
+    """fathers#53: stale review display, delta review numbering/marking, and --fix-of stale parent refusal."""
+
+    def test_list_show_status_report_review_stale_and_delta_review_marks_complete(self):
+        self.review_text.write_text("### P2 — lib/api.txt:1 — Primary finding\nPrimary detail.\n")
+        wt = self.created("a", "lib/**")
+        reviewed_sha = self.commit(wt, {"lib/api.txt": "foo\nv1\n"}, "v1")
+        self.lane("check", "a")
+        self.lane("review", "a")
+
+        landed_sha = self.commit(wt, {"lib/api.txt": "foo\nv1\nv2\n"}, "v2")
+        self.lane("check", "a")
+        self.lane("land", "a", "--force-reason", "land with extra commit")
+
+        # list, show, and status report "review stale".
+        self.assertIn("review stale", self.lane("list"))
+        listed = next(lane for lane in json.loads(self.lane("list", "--json"))["lanes"] if lane["id"] == "a")
+        self.assertIn("review stale", listed["receipt"])
+
+        show_text = self.lane("show", "a")
+        self.assertIn("review stale", show_text)
+        shown = json.loads(self.lane("show", "a", "--json"))
+        self.assertEqual(shown["review"]["status"], "stale")
+        self.assertEqual(shown["review"]["reviewed_tip"], reviewed_sha)
+        self.assertEqual(shown["review"]["landed_tip"], landed_sha)
+
+        status_text = self.lane("status", cwd=self.tmp)
+        self.assertIn("review stale", status_text)
+        status_lane = next(
+            lane
+            for project in json.loads(self.lane("status", "--json", cwd=self.tmp))["projects"]
+            for lane in project.get("lanes", [])
+            if lane["id"] == "a"
+        )
+        self.assertEqual(status_lane["review"]["status"], "stale")
+
+        # Run delta review with one finding -> numbered #2 after primary finding #1.
+        self.review_text.write_text("### P2 — lib/api.txt:3 — Delta finding\nDelta detail.\n")
+        delta_out = self.lane("review", "a")
+        self.assertIn("Delta review of a", delta_out)
+        self.assertIn("2. P2", delta_out)
+        receipt = self.review("a")
+        self.assertEqual(receipt["delta"]["kind"], "delta")
+        self.assertEqual(receipt["delta"]["base"], reviewed_sha)
+        self.assertEqual(receipt["delta"]["tip"], landed_sha)
+        self.assertEqual([f["n"] for f in receipt["findings"]], [1])
+        self.assertEqual([f["n"] for f in receipt["delta"]["findings"]], [2])
+
+        # Mark both primary (#1) and delta (#2) findings -> auto-done finishes the lane.
+        self.lane("review", "a", "--mark", "1", "rejected:ok1", "--mark", "2", "rejected:ok2")
+        self.assertEqual(self.record("a")["status"], "done")
+
+    def test_fix_of_and_fix_lane_refuse_stale_parent_but_allow_clean_integration_merge(self):
+        # Real-repo CLI probe from fathers#53 comment: active lane reviewed with unmarked findings,
+        # extra lane-owned commit added and landed -> --fix-of and --fix-lane refuse as stale.
+        self.review_text.write_text(TWO_FINDINGS)
+        wt = self.created("stale", "lib/**")
+        self.commit(wt, {"lib/api.txt": "foo\nv1\n"}, "v1")
+        self.lane("check", "stale")
+        self.lane("review", "stale")
+        self.commit(wt, {"lib/api.txt": "foo\nv1\nextra\n"}, "v2 unreviewed")
+        self.lane("check", "stale")
+        self.lane("land", "stale", "--force-reason", "land stale")
+
+        refused_start = self.lane(
+            "start", "stale-fix", "--fix-of", "stale", "--ticket", "404", "--claims", "lib/api.txt", ok=False
+        )
+        self.assertIn("stale", refused_start)
+        refused_handover = self.lane("review", "stale", "--fix-lane", ok=False)
+        self.assertIn("stale", refused_handover)
+
+        # Clean integration merge after review preserves --fix-of eligibility.
+        wt_clean = self.created("clean", "calls/**")
+        self.commit(wt_clean, {"calls/a.txt": "foo\n"}, "c1")
+        self.lane("check", "clean")
+        self.lane("review", "clean")
+        self.commit(self.integration, {"docs/other.md": "other\n"}, "integration advance")
+        self.git(wt_clean, "merge", "--no-ff", "-m", "Merge integrate/q", "integrate/q")
+        self.lane("check", "clean")
+        self.lane("land", "clean", "--force-reason", "land with unmarked findings for fix lane")
+
+        ok_start = self.lane(
+            "start", "clean-fix", "--fix-of", "clean", "--ticket", "404", "--claims", "calls/a.txt"
+        )
+        self.assertIn("Lane clean-fix", ok_start)
+
+
 if __name__ == "__main__":
     unittest.main()

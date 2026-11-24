@@ -368,6 +368,69 @@ def scope_lines(raw: dict[str, Any], record: Record | None, label: str, prog: st
     return lines
 
 
+def _format_finding_lines(findings: Iterable[dict[str, Any]]) -> list[str]:
+    lines: list[str] = []
+    for f in findings:
+        where = f"{f['file']}:{f['line']}" if f.get("file") and f.get("line") else f.get("file") or "-"
+        raw_mark: Any = f.get("mark")
+        mark = cast(dict[str, Any], raw_mark) if isinstance(raw_mark, dict) else None
+        raw_merge = mark.get("merge") if mark is not None else None
+        merge_short = raw_merge[:10] if isinstance(raw_merge, str) else ""
+        marked = (
+            ""
+            if not mark
+            else f"  [fixed: {merge_short}]"
+            if mark.get("kind") == "fixed"
+            else f"  [rejected: {mark.get('reason')}]"
+        )
+        category = f" [{f['category']}]" if f.get("category") else ""
+        by = f" ({f['reviewer']})" if f.get("reviewer") else ""
+        severity = f["severity"] if isinstance(f.get("severity"), str) else "?"
+        lines.append(f"  {f.get('n', '?')}. {severity}{category} {where} {f.get('title', '')}{by}{marked}")
+        raw_detail = f.get("detail")
+        if isinstance(raw_detail, str) and raw_detail:
+            lines += [f"     {line}" for line in raw_detail.splitlines()[:6]]
+    return lines
+
+
+def _delta_review_lines(
+    label: str,
+    delta_raw: dict[str, Any],
+    *,
+    prog: str,
+) -> list[str]:
+    raw_base = delta_raw.get("base")
+    raw_tip = delta_raw.get("tip")
+    base = raw_base[:10] if isinstance(raw_base, str) else ""
+    tip = raw_tip[:10] if isinstance(raw_tip, str) else ""
+    delta_verdict = review_record.derive_verdict(delta_raw)
+    if isinstance(delta_verdict, review_record.Running):
+        return [
+            f"Delta review of {label} ({base}...{tip}): running since {delta_verdict.started} "
+            f"(pid {delta_verdict.pid}, log {delta_verdict.log})"
+        ]
+    if isinstance(delta_verdict, review_record.Died):
+        return [
+            f"Delta review of {label} ({base}...{tip}): died "
+            f"(pid {delta_verdict.pid}, log {delta_verdict.log}): rerun {prog} review {label}"
+        ]
+    if isinstance(delta_verdict, review_record.Failed):
+        return [f"Delta review of {label} ({base}...{tip}): failed: {delta_verdict.error}"]
+    delta_findings = review_record.extract_findings(delta_raw)
+    raw_seconds = delta_raw.get("seconds")
+    seconds_val = (
+        float(raw_seconds)
+        if isinstance(raw_seconds, (int, float)) and not isinstance(raw_seconds, bool)
+        else 0.0
+    )
+    head = (
+        f"Delta review of {label} ({base}...{tip}) by "
+        f"{delta_raw.get('model')} {delta_raw.get('effort')}"
+        + f", {seconds_val:.0f} s: {len(delta_findings)} findings  ({delta_raw.get('output')})"
+    )
+    return [head, *_format_finding_lines(delta_findings)]
+
+
 def review_lines(
     rev: review_record.ReviewRecord,
     *,
@@ -397,8 +460,8 @@ def review_lines(
     if not rev.has_finished_receipt:
         error = verdict.error if isinstance(verdict, review_record.Failed) else None
         return [head, *scoped, f"review failed: {error}"]
-    findings = rev.findings
-    lines = [head + f": {len(findings)} findings  ({raw.get('output')})", *scoped]
+    primary_findings = review_record.extract_findings(raw)
+    lines = [head + f": {len(primary_findings)} findings  ({raw.get('output')})", *scoped]
     raw_panel: Any = raw.get("panel")
     panel = (
         [cast(dict[str, Any], e) for e in cast(list[Any], raw_panel) if isinstance(e, dict)]
@@ -420,21 +483,12 @@ def review_lines(
                if entry.get("status") == "finished" and (entry.get("reason") or entry.get("fallback")) else "")
             + (f"; note: {entry['note']}" if entry.get("note") else "")
         )
-    for f in findings:
-        where = f"{f['file']}:{f['line']}" if f.get("file") and f.get("line") else f.get("file") or "-"
-        raw_mark: Any = f.get("mark")
-        mark = cast(dict[str, Any], raw_mark) if isinstance(raw_mark, dict) else None
-        marked = (
-            ""
-            if not mark
-            else f"  [fixed: {str(mark['merge'])[:10]}]"
-            if mark.get("kind") == "fixed"
-            else f"  [rejected: {mark.get('reason')}]"
-        )
-        category = f" [{f['category']}]" if f.get("category") else ""
-        by = f" ({f['reviewer']})" if f.get("reviewer") else ""
-        lines.append(f"  {f['n']}. {f['severity']}{category} {where} {f['title']}{by}{marked}")
-        lines += [f"     {line}" for line in f.get("detail", "").splitlines()[:6]]
+    lines += _format_finding_lines(primary_findings)
+    delta_raw = rev.matching_delta(record)
+    if delta_raw is not None:
+        lines += _delta_review_lines(label, delta_raw, prog=cmd_prog)
+    if isinstance(verdict, review_record.Stale):
+        lines.append(f"Stale review: {rev.summary(prog=cmd_prog)[1]}")
     if raw.get("issue"):
         lines.append(f"Ticket: {raw['issue']}")
     elif raw.get("issue_error"):
@@ -526,8 +580,203 @@ def _lane_review_fields(record: Record, **extra: Any) -> dict[str, Any]:
     }
 
 
+def _can_delta_review(record: Record, reviewed_tip: str, landed_tip: str) -> bool:
+    """Whether `reviewed_tip..landed_tip` is a valid forward git range for a delta review."""
+    if not (review_record.OID_RE.fullmatch(reviewed_tip) and review_record.OID_RE.fullmatch(landed_tip)):
+        return False
+    common = record.get("common_dir")
+    if not isinstance(common, str) or not common or not os.path.isdir(common):
+        return False
+    main = main_checkout(common)
+    return (
+        git_ok(main, "cat-file", "-e", reviewed_tip)
+        and git_ok(main, "cat-file", "-e", landed_tip)
+        and git_ok(main, "merge-base", "--is-ancestor", reviewed_tip, landed_tip)
+    )
+
+
+def spawn_delta_review(
+    store: state.Store,
+    record: Record,
+    reviewed_tip: str,
+    landed_tip: str,
+) -> review_record.ReviewRecord:
+    """Start `lanefather review <id>` detached for a delta review of `reviewed_tip..landed_tip`."""
+    lane_id = str(record["id"])
+    main = main_checkout(record["common_dir"])
+    tree = git(main, "rev-parse", landed_tip + "^{tree}")
+    log = store.log_path(f"review-{lane_id}-delta")
+    rev = review_record.ReviewRecord.spawn_and_begin_delta(
+        store,
+        lane_id,
+        {},
+        base=reviewed_tip,
+        tip=landed_tip,
+        tree=tree,
+        cmd=[*self_argv(store.project), "review", lane_id],
+        cwd=main,
+        env=self_env(LANEFATHER_REVIEW_LOG=str(log)),
+        log=log,
+        effort=reviewer.Reviewer(store.project).effort,
+        record=record,
+    )
+    delta_raw = rev.delta_raw or {}
+    journal.ledger(
+        f"review-start {lane_id} delta {reviewed_tip[:10]}..{landed_tip[:10]} "
+        f"pid={delta_raw.get('pid')} log={log}",
+        kind="review.started",
+        lane=record,
+        details={
+            "kind": "delta",
+            "base": reviewed_tip,
+            "tip": landed_tip,
+            "pid": delta_raw.get("pid"),
+            "log": str(log),
+        },
+        store=store,
+    )
+    return rev
+
+
+def perform_delta_review(
+    store: state.Store,
+    record: Record,
+    reviewed_tip: str,
+    landed_tip: str,
+    *,
+    reviewers: tuple[str, ...] = (),
+    force: bool = False,
+) -> review_record.ReviewRecord:
+    """Review `reviewed_tip..landed_tip` as a delta review stored under `delta` in `<id>.review.json`."""
+    lane_id = str(record["id"])
+    main = main_checkout(record["common_dir"])
+    tree = git(main, "rev-parse", landed_tip + "^{tree}")
+    resolved = scope.resolve(record, reviewed_tip, store.project)
+    subject = (
+        f"Delta review of lane {lane_id} ({reviewed_tip[:10]}..{landed_tip[:10]}): "
+        "review only the post-review commits added after the earlier review.\n\n"
+        + scope.prompt_text(resolved)
+    )
+    runner = reviewer.Reviewer(store.project)
+    pid = os.getpid()
+    review_record.ReviewRecord.begin_delta(
+        store,
+        lane_id,
+        {
+            "scope": [scope.receipt_entry(entry) for entry in resolved],
+            "scope_complete": scope.complete(resolved),
+        },
+        base=reviewed_tip,
+        tip=landed_tip,
+        tree=tree,
+        pid=pid,
+        log=store.project.env("REVIEW_LOG"),
+        effort=runner.effort,
+        force=force,
+        record=record,
+    )
+    reviews = store.reviews_dir
+    reviews.mkdir(parents=True, exist_ok=True)
+    output, log = reviews / f"{lane_id}.delta.md", reviews / f"{lane_id}.delta.log"
+    log.write_text("")
+    clock = time.monotonic()
+    evidence: dict[str, Any] = {}
+    error_text: str | None = None
+    try:
+        with terminable(), worktrees.review_checkout(store, main, f"{lane_id}-delta", landed_tip) as checkout:
+            standards = coding_standards(main, landed_tip, store.project)
+            answer = runner.run(
+                f"{lane_id}-delta",
+                checkout,
+                reviewer.Request(
+                    standards,
+                    subject,
+                    reviewed_tip,
+                    landed_tip,
+                    implementer_family(store, lane_id),
+                    reviewers,
+                ),
+                output,
+                log,
+            )
+            evidence.update(answer.evidence)
+            if answer.error is not None:
+                raise LaneError(answer.error)
+    except review_record.StaleReviewRunError:
+        raise
+    except Exception as error:
+        error_text = str(error)
+
+    seconds = round(time.monotonic() - clock, 1)
+    finished_at = journal.now()
+    if error_text is None:
+        outcome_status = "finished"
+        completed = review_record.ReviewRecord.finish_delta(
+            store,
+            lane_id,
+            {**evidence, "output": str(output), "seconds": seconds, "finished": finished_at},
+            owner_pid=pid,
+            finished=finished_at,
+            record=record,
+        )
+    else:
+        outcome_status = "failed"
+        completed = review_record.ReviewRecord.fail_delta(
+            store,
+            lane_id,
+            error_text,
+            extra={**evidence, "output": str(output), "seconds": seconds, "finished": finished_at},
+            owner_pid=pid,
+            finished=finished_at,
+            record=record,
+        )
+    delta_raw = completed.delta_raw or {}
+    delta_findings = review_record.extract_findings(delta_raw)
+    counts = " ".join(
+        f"{s.lower()}={sum(1 for f in delta_findings if f.get('severity') == s)}" for s in SEVERITIES
+    )
+    raw_delta_seconds = delta_raw.get("seconds")
+    delta_seconds = (
+        float(raw_delta_seconds)
+        if isinstance(raw_delta_seconds, (int, float)) and not isinstance(raw_delta_seconds, bool)
+        else seconds
+    )
+    journal.ledger(
+        f"review {lane_id} delta {outcome_status} reviewer={delta_raw.get('reviewer', '-')} "
+        f"model={delta_raw.get('model', '-')} effort={delta_raw.get('effort', '-')} "
+        f"left={'-' if delta_raw.get('codex_left') is None else delta_raw['codex_left']} "
+        f"seconds={delta_seconds:.0f} findings={len(delta_findings)} {counts}"
+        + (f" fallback: {delta_raw['fallback']}" if delta_raw.get("fallback") else ""),
+        kind="review.finished",
+        level="info" if outcome_status == "finished" else "warn",
+        lane=record,
+        details={
+            "kind": "delta",
+            "base": reviewed_tip,
+            "tip": landed_tip,
+            "status": outcome_status,
+            "reviewer": delta_raw.get("reviewer"),
+            "provider": delta_raw.get("provider"),
+            "cli": delta_raw.get("cli"),
+            "model": delta_raw.get("model"),
+            "effort": delta_raw.get("effort"),
+            "options": delta_raw.get("options"),
+            "seconds": delta_seconds,
+            "findings": len(delta_findings),
+            "severities": {
+                s.lower(): sum(1 for f in delta_findings if f.get("severity") == s) for s in SEVERITIES
+            },
+            "fallback": delta_raw.get("fallback"),
+            "error": delta_raw.get("error"),
+        },
+        store=store,
+    )
+    return completed
+
+
 def start_lane_review(store: state.Store, record: Record, *, force_fresh: bool = False) -> str:
-    """At land: an exempt receipt, or the review in the background. The line land prints."""
+    """At land: an exempt receipt, a delta review when the prior review is stale, or the review in the background.
+    The line land prints."""
     lane_id = record["id"]
     rev = review_record.ReviewRecord.load(store, lane_id, record=record)
     verdict = rev.verdict
@@ -537,7 +786,29 @@ def start_lane_review(store: state.Store, record: Record, *, force_fresh: bool =
         and rev.has_finished_receipt
         and review_class.double_review_problem(rev.raw, label=lane_id, prog=store.prog) is not None
     )
-    if (force_fresh or insufficient_double) and rev.exists and not isinstance(verdict, review_record.Exempt):
+    if not insufficient_double and isinstance(verdict, review_record.Stale):
+        if _can_delta_review(record, verdict.reviewed_tip, verdict.landed_tip):
+            if isinstance(verdict.delta, review_record.Running):
+                return f"delta review kept: {rev.summary()[1]}"
+            if review_start_manual(store.project):
+                return (
+                    f"delta review not started ({review_start_source(store.project)}): "
+                    f"run {store.prog} review {lane_id}"
+                )
+            started = spawn_delta_review(store, record, verdict.reviewed_tip, verdict.landed_tip)
+            delta_raw = started.delta_raw or {}
+            return (
+                f"delta review started in the background "
+                f"(pid {delta_raw.get('pid')}, log {delta_raw.get('log')})"
+            )
+        if not force_fresh:
+            return (
+                f"review stale (cannot delta): run {store.prog} review {lane_id} --force-reason <why>"
+            )
+    if (
+        (insufficient_double and rev.exists and not isinstance(verdict, review_record.Exempt))
+        or (force_fresh and rev.exists and not isinstance(verdict, (review_record.Exempt, review_record.Unmarked)))
+    ):
         review_record.ReviewRecord.clear_stale(store, lane_id, lane_created=state.lane_created_of(record))
         rev = review_record.ReviewRecord.load(store, lane_id, record=record)
         verdict = rev.verdict
@@ -996,9 +1267,46 @@ def review_lane(args: Any, store: state.Store) -> int:
     record = store.load(args.id)
     existing = review_record.ReviewRecord.load(store, args.id, record=record)
     verdict = existing.verdict
+    if isinstance(verdict, review_record.Stale):
+        if lifecycle.landed(record):
+            delta_elsewhere = (
+                isinstance(verdict.delta, review_record.Running) and verdict.delta.pid != os.getpid()
+            )
+            if delta_elsewhere and not args.force_reason:
+                print("\n".join(review_lines(existing, record=record, prog=store.prog)))
+                return 0
+            if not args.force_reason:
+                if not _can_delta_review(record, verdict.reviewed_tip, verdict.landed_tip):
+                    raise LaneError(
+                        f"review refused: lane {args.id}'s reviewed commit {verdict.reviewed_tip[:10]} is not an "
+                        f"ancestor of landed tip {verdict.landed_tip[:10]}; run {store.prog} review {args.id} "
+                        "--force-reason <why> to review the whole lane again"
+                    )
+                completed = perform_delta_review(
+                    store,
+                    record,
+                    verdict.reviewed_tip,
+                    verdict.landed_tip,
+                    reviewers=asked_reviewers(args, store.project),
+                )
+                print("\n".join(review_lines(completed, record=record, prog=store.prog)))
+                if isinstance(completed.verdict, review_record.PartialPanel):
+                    print(f"Lane {args.id}: {completed.summary()[1]}")
+                    return 1
+                if not isinstance(completed.verdict, (review_record.Unmarked, review_record.Complete)):
+                    return 1
+                if completed.allows_promote:
+                    done.settle_lane(store, args.id, mode=postmerge.CompletionMode.AUTO_AFTER_REVIEW)
+                return 0
+        elif not args.force_reason:
+            print("\n".join(review_lines(existing, record=record, prog=store.prog)))
+            print(
+                f"Lane {args.id}'s pre-land review is stale (--force-reason reviews again, logged)"
+            )
+            return 0
     # The background run land started finds its own pid in the receipt.
     elsewhere = isinstance(verdict, review_record.Running) and verdict.pid != os.getpid()
-    already_finished = isinstance(verdict, (review_record.Unmarked, review_record.Complete))
+    already_finished = isinstance(verdict, (review_record.Unmarked, review_record.Complete, review_record.Stale))
     incomplete_panel = isinstance(verdict, review_record.PartialPanel)
     has_existing = already_finished or incomplete_panel or isinstance(verdict, review_record.Exempt) or elsewhere
     if has_existing and not args.force_reason:
@@ -1618,51 +1926,8 @@ def review(args: Any, store: state.Store) -> int:
 def _is_clean_integration_merge(
     main: str, commit: str, int_head: str, reviewed_tip: str
 ) -> tuple[bool, str]:
-    """Whether `commit` is a two-parent merge of an integration commit (`int_head`) into a descendant of
-    `reviewed_tip` whose tree equals the clean merge of its parents (leaving the lane's own diff unchanged).
-    Returns `(is_clean, first_parent)`."""
-    if not int_head:
-        return False, ""
-    parents_proc = subprocess.run(
-        ["git", "rev-list", "--parents", "-n", "1", commit],
-        cwd=main,
-        capture_output=True,
-        text=True,
-    )
-    if parents_proc.returncode != 0:
-        return False, ""
-    parts = parents_proc.stdout.strip().split()
-    if len(parts) != 3:
-        return False, ""
-    _, p1, p2 = parts
-    if not git_ok(main, "merge-base", "--is-ancestor", p2, int_head):
-        return False, ""
-    if not git_ok(main, "merge-base", "--is-ancestor", reviewed_tip, p1):
-        return False, ""
-    commit_tree = git(main, "rev-parse", "--verify", "--quiet", f"{commit}^{{tree}}", check=False)
-    if not commit_tree:
-        return False, ""
-    merged = subprocess.run(
-        ["git", "merge-tree", "--write-tree", p1, p2],
-        cwd=main,
-        capture_output=True,
-        text=True,
-    )
-    if merged.returncode == 0:
-        first_line = merged.stdout.splitlines()[0].strip() if merged.stdout.splitlines() else ""
-        return (first_line == commit_tree, p1)
-    if merged.returncode == 1:
-        # Merge conflict was manually resolved: treat as unreviewed.
-        return False, ""
-    if merged.returncode != 129:
-        return False, ""
-    # Fallback only when `git merge-tree --write-tree` is unsupported (git < 2.38 usage error 129).
-    mb = git(main, "merge-base", p1, p2, check=False)
-    if not mb:
-        return False, ""
-    lane_before = git(main, "diff", "--no-ext-diff", mb, p1, check=False)
-    lane_after = git(main, "diff", "--no-ext-diff", p2, commit, check=False)
-    return (lane_before == lane_after, p1)
+    """Delegate to `review_record.is_clean_integration_merge`."""
+    return review_record.is_clean_integration_merge(main, commit, [int_head] if int_head else (), reviewed_tip)
 
 
 def pre_land_review_problem(
@@ -1685,7 +1950,7 @@ def pre_land_review_problem(
         return f"lane {lane_id}'s pre-land review is still running ({rev.summary(prog=prog)[1]})"
     if isinstance(verdict, review_record.PartialPanel):
         return f"lane {lane_id}'s pre-land review is incomplete ({rev.summary(prog=prog)[1]})"
-    if isinstance(verdict, review_record.Unmarked):
+    if isinstance(verdict, (review_record.Unmarked, review_record.Stale)):
         blocks = store.project.review_blocks
         blocking = [f for f in verdict.unmarked if review_class.blocks_gate(f.get("severity", "P2"), blocks)]
         if blocking:
@@ -1739,7 +2004,15 @@ def pre_land_review_problem(
             f"{reviewed_tip[:10]} despite findings marked fixed; commit the fix or rerun "
             f"{prog} review {lane_id} --force-reason <why>"
         )
-    if not fixed_shas and (tip == reviewed_tip or (reviewed_tree and tree == reviewed_tree)):
+    if not fixed_shas and (
+        tip == reviewed_tip
+        or (
+            review_record.OID_RE.fullmatch(reviewed_tree)
+            and review_record.OID_RE.fullmatch(tree)
+            and tree == reviewed_tree
+            and not git(main, "rev-list", "--merges", "-n", "1", f"{reviewed_tip}..{tip}", check=False)
+        )
+    ):
         return None
     int_head = git(integration, "rev-parse", "--verify", "--quiet", "HEAD", check=False)
     visited: set[str] = set()
