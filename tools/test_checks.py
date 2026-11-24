@@ -34,12 +34,13 @@ class SelectionTests(unittest.TestCase):
         return set(checks.select(list(paths)).checks)
 
     def test_a_package_change_selects_that_package_and_the_cheap_root_checks(self) -> None:
-        self.assertEqual(package("spawnfather") | ALWAYS, self.selected("spawnfather/spawnfather/reap.py"))
+        self.assertEqual(package("spawnfather") | {"common tests"} | ALWAYS,
+                         self.selected("spawnfather/spawnfather/reap.py"))
         self.assertEqual(package("lanefather") | package("godfather") | ALWAYS,
                          self.selected("lanefather/README.md", "godfather/src/godfather/views/lanes.py"))
 
     def test_slotfather_sources_also_select_godfathers_contract_tests(self) -> None:
-        self.assertEqual(package("slotfather") | {"godfather tests"} | ALWAYS,
+        self.assertEqual(package("slotfather") | {"godfather tests", "common tests"} | ALWAYS,
                          self.selected("slotfather/src/slotfather/state.py"))
         self.assertEqual(package("slotfather") | ALWAYS, self.selected("slotfather/tests/test_usage.py"))
 

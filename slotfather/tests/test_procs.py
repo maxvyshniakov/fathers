@@ -502,9 +502,20 @@ class LineageTests(unittest.TestCase):
         self.assertTrue(sf_lineage.session_command("python3 worker.py", tty="ttys002"))
         self.assertFalse(sf_lineage.session_command("python3 worker.py", tty=""))
         for cmd in ("claude --resume", "/usr/local/bin/codex", "tmux new -s dev",
-                    "/Users/u/.local/share/claude/versions/2.1.293 --print", "/opt/actions/Runner.Worker"):
+                    "/Users/u/.local/share/claude/versions/2.1.293 --print", "/opt/actions/Runner.Worker",
+                    "/opt/homebrew/lib/node_modules/@openai/codex-darwin/vendor/aarch64-apple-darwin/codex --flag",
+                    "/Users/m/Library/Application Support/Claude/claude-code/2.1/x/claude.app/Contents/MacOS/claude",
+                    "/usr/bin/python3 /tmp/bin/claude 600"):
             with self.subTest(cmd=cmd):
                 self.assertTrue(sf_lineage.session_command(cmd))
+        for cmd in ("/Applications/Claude.app/Contents/MacOS/Claude", "/Applications/Codex.app/Contents/MacOS/Codex",
+                    "node /w/claude/index.js", "node codex-helper",
+                    "pnpm --dir /Users/m/work/codex dev", "rg TODO /Users/m/src/claude",
+                    "git -C /Users/m/claude status", "tail -f /tmp/logs/claude",
+                    "/Applications/Visual Studio Code.app/Contents/MacOS/Electron /Users/m/src/codex",
+                    "python3 worker.py /Users/m/src/claude"):
+            with self.subTest(not_session=cmd):
+                self.assertFalse(sf_lineage.session_command(cmd))
 
 
 if __name__ == "__main__":

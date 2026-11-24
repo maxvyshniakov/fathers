@@ -128,6 +128,34 @@ class PolicyTests(unittest.TestCase):
                  for number, line in enumerate(path.read_text().splitlines(), 1) if pattern.search(line)]
         self.assertEqual([], found)
 
+    def test_agent_detection_ignores_arbitrary_arguments(self):
+        for cmd in (
+            "pnpm --dir /Users/m/work/codex dev",
+            "rg TODO /Users/m/src/claude",
+            "git -C /Users/m/claude status",
+            "tail -f /tmp/logs/claude",
+            "/Applications/Visual Studio Code.app/Contents/MacOS/Electron /Users/m/src/codex",
+            "python3 worker.py /Users/m/src/claude",
+        ):
+            with self.subTest(cmd=cmd):
+                self.assertFalse(safety.claude(cmd))
+                self.assertFalse(safety.codex(cmd))
+                self.assertFalse(safety.agent(proc(100, cmd=cmd)))
+
+    def test_procs_identities_and_table_read_fail_closed(self):
+        """`procs.identities` raises on exit 1 with stderr, and `Table.read` rejects a table without the caller."""
+        from unittest import mock
+
+        bad_identities = subprocess.CompletedProcess(["ps"], 1, "", "ps: illegal option")
+        with mock.patch("subprocess.run", return_value=bad_identities), self.assertRaises(procs.ProcError):
+            procs.identities([os.getpid()])
+
+        no_caller = subprocess.CompletedProcess(
+            ["ps"], 0, "    1     0     1     0   0.0 ??       Thu Nov 12 10:00:00 2026 /sbin/launchd\n", "",
+        )
+        with mock.patch("subprocess.run", return_value=no_caller), self.assertRaises(procs.ProcError):
+            procs.Table.read()
+
 
 if __name__ == "__main__":
     unittest.main()

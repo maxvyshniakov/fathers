@@ -123,7 +123,7 @@ def cpu_table() -> tuple[dict[int, tuple[float, int, str]], dict[int, list[int]]
     for a ps that fails or times out and for a table without this process (fathers#121)."""
     own: dict[int, tuple[float, int, str]] = {}
     children: dict[int, list[int]] = {}
-    for line in table(["-axo", CPU]):  # it lists the caller (table(): fathers#121)
+    for line in table(["-axo", CPU], env=_platform.c_locale()):  # it lists the caller (table(): fathers#121)
         parts = line.split(None, 4)
         if len(parts) == 5 and parts[1].isdigit():
             with contextlib.suppress(ValueError):

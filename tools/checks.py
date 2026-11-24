@@ -92,6 +92,10 @@ def owners(path: str) -> set[str] | None:
         chosen = {f"{first} lint", f"{first} tests"}
         if first == "slotfather" and (rest == "slotfather" or rest.startswith("src/")):
             chosen.add("godfather tests")  # its contract tests run ../slotfather
+        if (first == "slotfather" and rest.startswith("src/")) or (
+            first == "spawnfather" and rest.startswith("spawnfather/")
+        ):
+            chosen.add("common tests")  # common/tests/test_agents.py checks Slotfather/Spawnfather agreement
         if rest in ("CHANGELOG.md", "pyproject.toml", f"src/{first}/version.py", f"{first}/__init__.py"):
             chosen.add("common tests")  # common/tests/test_changelog.py checks layout & version lockstep
         return chosen

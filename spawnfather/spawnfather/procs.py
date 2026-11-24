@@ -16,7 +16,6 @@ from fathers_common import proc as _proc
 
 from .defaults import PS_TIMEOUT
 
-C_LOCALE = {"LC_ALL": "C", "LANG": "C", "TZ": "UTC"}
 LSTART = _proc.LSTART
 FIELDS = "pid=,ppid=,pgid=,uid=,pcpu=,tty=,lstart=,command="
 
@@ -49,7 +48,7 @@ class Table(_proc.Table):
 
     @classmethod
     def read(cls) -> "Table":
-        return cls(_proc.read(FIELDS, clock="utc", timeout=PS_TIMEOUT).procs)
+        return cls(_proc.read(FIELDS, clock="utc", timeout=PS_TIMEOUT, caller=True).procs)
 
 
 def read_or_none() -> Optional[Table]:
@@ -64,7 +63,7 @@ def identities(pids: List[int], command: bool = False) -> Dict[int, Any]:
     """pid -> start time (with `command`, pid -> (start time, command)) for those of `pids` that still run and are
     not zombies. ProcError when ps cannot be asked: an unreadable answer is never "they are gone"."""
     spec = "pid=,stat=,lstart=" + (",command=" if command else "")
-    found = _proc.identities(pids, spec, clock="utc", timeout=PS_TIMEOUT)
+    found = _proc.identities(pids, spec, clock="utc", timeout=PS_TIMEOUT, strict=True)
     if not command:
         return {pid: here.start for pid, here in found.items()}
     return {pid: (here.start, here.cmd) for pid, here in found.items()}

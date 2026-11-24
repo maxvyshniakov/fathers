@@ -13,6 +13,8 @@ standalone; in a checkout, symlinks expose the same `fathers_common/` directory 
     ([godfather/docs/events.md](../godfather/docs/events.md)).
   - `changelog.py`: shared `changelog --json` parser and contract builder
     ([godfather/docs/contracts/changelog.md](../godfather/docs/contracts/changelog.md)).
+  - `agents.py`: the one set of Claude Code and Codex agent-session process patterns (`CLAUDE`, `CODEX`, `PATTERNS`,
+    `is_claude`, `is_codex`, `agent_kind`, `is_agent`) shared across Slotfather and Spawnfather (`fathers#146`).
   - `proc/`: the one process-table reader (`fathers#171`), read-only and fail-closed: `ps` rows by column
     (`parse`, `read`, `identities`, `table_rows`), the `Proc`/`Table` model (trees, groups, ages), lstart text in
     UTC or local time and the epoch it names (`parse_lstart`, `epochs`, `render`; no `time.mktime`), the
