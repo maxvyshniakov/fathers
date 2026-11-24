@@ -33,7 +33,7 @@ from . import (
     tickets,
     worktrees,
 )
-from .errors import LaneError
+from .errors import LaneError, LaneUsageError
 from .gitops import ahead_lines, common_dir, current_branch, git, git_ok, main_checkout, worktree_list
 from .state import Record
 
@@ -224,82 +224,188 @@ def register_admitted(store: state.Store, record: Record, decision: admission.De
     lifetimes.register_quietly(store, store.load(lane_id), "start", skip=("worktree",) if parent is not None else ())
 
 
+def check_activation_options(prog: str, lane_id: str, record: Record, args: Any) -> None:
+    """Refuse registration-only options on `start <id> --create` when they differ from the planned lane's record."""
+    raw_issues = cast(list[tuple[str, bool]], getattr(args, "issues", None) or [])
+    raw_decisions = option_list(getattr(args, "decision", None))
+    raw_specs = option_list(getattr(args, "spec", None))
+    stored_scope = scope.of(record)
+    if raw_issues:
+        given_scope = scope.from_options(raw_issues, raw_decisions, raw_specs)
+        if given_scope != stored_scope:
+            raise LaneError(
+                f"start {lane_id} --create: scope ({scope.describe(given_scope)}) differs from planned lane's scope "
+                f"({scope.describe(stored_scope)}); omit scope options or update with {prog} scope {lane_id}"
+            )
+    elif raw_decisions or raw_specs:
+        extras: list[scope.Item] = [*(scope.parse_decision(u) for u in raw_decisions),
+                                    *(scope.parse_spec(p) for p in raw_specs)]
+        if any(item not in stored_scope for item in extras):
+            which = (
+                "--decision" if raw_decisions and not raw_specs
+                else "--spec" if raw_specs and not raw_decisions
+                else "--decision/--spec"
+            )
+            raise LaneError(
+                f"start {lane_id} --create: {which} differs from planned lane's scope; "
+                f"update it with {prog} scope {lane_id}"
+            )
+    raw_claims = option_list(getattr(args, "claims", None))
+    if raw_claims:
+        given_claims = [c for claim in raw_claims for c in claim.split()]
+        raw_stored_claims: Any = record.get("claims")
+        stored_claims = (
+            [c for c in cast(list[Any], raw_stored_claims) if isinstance(c, str)]
+            if isinstance(raw_stored_claims, list)
+            else []
+        )
+        if given_claims != stored_claims:
+            raise LaneError(
+                f"start {lane_id} --create: --claims ({' '.join(given_claims)}) differs from planned lane's claims "
+                f"({' '.join(stored_claims)}); omit --claims to keep the planned lane's claims"
+            )
+    given_after = list(dict.fromkeys(option_list(getattr(args, "after", None))))
+    if given_after:
+        raw_stored_after: Any = record.get("after")
+        stored_after = (
+            [name for name in cast(list[Any], raw_stored_after) if isinstance(name, str)]
+            if isinstance(raw_stored_after, list)
+            else []
+        )
+        if given_after != stored_after:
+            raise LaneError(
+                f"start {lane_id} --create: --after ({', '.join(given_after)}) differs from planned lane's --after "
+                f"({', '.join(stored_after) or 'none'}); omit --after to keep the planned lane's dependencies"
+            )
+    given_fix = option_list(getattr(args, "fix_of", None))
+    if given_fix:
+        parents = list(dict.fromkeys(name for value in given_fix for name in value.replace(",", " ").split()))
+        stored_parents = state.fix_parents(record)
+        if parents != stored_parents:
+            raise LaneError(
+                f"start {lane_id} --create: --fix-of ({', '.join(parents)}) differs from planned lane's fix parents "
+                f"({', '.join(stored_parents) or 'none'})"
+            )
+    given_scratch = option_list(getattr(args, "scratch", None))
+    if given_scratch:
+        raw_stored_scratch: Any = record.get("scratch")
+        stored_scratch = (
+            [os.path.realpath(s) for s in cast(list[Any], raw_stored_scratch)[1:] if isinstance(s, str)]
+            if isinstance(raw_stored_scratch, list)
+            else []
+        )
+        if [os.path.realpath(s) for s in given_scratch] != stored_scratch:
+            raise LaneError(
+                f"start {lane_id} --create: --scratch differs from planned lane's scratch directories; "
+                "omit --scratch to keep them"
+            )
+
+
 def activate_planned(store: state.Store, lane_id: str, *, base: str | None = None,
-                     branch: str | None = None, agent: str | None = None) -> Record:
+                     branch: str | None = None, force_reason: str | None = None,
+                     agent: str | None = None, args: Any = None) -> Record:
     """Create the worktree for an existing planned lane whose `--after` lanes have landed, transition it to
     `active` while keeping its existing claims and scope, and print its brief header (fathers#241)."""
     prog = store.prog
-    with store.locked("state"):
-        record = store.load(lane_id)
-        if not lifecycle.planned(record):
-            raise existing_lane_error(prog, lane_id, record)
-        theirs = record.get("common_dir")
-        here = admission.running_common(store.project)
-        if isinstance(theirs, str) and theirs and here and os.path.realpath(theirs) != os.path.realpath(here):
-            checkout = main_checkout(theirs)
-            raise LaneError(
-                f"lane {lane_id} belongs to {state.project_name(theirs)}, not {state.project_name(here)}; "
-                f"run it there ({checkout}): cd {shlex.quote(checkout)} && {prog} start {lane_id} --create"
+    repaired: str | None = None
+    updated: Record | None = None
+    main = ""
+    while True:
+        with store.locked("state"):
+            record = store.load(lane_id)
+            if not lifecycle.planned(record):
+                raise existing_lane_error(prog, lane_id, record)
+            if args is not None:
+                check_activation_options(prog, lane_id, record, args)
+            theirs = record.get("common_dir")
+            here = admission.running_common(store.project)
+            if isinstance(theirs, str) and theirs and here and os.path.realpath(theirs) != os.path.realpath(here):
+                checkout = main_checkout(theirs)
+                raise LaneError(
+                    f"lane {lane_id} belongs to {state.project_name(theirs)}, not {state.project_name(here)}; "
+                    f"run it there ({checkout}): cd {shlex.quote(checkout)} && {prog} start {lane_id} --create"
+                )
+            raw_after: Any = record.get("after")
+            after_ids = (
+                [name for name in cast(list[Any], raw_after) if isinstance(name, str)]
+                if isinstance(raw_after, list)
+                else []
             )
-        raw_after: Any = record.get("after")
-        after_ids = (
-            [name for name in cast(list[Any], raw_after) if isinstance(name, str)]
-            if isinstance(raw_after, list)
-            else []
-        )
-        by_id = {r["id"]: r for r in store.lanes(strict=True)}
-        waiting = [
-            f"{name} ({by_id[name]['status'] if name in by_id else 'missing'})"
-            for name in after_ids
-            if not lifecycle.landed(by_id.get(name))
-        ]
-        if waiting:
-            raise LaneError(
-                f"lane {lane_id} is planned after {', '.join(waiting)}; "
-                f"wait for them to land, then run {prog} start {lane_id} --create "
-                f"(or {prog} drop {lane_id} to remove it)"
-            )
-        common = record.get("common_dir")
-        if not isinstance(common, str) or not common or not os.path.isdir(common):
-            raise LaneError(f"lane {lane_id} names no repository that exists ({common or 'none'})")
-        main = main_checkout(common)
-        raw_base = record.get("base")
-        chosen_base = base or (raw_base if isinstance(raw_base, str) and raw_base else None)
-        if not chosen_base:
-            chosen_base = current_branch(main) or git(main, "rev-parse", "HEAD")
-        base_sha = git(main, "rev-parse", "--verify", chosen_base + "^{commit}")
-        integration = next((w["path"] for w in worktree_list(main) if w.get("branch") == chosen_base),
-                           record.get("integration"))
-        raw_branch = record.get("branch")
-        chosen_branch = branch or (raw_branch if isinstance(raw_branch, str) and raw_branch else f"lane/{lane_id}")
-        raw_scratch: Any = record.get("scratch")
-        if isinstance(raw_scratch, list) and raw_scratch and isinstance(raw_scratch[0], str) and raw_scratch[0]:
-            Path(raw_scratch[0]).mkdir(parents=True, exist_ok=True)
-        path = str(worktrees.worktrees_root(common, store.project) / f"lane-{lane_id}")
-        git(main, "worktree", "add", "-q", "-b", chosen_branch, path, base_sha)
-        worktree = os.path.realpath(path)
-        now = journal.now()
-        updated = lifecycle.transition(
-            store, lane_id, "adopt",
-            worktree=worktree,
-            branch=chosen_branch,
-            base=chosen_base,
-            base_sha=base_sha,
-            integration=integration,
-            adopted=now,
-            agent=events.agent_context(agent),
-            agent_now=now,
-            ledger_message=(
-                f"start {lane_id} --create worktree={worktree} branch={chosen_branch} "
-                f"base={chosen_base}@{base_sha[:10]}"
-            ),
-            ledger_details={
-                "worktree": worktree,
-                "branch": chosen_branch,
-                "base": chosen_base,
-                "base_sha": base_sha,
-            },
-        )
+            all_lanes = store.lanes(strict=True)
+            by_id = {r["id"]: r for r in all_lanes}
+            waiting = [
+                f"{name} ({by_id[name]['status'] if name in by_id else 'missing'})"
+                for name in after_ids
+                if not lifecycle.landed(by_id.get(name))
+            ]
+            if waiting:
+                raise LaneError(
+                    f"lane {lane_id} is planned after {', '.join(waiting)}; "
+                    f"wait for them to land, then run {prog} start {lane_id} --create "
+                    f"(or {prog} drop {lane_id} to remove it)"
+                )
+            common = record.get("common_dir")
+            if not isinstance(common, str) or not common or not os.path.isdir(common):
+                raise LaneError(f"lane {lane_id} names no repository that exists ({common or 'none'})")
+            # The lane already holds a cap slot and its claims; re-check only the free-disk floor before worktree add.
+            decision = admission.evaluate(store.project, all_lanes, common, cap_exempt=True, repaired=repaired)
+            refusals = list(decision.refusals)
+            if refusals and not force_reason and repaired is None and decision.disk_short:
+                pass
+            else:
+                if refusals and not force_reason:
+                    raise LaneError("refused:\n- " + "\n- ".join(refusals))
+                main = main_checkout(common)
+                raw_base = record.get("base")
+                chosen_base = base or (raw_base if isinstance(raw_base, str) and raw_base else None)
+                if not chosen_base:
+                    chosen_base = current_branch(main) or git(main, "rev-parse", "HEAD")
+                base_sha = git(main, "rev-parse", "--verify", chosen_base + "^{commit}")
+                integration = next((w["path"] for w in worktree_list(main) if w.get("branch") == chosen_base),
+                                   record.get("integration"))
+                raw_branch = record.get("branch")
+                chosen_branch = branch or (raw_branch if isinstance(raw_branch, str) and raw_branch
+                                           else f"lane/{lane_id}")
+                raw_scratch: Any = record.get("scratch")
+                if isinstance(raw_scratch, list) and raw_scratch and isinstance(raw_scratch[0], str) and raw_scratch[0]:
+                    Path(raw_scratch[0]).mkdir(parents=True, exist_ok=True)
+                path = str(worktrees.worktrees_root(common, store.project) / f"lane-{lane_id}")
+                git(main, "worktree", "add", "-q", "-b", chosen_branch, path, base_sha)
+                worktree = os.path.realpath(path)
+                new_overrides: list[dict[str, Any]] = []
+                if refusals:
+                    new_overrides.append(
+                        journal.override(
+                            "start", record, force_reason, refusals,
+                            described=f"refusals: {'; '.join(refusals)}", audited=False, store=store,
+                        )
+                    )
+                now = journal.now()
+                updated = lifecycle.transition(
+                    store, lane_id, "adopt",
+                    worktree=worktree,
+                    branch=chosen_branch,
+                    base=chosen_base,
+                    base_sha=base_sha,
+                    integration=integration,
+                    adopted=now,
+                    agent=events.agent_context(agent),
+                    agent_now=now,
+                    overrides=new_overrides or None,
+                    ledger_message=(
+                        f"start {lane_id} --create worktree={worktree} branch={chosen_branch} "
+                        f"base={chosen_base}@{base_sha[:10]}"
+                    ),
+                    ledger_details={
+                        "worktree": worktree,
+                        "branch": chosen_branch,
+                        "base": chosen_base,
+                        "base_sha": base_sha,
+                    },
+                )
+                break
+        repaired = done.repair_disk(decision.machine["disk_free_gb"], decision.floor)
+    assert updated is not None
     lifetimes.register_quietly(store, updated, "adopt")
     raw_claims: Any = updated.get("claims")
     lane_claims = (
@@ -316,18 +422,15 @@ def start(args: Any, store: state.Store) -> int:
     existing = state.read_json(store.record_path(args.id))
     if existing and not lifecycle.finished(existing):
         if args.create and lifecycle.planned(existing):
-            activate_planned(store, args.id, base=args.base, branch=args.branch, agent=getattr(args, "agent", None))
+            activate_planned(store, args.id, base=args.base, branch=args.branch,
+                             force_reason=args.force_reason, agent=getattr(args, "agent", None), args=args)
             return 0
         raise existing_lane_error(store.prog, args.id, existing)
     raw_issues = cast(list[tuple[str, bool]], getattr(args, "issues", None) or [])
     raw_claims = option_list(getattr(args, "claims", None))
-    if not raw_issues and not raw_claims:
-        raise LaneError(f"start {args.id}: --ticket (or --partial) and --claims are required when registering a new "
-                        "lane")
-    if not raw_issues:
-        raise LaneError(f"start {args.id}: --ticket (or --partial) is required when registering a new lane")
-    if not raw_claims:
-        raise LaneError(f"start {args.id}: --claims is required when registering a new lane")
+    missing = [opt for opt, val in (("--ticket", raw_issues), ("--claims", raw_claims)) if not val]
+    if missing:
+        raise LaneUsageError(f"the following arguments are required: {', '.join(missing)}")
     lane_claims = [c for claim in raw_claims for c in claim.split()]
     after = list(dict.fromkeys(option_list(getattr(args, "after", None))))
     given = getattr(args, "fix_of", None) or ()

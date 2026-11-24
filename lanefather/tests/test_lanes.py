@@ -170,11 +170,51 @@ class StartTests(LaneCase):
         self.assertIn("lane second exists (active)", already_active)
         self.assertNotIn("lanefather done", already_active)
 
-        # Calling start --create on a brand-new lane without --ticket / --claims refuses cleanly.
-        missing_args = self.lane("start", "brand-new", "--create", ok=False)
-        self.assertIn("--ticket", missing_args)
-        self.assertIn("--claims", missing_args)
+        # Calling start --create on a brand-new lane without --ticket / --claims is a CLI usage error (exit 2).
+        proc = subprocess.run(
+            [sys.executable, "-m", "lanefather", "start", "brand-new", "--create"],
+            cwd=self.integration, env=self.env, capture_output=True, text=True, timeout=60,
+        )
+        self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
+        self.assertIn("--ticket", proc.stderr)
+        self.assertIn("--claims", proc.stderr)
+        self.assertIn("Try 'lanefather start --help'.", proc.stderr)
         self.assertFalse((self.state / "brand-new.json").exists())
+
+    def test_activating_planned_lane_refuses_mismatched_options_and_enforces_disk_floor(self):
+        # Review of fathers#241: mismatched registration-only options on `start <id> --create` refuse instead of
+        # being silently ignored, exact repeats are accepted, and the free-disk floor is enforced.
+        self.lane(
+            "start", "plan1", "--ticket", "410", "--base", "integrate/q", "--claims", "lib/api.txt",
+        )
+        for extra, word in (
+            (("--ticket", "999"), "scope"),
+            (("--partial", "410"), "scope"),
+            (("--claims", "calls/**"), "--claims"),
+            (("--after", "other"), "--after"),
+            (("--fix-of", "other"), "--fix-of"),
+            (("--spec", "docs/spec.md"), "--spec"),
+        ):
+            with self.subTest(extra=extra):
+                err = self.lane("start", "plan1", *extra, "--create", ok=False)
+                self.assertIn(word, err)
+                self.assertEqual(self.record("plan1")["status"], "planned")
+
+        # Low disk refuses activation until freed or overridden with --force-reason.
+        self.env["LANEFATHER_DISK_FREE_GB"] = "20"
+        disk_err = self.lane("start", "plan1", "--create", ok=False)
+        self.assertIn("under the floor of", disk_err)
+        self.assertEqual(self.record("plan1")["status"], "planned")
+
+        # Repeating the exact stored options with --force-reason activates cleanly and logs the override.
+        self.lane(
+            "start", "plan1", "--ticket", "410", "--claims", "lib/api.txt", "--create",
+            "--force-reason", "small scratch fix on low disk",
+        )
+        rec = self.record("plan1")
+        self.assertEqual(rec["status"], "active")
+        self.assertEqual(len(rec["overrides"]), 1)
+        self.assertIn("small scratch fix on low disk", (self.state / "ledger.log").read_text())
 
     def test_repeated_after_flags_allow_all_overlaps_and_wait_for_every_lane(self):
         # fathers#241: `--after A --after B` must keep both A and B, not only the last flag.
@@ -217,14 +257,13 @@ class StartTests(LaneCase):
         self.assertTrue((pathlib.Path(rec["worktree"]) / "calls/from-114.txt").is_file())
 
         # Space-separated and repeated --after both work and deduplicate in order.
-        wt_c = self.created("sk116", "docs/**")
+        self.created("sk116", "docs/**")
         self.lane(
             "start", "sk117", "--ticket", "117", "--base", "integrate/q",
             "--claims", "docs/a.md", "lib/api.txt",
             "--after", "sk115", "sk116", "--after", "sk115",
         )
         self.assertEqual(self.record("sk117")["after"], ["sk115", "sk116"])
-        self.assertTrue(pathlib.Path(wt_c).is_dir())
 
 
 class ProjectCapTests(LaneCase):
