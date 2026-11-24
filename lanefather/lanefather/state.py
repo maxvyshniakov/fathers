@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Generator, Iterable
 import contextlib
+import datetime
 import fcntl
 import json
 import os
@@ -301,21 +302,47 @@ def lane_created_of(record: Record | None) -> str | None:
     return raw if isinstance(raw, str) and raw else None
 
 
+def _parse_iso(value: str) -> datetime.datetime | None:
+    try:
+        parsed = datetime.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=datetime.UTC)
+    return parsed
+
+
 def receipt_matches_lane(receipt: dict[str, Any] | None, lane_created: str | None) -> bool:
     """Whether `receipt` belongs to the lane incarnation created at `lane_created` (fathers#54).
 
-    A legacy receipt without `lane_created` (or with `lane_created: None`) matches for backward compatibility.
     When `lane_created` is absent or empty, any receipt matches.
-    When both are present, `receipt["lane_created"]` must be a string equal to `lane_created`.
+    When `receipt["lane_created"]` is present and not `None`, it must be a string equal to `lane_created`.
+    An unstamped pre-upgrade receipt (missing `lane_created` or `lane_created: None`) matches only when its own
+    timestamp (`started`, else `finished`) is at or after `lane_created`; an unstamped receipt with no timestamp
+    field falls back to matching for minimal legacy fixtures.
     """
     if receipt is None:
         return False
     if not isinstance(lane_created, str) or not lane_created:
         return True
-    if "lane_created" not in receipt or receipt["lane_created"] is None:
+    if "lane_created" in receipt and receipt["lane_created"] is not None:
+        raw = receipt["lane_created"]
+        return isinstance(raw, str) and raw == lane_created
+    stamp: str | None = None
+    for key in ("started", "finished"):
+        if key in receipt and receipt[key] is not None:
+            val = receipt[key]
+            if not isinstance(val, str) or not val:
+                return False
+            stamp = val
+            break
+    if stamp is None:
         return True
-    raw = receipt["lane_created"]
-    return isinstance(raw, str) and raw == lane_created
+    stamp_dt = _parse_iso(stamp)
+    created_dt = _parse_iso(lane_created)
+    if stamp_dt is not None and created_dt is not None:
+        return stamp_dt >= created_dt
+    return stamp >= lane_created
 
 
 def project_name(common: str | None) -> str:

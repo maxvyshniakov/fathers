@@ -71,7 +71,7 @@ def read(
     data = state.read_json(path(store, name, kind))
     if data is None:
         return None
-    if kind in ("check", "receipt", "first", "post-merge", "recheck", "review"):
+    if kind == "check" or kind in LANE_KINDS:
         expected = lane_created if lane_created is not None else state.lane_created_of(record)
         if not state.receipt_matches_lane(data, expected):
             return None

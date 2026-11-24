@@ -1047,6 +1047,18 @@ class ReusedLaneIdReviewTests(LaneCase):
         out_fix = self.lane("review", "a", "--fix-lane", ok=False)
         self.assertIn("no finished review with unmarked findings", out_fix)
 
+        # Landing a lane claiming --fix-of a onto a promoted branch (main) must also refuse without review
+        # because review_exemption checks generation-aware fix_parent state.
+        wt_b = self.created("b", "lib/b.txt")
+        self.commit(wt_b, {"lib/b.txt": "b\n"})
+        self.lane("check", "b")
+        rec_b = self.record("b")
+        rec_b["review_fix_of"] = "a"
+        (self.state / "b.json").write_text(json.dumps(rec_b, indent=2) + "\n")
+        out_land = self.lane("land", "b", "--into", str(self.repo), ok=False)
+        self.assertIn("land refused", out_land)
+        self.assertIn("main", out_land)
+
 
 if __name__ == "__main__":
     unittest.main()
