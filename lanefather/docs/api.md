@@ -77,13 +77,18 @@ Sol and Opus compare as reviewers.
 ## Action command `--json` replies (`start`, `check`, `land`, `promote`, `done`, `smoke`)
 
 Every action command with `--json` prints one JSON object on stdout with top-level `"v": 1` and nothing else on
-stdout (fathers#130):
+stdout (progress and diagnostics go to stderr; fathers#130):
 
-- `lanefather start <id> ... --json`: `{"v": 1, "lane", "status", "ticket", "branch", "base", "base_sha", "worktree", "claims", "after", "activated"}`.
-- `lanefather check <id> [--rerun] [--slots N] --json`: `{"v": 1, "lane", "status", "raw_status", "tree", "head", "reused", "suites", "receipt", "exit_code"}`. Exits 0 when green, 1 when red.
-- `lanefather land <id> [...] --json`: `{"v": 1, "lane", "status", "branch", "onto", "merge", "integration", "post_merge", "summary", "partial", "keep", "exit_code"}`. Exits 0 when post-merge smoke is green, 1 when red.
-- `lanefather promote <sha> [...] --json`: `{"v": 1, "sha", "branches", "remote", "ship", "no_push", "pushed", "install", "deploy", "status", "steps", "exit_code"}`.
-- `lanefather done <id> --json`: `{"v": 1, "lane", "status", "freed_bytes"}`. With `--finished [--dry-run] --json`: `{"v": 1, "finished", "freed_bytes", "dry_run", "refused"}`.
+- `lanefather start <id> ... --json`: `{"v": 1, "lane", "status", "ticket", "branch", "base", "base_sha", "worktree",
+  "claims", "after", "activated", "brief"}` (`brief` carries the lane header and claim rule snippets).
+- `lanefather check <id> [--rerun] [--slots N] --json`: `{"v": 1, "lane", "status", "raw_status", "tree", "head",
+  "reused", "suites", "receipt", "exit_code"}`. Exits 0 when green, 1 when red.
+- `lanefather land <id> [...] --json`: `{"v": 1, "lane", "status", "branch", "onto", "merge", "integration",
+  "post_merge", "summary", "partial", "keep", "exit_code"}`. Exits 0 when post-merge smoke is green, 1 when red.
+- `lanefather promote <sha> [...] --json`: `{"v": 1, "sha", "branches", "remote", "ship", "no_push", "pushed",
+  "install", "deploy", "status", "steps", "exit_code"}`.
+- `lanefather done <id> --json`: `{"v": 1, "lane", "status", "freed_bytes"}`. With `--finished [--dry-run] --json`:
+  `{"v": 1, "finished", "freed_bytes", "dry_run", "refused"}`.
 - `lanefather smoke <id> [--rerun | --accept REASON] --json`: `{"v": 1, "lane", "status", "phase", ...}`.
 
 ## The check contract

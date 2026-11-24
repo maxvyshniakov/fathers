@@ -23,6 +23,7 @@ class CLIVersionedJSONTests(LaneCase):
         self.assertEqual(started["lane"], "a")
         self.assertEqual(started["status"], "planned")
         self.assertFalse(started["activated"])
+        self.assertIn("Lane a", started["brief"])
 
         # start --create --json (activate planned lane)
         code, out, err = run_in_process_streams(
@@ -34,6 +35,7 @@ class CLIVersionedJSONTests(LaneCase):
         self.assertEqual(activated["lane"], "a")
         self.assertEqual(activated["status"], "active")
         self.assertTrue(activated["activated"])
+        self.assertIn("Lane a", activated["brief"])
         worktree = activated["worktree"]
         self.assertTrue(worktree)
 
@@ -157,7 +159,9 @@ class CLIVersionedJSONTests(LaneCase):
         self.assertEqual(out, "")
         self.assertTrue(err.startswith("mytool: no lane no-such-lane"), err)
 
-    def test_unexpected_exception_prints_one_line_and_logs_traceback_to_ledger(self) -> None:
+    def test_unexpected_exception_prints_one_line_and_logs_traceback_to_events(self) -> None:
+        events_path = self.tmp / "events.jsonl"
+        self.env["LANEFATHER_EVENTS"] = str(events_path)
         with mock.patch.object(lanes, "list_lanes", side_effect=KeyError("boom")):
             code, out, err = run_in_process_streams(["list"], self.integration, self.env)
         self.assertEqual(code, 1)
@@ -167,8 +171,13 @@ class CLIVersionedJSONTests(LaneCase):
         self.assertEqual(lines[0], "lanefather: internal error: KeyError: 'boom'")
         ledger = (self.state / "ledger.log").read_text()
         self.assertIn("internal-error list: KeyError: 'boom'", ledger)
-        self.assertIn("Traceback (most recent call last):", ledger)
-        self.assertIn("KeyError: 'boom'", ledger)
+        self.assertNotIn("Traceback (most recent call last):", ledger)
+        event_rows = [json.loads(line) for line in events_path.read_text().splitlines() if line.strip()]
+        internal_events = [row for row in event_rows if row.get("kind") == "cli.internal_error"]
+        self.assertTrue(internal_events, event_rows)
+        tb = internal_events[-1]["details"]["traceback"]
+        self.assertIn("Traceback (most recent call last):", tb)
+        self.assertIn("KeyError: 'boom'", tb)
 
     def test_keyboard_interrupt_is_not_swallowed(self) -> None:
         with mock.patch.object(lanes, "list_lanes", side_effect=KeyboardInterrupt), self.assertRaises(KeyboardInterrupt):

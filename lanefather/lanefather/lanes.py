@@ -628,7 +628,8 @@ def _inherit_partial_scope(store: state.Store, parents: Sequence[str],
     return tuple(updated), inherited
 
 
-def _start_reply(record: Record, *, activated: bool) -> dict[str, Any]:
+def _start_reply(store: state.Store, record: Record, rules: list[dict[str, Any]] | tuple[()],
+                 *, activated: bool) -> dict[str, Any]:
     return {
         "v": 1,
         "lane": record["id"],
@@ -641,6 +642,7 @@ def _start_reply(record: Record, *, activated: bool) -> dict[str, Any]:
         "claims": list(record["claims"]),
         "after": list(record["after"]),
         "activated": activated,
+        "brief": header(store, record, rules),
     }
 
 
@@ -654,7 +656,16 @@ def start(args: Any, store: state.Store) -> int:
                                            force_reason=args.force_reason, agent=getattr(args, "agent", None),
                                            args=args)
             if as_json:
-                print(json.dumps(_start_reply(updated, activated=True)))
+                raw_claims: Any = updated.get("claims")
+                activated_claims = (
+                    [c for c in cast(list[Any], raw_claims) if isinstance(c, str)]
+                    if isinstance(raw_claims, list) else []
+                )
+                common = str(updated.get("common_dir") or "")
+                activated_rules = (
+                    claims.rules_for(activated_claims, main_checkout(common), store.project) if common else []
+                )
+                print(json.dumps(_start_reply(store, updated, activated_rules, activated=True)))
             return 0
         raise existing_lane_error(store.prog, args.id, existing)
     raw_issues = cast(list[tuple[str, bool]], getattr(args, "issues", None) or [])
@@ -687,7 +698,7 @@ def start(args: Any, store: state.Store) -> int:
               file=sys.stderr)
     if as_json:
         saved = state.read_json(store.record_path(args.id)) or record
-        print(json.dumps(_start_reply(saved, activated=False)))
+        print(json.dumps(_start_reply(store, saved, rules, activated=False)))
     return 0
 
 

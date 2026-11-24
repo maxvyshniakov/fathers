@@ -74,9 +74,9 @@ def positive(raw: str) -> int | None:
     return value if value > 0 else None
 
 
-def bad_setting(found: tuple[str, str], then: str) -> None:
+def bad_setting(found: tuple[str, str], then: str, *, prog: str = "lanefather") -> None:
     """Warn of a cap setting that is set but not a positive whole number, and say what applies instead."""
-    print(f"lane: warning: {found[0]}={found[1]!r} is not a positive whole number; {then}", file=sys.stderr)
+    print(f"{prog}: warning: {found[0]}={found[1]!r} is not a positive whole number; {then}", file=sys.stderr)
 
 
 def lane_cap(project: config.Config | None = None) -> tuple[int, str]:
@@ -94,7 +94,7 @@ def lane_cap(project: config.Config | None = None) -> tuple[int, str]:
     cap, source = ((cfg.lane_cap, f"{config.CONFIG_NAME} [admission] cap; derived: {derived}")
                    if cfg.lane_cap else (derived, f"derived from {cores} cores and {memory:.0f} GB of memory"))
     if found and found[1]:
-        bad_setting(found, f"the cap is {cap}")
+        bad_setting(found, f"the cap is {cap}", prog=cfg.command)
     return cap, source
 
 
@@ -106,7 +106,7 @@ def cap_override(project: config.Config) -> tuple[str, str] | None:
     if not project.lane_cap or (found and positive(found[1])):
         return found
     if found and found[1]:
-        bad_setting(found, f"the cap is {project.lane_cap}")
+        bad_setting(found, f"the cap is {project.lane_cap}", prog=project.command)
     return f"{config.CONFIG_NAME} [admission] cap", str(project.lane_cap)
 
 
@@ -179,8 +179,8 @@ def disk_floor(project: config.Config, cap: int, records: list[dict[str, Any]], 
         try:
             value = settings.parse(knob, found[1], environment=True)
         except settings.SettingError:
-            print(f"lane: warning: {found[0]}={found[1]!r} is not auto or a positive number of GB; the floor is "
-                  f"{settings.MIN_DISK} or derived", file=sys.stderr)
+            print(f"{project.command}: warning: {found[0]}={found[1]!r} is not auto or a positive number of GB; "
+                  f"the floor is {settings.MIN_DISK} or derived", file=sys.stderr)
         else:
             return replace(derived, gb=value, source=found[0]) if value else derived
     saved = settings.value(settings.MIN_DISK)

@@ -84,6 +84,7 @@ KINDS: dict[str, str] = {
     "ticket.trailer_conflict": "a lane commit or the merge says Fixes for a partial or umbrella ticket (warn)",
     "queue.updated": "a project policy rewrote the queue",
     "override": "a --force-reason overrode a refusal (warn)",
+    "cli.internal_error": "an unexpected exception stopped a command (error)",
 }
 
 def path() -> Path:

@@ -21,7 +21,6 @@ from collections.abc import Callable, Generator, Iterable
 import contextlib
 import datetime
 import fcntl
-import io
 import json
 import os
 from pathlib import Path
@@ -43,21 +42,25 @@ SCHEMA = 1
 
 @contextlib.contextmanager
 def quiet_stdout() -> Generator[None, None, None]:
-    """Suppress Python and subprocess writes to stdout so a `--json` command emits only its JSON object."""
+    """Redirect Python and subprocess stdout to stderr so a `--json` command emits only its JSON object on stdout."""
     sys.stdout.flush()
     saved_fd: int | None = None
     try:
         saved_fd = os.dup(1)
-        with open(os.devnull, "wb") as devnull:
-            os.dup2(devnull.fileno(), 1)
+        os.dup2(2, 1)
     except OSError:
         if saved_fd is not None:
             os.close(saved_fd)
             saved_fd = None
     try:
-        with contextlib.redirect_stdout(io.StringIO()):
+        with contextlib.redirect_stdout(sys.stderr):
             yield
     finally:
+        with contextlib.suppress(OSError, ValueError):
+            sys.stdout.flush()
+        if sys.__stdout__ is not None:
+            with contextlib.suppress(OSError, ValueError):
+                sys.__stdout__.flush()
         if saved_fd is not None:
             os.dup2(saved_fd, 1)
             os.close(saved_fd)

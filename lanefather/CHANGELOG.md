@@ -16,9 +16,7 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
     `--jobs` as a compatible alias on all five commands.
   - Errors in `cli.main` now prefix with the configured program name instead of hard-coded `lane:`; unexpected
     non-`LaneError` exceptions print one clean `<prog>: internal error: <type>: <message>` line to stderr (exit 1)
-    while recording the full traceback in `ledger.log` and the event log.
-  - Exit codes conform to `docs/cli.md`: `settings` read-only refusals moved from exit 4 to exit 5, and missing-lane
-    lookups (`state.Store.load`, `show`) exit 6 (`LaneNotFound`).
+    while recording the full traceback in the event log (`cli.internal_error`).
 
 - Fix lane kind and atomic hand-over transaction (fathers#45 Part (b)):
   - Lane records now carry `kind: "lane" | "fix"` (`lifecycle.kind_of` defaults legacy records without `kind` to
@@ -327,6 +325,8 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
 
 ### Changed
 
+- Exit codes conform to `docs/cli.md` (fathers#130): `settings` read-only refusals moved from exit 4 to exit 5, and
+  missing-lane lookups (`state.Store.load`, `show`) exit 6 (`LaneNotFound`).
 - `lanefather show` (`show --json`) now reports `review.status = "stopped"` for a dead review instead of raw
   `"running"`, matching `lanefather status` (fathers#60).
 - Unified check-receipt staleness under `receipts.check_verdict` using the results store's environment hash

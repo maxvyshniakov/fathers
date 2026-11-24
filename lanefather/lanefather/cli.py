@@ -769,9 +769,4 @@ def main(argv: list[str] | None = None) -> int:
                 store=store,
                 project=cfg,
             )
-            where = store.directory if store is not None else state.Store(cfg).directory
-            where.mkdir(parents=True, exist_ok=True)
-            with open(where / "ledger.log", "a", encoding="utf-8") as handle:
-                for line in tb.rstrip().splitlines():
-                    handle.write(f"  {line}\n")
         return 1
