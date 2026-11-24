@@ -323,7 +323,7 @@ def _first_green_time(
     lane_id = _as_str(record.get("id"))
     if lane_id is None:
         return None
-    candidates: list[datetime.datetime] = []
+    event_candidates: list[datetime.datetime] = []
     for ev in lane_events:
         if ev.get("kind") != "lane.checked":
             continue
@@ -331,16 +331,15 @@ def _first_green_time(
         if details is not None and details.get("status") == "green":
             ts = _parse_iso(ev.get("time"))
             if ts is not None and (created is None or ts >= created):
-                candidates.append(ts)
-    for kind in ("receipt", "first"):
-        rec = receipts.read(store, lane_id, kind, record=record)
-        if rec is None:
-            continue
-        if rec.get("status") == "green":
-            ts = _parse_iso(rec.get("finished")) or _parse_iso(rec.get("started"))
-            if ts is not None and (created is None or ts >= created):
-                candidates.append(ts)
-    return min(candidates) if candidates else None
+                event_candidates.append(ts)
+    if event_candidates:
+        return min(event_candidates)
+    rec = receipts.read(store, lane_id, "receipt", record=record)
+    if rec is not None and rec.get("status") == "green":
+        ts = _parse_iso(rec.get("finished")) or _parse_iso(rec.get("started"))
+        if ts is not None and (created is None or ts >= created):
+            return ts
+    return None
 
 
 def _land_time(
@@ -379,77 +378,81 @@ def _is_ancestor(
     return result
 
 
-def _promote_time(
+def _sorted_promotes(
+    promote_events: list[dict[str, Any]],
+    promote_runs: list[dict[str, Any]],
+) -> list[tuple[datetime.datetime, str]]:
+    """Chronologically sorted `(timestamp, sha)` promote candidates, deduplicated by SHA (earliest wins)."""
+    earliest_by_sha: dict[str, datetime.datetime] = {}
+    for ev in promote_events:
+        details = _as_dict(ev.get("details")) or {}
+        if _as_list(details.get("failed")):
+            continue
+        ev_time = _parse_iso(ev.get("time"))
+        subject = _as_dict(ev.get("subject"))
+        ev_sha = _as_str(subject.get("id")) if subject is not None else None
+        if ev_time is None or ev_sha is None:
+            continue
+        prev = earliest_by_sha.get(ev_sha)
+        if prev is None or ev_time < prev:
+            earliest_by_sha[ev_sha] = ev_time
+    for run in promote_runs:
+        run_sha = cast(str, run["sha"])
+        run_time = cast(datetime.datetime, run["finished"])
+        prev = earliest_by_sha.get(run_sha)
+        if prev is None or run_time < prev:
+            earliest_by_sha[run_sha] = run_time
+    return sorted(((ts, sha) for sha, ts in earliest_by_sha.items()), key=lambda item: (item[0], item[1]))
+
+
+def _promote_info(
     record: state.Record,
     landed_at: datetime.datetime | None,
     created: datetime.datetime | None,
-    promote_events: list[dict[str, Any]],
-    promote_runs: list[dict[str, Any]],
+    sorted_promotes: list[tuple[datetime.datetime, str]],
     ancestor_cache: dict[tuple[str, str, str], bool],
-) -> datetime.datetime | None:
-    lane_id = _as_str(record.get("id"))
+) -> tuple[datetime.datetime | None, str | None]:
+    """Return `(promoted_at, batch_sha)` for `record`, stopping at the earliest chronological match."""
     floor = landed_at or created
-    candidates: list[datetime.datetime] = []
     promoted_info = _as_dict(record.get("promoted"))
     if promoted_info is not None:
         ts = _parse_iso(promoted_info.get("at"))
         if ts is not None and (floor is None or ts >= floor):
-            candidates.append(ts)
+            return ts, _as_str(promoted_info.get("sha"))
     else:
         ts = _parse_iso(record.get("promoted"))
         if ts is not None and (floor is None or ts >= floor):
-            candidates.append(ts)
+            return ts, None
 
     landed_info = _as_dict(record.get("landed"))
     merge_sha = _as_str(landed_info.get("merge")) if landed_info is not None else None
+    if merge_sha is None:
+        return None, None
     common = _as_str(record.get("common_dir"))
 
-    for ev in promote_events:
-        details = _as_dict(ev.get("details")) or {}
-        failed = _as_list(details.get("failed"))
-        if failed:
+    for p_time, p_sha in sorted_promotes:
+        if floor is not None and p_time < floor:
             continue
-        ev_time = _parse_iso(ev.get("time"))
-        if ev_time is None or (floor is not None and ev_time < floor):
-            continue
-        matched = False
-        ev_lanes = _as_list(details.get("lanes"))
-        if lane_id is not None and ev_lanes is not None and any(item == lane_id for item in ev_lanes):
-            matched = True
-        subject = _as_dict(ev.get("subject"))
-        ev_sha = _as_str(subject.get("id")) if subject is not None else None
-        if not matched and merge_sha is not None and ev_sha is not None and (
-            merge_sha == ev_sha
-            or (common is not None and _is_ancestor(common, merge_sha, ev_sha, ancestor_cache))
+        if merge_sha == p_sha or (
+            common is not None and _is_ancestor(common, merge_sha, p_sha, ancestor_cache)
         ):
-            matched = True
-        if matched:
-            candidates.append(ev_time)
-
-    if merge_sha is not None:
-        for run in promote_runs:
-            run_time = cast(datetime.datetime, run["finished"])
-            if floor is not None and run_time < floor:
-                continue
-            run_sha = cast(str, run["sha"])
-            if merge_sha == run_sha or (
-                common is not None and _is_ancestor(common, merge_sha, run_sha, ancestor_cache)
-            ):
-                candidates.append(run_time)
-
-    return min(candidates) if candidates else None
+            return p_time, p_sha
+    return None, None
 
 
 def _phase_stats(
     store: state.Store,
     lines: list[dict[str, Any]],
     window_records: list[state.Record],
+    cutoff: datetime.datetime | None,
     slotfather_available: bool,
     by_lease: dict[str, dict[str, float | None]],
     by_run: dict[str, dict[str, float | None]],
 ) -> list[dict[str, Any]]:
     """Aggregate run time and Slotfather queue wait per check phase, joined by `lease_id` (or `run`)."""
     grouped: dict[tuple[str, str], dict[str, Any]] = {}
+    seen_leases: dict[str, dict[str, Any]] = {}
+    seen_runs: dict[str, dict[str, Any]] = {}
     anon_seq = 0
     for line in lines:
         if line.get("kind") != "check":
@@ -468,10 +471,14 @@ def _phase_stats(
             (phase, run_key),
             {"phase": phase, "run": run_id, "lease": lease_id, "starts": [], "ends": [], "seconds": []},
         )
-        if lease_id is not None and bucket["lease"] is None:
-            bucket["lease"] = lease_id
-        if run_id is not None and bucket["run"] is None:
-            bucket["run"] = run_id
+        if lease_id is not None:
+            if bucket["lease"] is None:
+                bucket["lease"] = lease_id
+            seen_leases.setdefault(lease_id, bucket)
+        if run_id is not None:
+            if bucket["run"] is None:
+                bucket["run"] = run_id
+            seen_runs.setdefault(run_id, bucket)
         start_dt = _parse_iso(line.get("started"))
         end_dt = _parse_iso(line.get("finished"))
         if start_dt is not None:
@@ -482,11 +489,11 @@ def _phase_stats(
         if _is_number(raw_secs) and raw_secs >= 0:
             bucket["seconds"].append(float(raw_secs))
 
-    # Also include receipt lease records not already present in history/*.jsonl.
+    # Also include in-window receipt lease records not already present in history/*.jsonl (dedup across all phases).
     receipt_kinds: tuple[tuple[receipts.ReceiptKind, str], ...] = (
         ("receipt", "check"),
         ("post-merge", "post-merge"),
-        ("recheck", "recheck"),
+        ("recheck", "post-merge"),
     )
     for record in window_records:
         lane_id = _as_str(record.get("id"))
@@ -501,6 +508,10 @@ def _phase_stats(
                 continue
             rec_start = _parse_iso(rec.get("started"))
             rec_end = _parse_iso(rec.get("finished"))
+            if cutoff is not None:
+                rec_ts = rec_end or rec_start
+                if rec_ts is None or rec_ts < cutoff:
+                    continue
             rec_secs = rec.get("seconds")
             for raw_entry in raw_leases:
                 entry = _as_dict(raw_entry)
@@ -511,19 +522,19 @@ def _phase_stats(
                 run_id = _as_str(entry.get("run"))
                 if lease_id is None and run_id is None:
                     continue
-                run_key = f"lease:{lease_id}" if lease_id is not None else f"run:{run_id}"
-                if (phase, run_key) in grouped:
+                if lease_id is not None and lease_id in seen_leases:
                     continue
-                # Avoid double counting if history recorded this run under its run id without lease id.
-                if run_id is not None and (phase, f"run:{run_id}") in grouped:
-                    existing = grouped[(phase, f"run:{run_id}")]
+                if run_id is not None and run_id in seen_runs:
+                    existing = seen_runs[run_id]
                     if lease_id is not None and existing["lease"] is None:
                         existing["lease"] = lease_id
+                        seen_leases.setdefault(lease_id, existing)
                     continue
+                run_key = f"lease:{lease_id}" if lease_id is not None else f"run:{run_id}"
                 starts = [rec_start] if rec_start is not None else []
                 ends = [rec_end] if rec_end is not None else []
                 secs = [float(rec_secs)] if _is_number(rec_secs) and rec_secs >= 0 else []
-                grouped[(phase, run_key)] = {
+                bucket = {
                     "phase": phase,
                     "run": run_id,
                     "lease": lease_id,
@@ -531,6 +542,11 @@ def _phase_stats(
                     "ends": ends,
                     "seconds": secs,
                 }
+                grouped[(phase, run_key)] = bucket
+                if lease_id is not None:
+                    seen_leases[lease_id] = bucket
+                if run_id is not None:
+                    seen_runs[run_id] = bucket
 
     by_phase: dict[str, dict[str, Any]] = {}
     for entry in grouped.values():
@@ -588,15 +604,16 @@ def _phase_stats(
 def _lane_flow_stats(
     store: state.Store,
     window_records: list[state.Record],
-    all_events: list[dict[str, Any]],
+    flow_events: list[dict[str, Any]],
     lines: list[dict[str, Any]],
+    cutoff: datetime.datetime | None,
     slotfather_available: bool,
     by_lease: dict[str, dict[str, float | None]],
     by_run: dict[str, dict[str, float | None]],
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], dict[str, str]]:
     events_by_lane: dict[str, list[dict[str, Any]]] = {}
     promote_events: list[dict[str, Any]] = []
-    for ev in all_events:
+    for ev in flow_events:
         kind = ev.get("kind")
         if kind == "promote.finished":
             promote_events.append(ev)
@@ -606,12 +623,13 @@ def _lane_flow_stats(
             if sub_id is not None:
                 events_by_lane.setdefault(sub_id, []).append(ev)
 
-    promote_runs = _load_promote_runs(store)
+    sorted_promotes = _sorted_promotes(promote_events, _load_promote_runs(store))
     ancestor_cache: dict[tuple[str, str, str], bool] = {}
 
     to_first_green: list[float] = []
     to_land: list[float] = []
     to_promote: list[float] = []
+    lane_batches: dict[str, str] = {}
 
     for record in window_records:
         lane_id = _as_str(record.get("id"))
@@ -631,20 +649,25 @@ def _lane_flow_stats(
         if land_dur is not None:
             to_land.append(land_dur)
 
-        promoted_at = _promote_time(record, landed_at, created, promote_events, promote_runs, ancestor_cache)
+        promoted_at, batch_sha = _promote_info(record, landed_at, created, sorted_promotes, ancestor_cache)
+        if batch_sha is not None:
+            lane_batches[lane_id] = batch_sha
         promote_dur = _duration_seconds(created, promoted_at)
         if promote_dur is not None:
             to_promote.append(promote_dur)
 
-    phases = _phase_stats(store, lines, window_records, slotfather_available, by_lease, by_run)
-    return {
-        "lanes": len(window_records),
-        "to_first_green": _percentile_summary(to_first_green),
-        "to_land": _percentile_summary(to_land),
-        "to_promote": _percentile_summary(to_promote),
-        "phases": phases,
-        "slotfather_available": slotfather_available,
-    }
+    phases = _phase_stats(store, lines, window_records, cutoff, slotfather_available, by_lease, by_run)
+    return (
+        {
+            "lanes": len(window_records),
+            "to_first_green": _percentile_summary(to_first_green),
+            "to_land": _percentile_summary(to_land),
+            "to_promote": _percentile_summary(to_promote),
+            "phases": phases,
+            "slotfather_available": slotfather_available,
+        },
+        lane_batches,
+    )
 
 
 def _outcome_stats(window_records: list[state.Record]) -> dict[str, int]:
@@ -738,6 +761,7 @@ def _collect_overrides(
             "command": command_name,
             "scope": "promote" if is_promote else "lane",
             "lane": lane_id,
+            "commit": sub_id if sub_type == "commit" else None,
             "reason": reason,
             "refusals": refusals,
             "at": at,
@@ -799,17 +823,35 @@ def _rank_reasons(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def _override_stats(
     window_records: list[state.Record],
     override_entries: list[dict[str, Any]],
+    lane_batches: dict[str, str],
 ) -> dict[str, Any]:
     by_command: dict[str, int] = {}
     lane_count = 0
     promote_entries: list[dict[str, Any]] = []
+    batch_buckets: dict[str, dict[str, Any]] = {}
+
+    def _batch_row(key: str) -> dict[str, Any]:
+        return batch_buckets.setdefault(
+            key,
+            {"overrides": [], "lane_overrides": 0, "promote_overrides": 0, "fix_lanes": []},
+        )
+
     for item in override_entries:
         cmd = cast(str, item["command"])
         by_command[cmd] = by_command.get(cmd, 0) + 1
         if item["scope"] == "promote":
             promote_entries.append(item)
+            batch_key = _as_str(item.get("commit")) or "unpromoted"
+            bucket = _batch_row(batch_key)
+            bucket["overrides"].append(item)
+            bucket["promote_overrides"] += 1
         else:
             lane_count += 1
+            lane_id = _as_str(item.get("lane"))
+            batch_key = lane_batches.get(lane_id, "unpromoted") if lane_id is not None else "unpromoted"
+            bucket = _batch_row(batch_key)
+            bucket["overrides"].append(item)
+            bucket["lane_overrides"] += 1
 
     fix_rows: list[dict[str, Any]] = []
     single_fix = 0
@@ -827,7 +869,22 @@ def _override_stats(
         else:
             single_fix += 1
         fix_rows.append({"id": lane_id, "fix_of": parents, "batch": is_batch})
+        batch_key = lane_batches.get(lane_id, "unpromoted")
+        _batch_row(batch_key)["fix_lanes"].append(lane_id)
     fix_rows.sort(key=lambda r: str(r["id"]))
+
+    batches: list[dict[str, Any]] = []
+    for batch_key in sorted(batch_buckets, key=lambda k: (k == "unpromoted", k)):
+        bucket = batch_buckets[batch_key]
+        b_overrides = cast(list[dict[str, Any]], bucket["overrides"])
+        batches.append({
+            "batch": batch_key,
+            "overrides": len(b_overrides),
+            "lane_overrides": bucket["lane_overrides"],
+            "promote_overrides": bucket["promote_overrides"],
+            "reasons": _rank_reasons(b_overrides),
+            "fix_lanes": sorted(cast(list[str], bucket["fix_lanes"])),
+        })
 
     return {
         "total": len(override_entries),
@@ -836,6 +893,7 @@ def _override_stats(
         "by_command": dict(sorted(by_command.items())),
         "reasons": _rank_reasons(override_entries),
         "promote_reasons": _rank_reasons(promote_entries),
+        "batches": batches,
         "fix_lanes": {
             "total": len(fix_rows),
             "single": single_fix,
@@ -929,31 +987,42 @@ def stats(store: state.Store, days: float | None = 7, lane: str | None = None) -
                            total_seconds=round(sum(seconds), 3)))
     checks.sort(key=lambda r: (-(r["total_seconds"] or 0), r["check"]))
 
-    all_events = _read_events(store, cutoff)
+    all_events = _read_events(store, cutoff=None)
+    window_events = (
+        all_events
+        if cutoff is None
+        else [
+            ev
+            for ev in all_events
+            if (ts := _parse_iso(ev.get("time"))) is not None and ts >= cutoff
+        ]
+    )
     all_records = _load_records(store, lane)
-    events_by_lane: dict[str, list[dict[str, Any]]] = {}
-    for ev in all_events:
+    window_events_by_lane: dict[str, list[dict[str, Any]]] = {}
+    for ev in window_events:
         subject = _as_dict(ev.get("subject"))
         if subject is not None and subject.get("type") == "lane":
             sub_id = _as_str(subject.get("id"))
             if sub_id is not None:
-                events_by_lane.setdefault(sub_id, []).append(ev)
+                window_events_by_lane.setdefault(sub_id, []).append(ev)
 
     window_records: list[state.Record] = []
     for record in all_records:
-        if cutoff is None:
+        if cutoff is None or lifecycle.occupying(record):
             window_records.append(record)
             continue
         rec_id = _as_str(record.get("id")) or ""
-        stamps = _lane_timestamps(record, events_by_lane.get(rec_id, []))
+        stamps = _lane_timestamps(record, window_events_by_lane.get(rec_id, []))
         if any(ts >= cutoff for ts in stamps):
             window_records.append(record)
 
     slotfather_available, by_lease, by_run = slots.lease_history()
-    lane_flow = _lane_flow_stats(store, window_records, all_events, lines, slotfather_available, by_lease, by_run)
+    lane_flow, lane_batches = _lane_flow_stats(
+        store, window_records, all_events, lines, cutoff, slotfather_available, by_lease, by_run
+    )
     outcomes = _outcome_stats(window_records)
-    override_entries = _collect_overrides(window_records, all_events, cutoff, lane)
-    overrides = _override_stats(window_records, override_entries)
+    override_entries = _collect_overrides(window_records, window_events, cutoff, lane)
+    overrides = _override_stats(window_records, override_entries, lane_batches)
     review = _review_stats(store, cutoff, lane, override_entries)
 
     return {
@@ -977,7 +1046,8 @@ def reviewer_totals(store: state.Store, days: float | None = 7, lane: str | None
     table: dict[str, dict[str, Any]] = {}
     for rev in review_record.ReviewRecord.all(store):
         raw = _as_dict(rev.raw) or {}
-        if not rev.has_finished_receipt or (lane is not None and raw.get("lane") != lane):
+        rev_lane = _as_str(raw.get("lane")) or rev.label
+        if not rev.has_finished_receipt or (lane is not None and rev_lane != lane):
             continue
         if cutoff is not None:
             finished = _parse_iso(raw.get("finished"))

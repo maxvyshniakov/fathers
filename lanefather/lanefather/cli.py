@@ -472,7 +472,7 @@ def parser(project: config.Config = config.DEFAULT) -> Parser:
     p = add(root, commands, "stats", "Lane flow, outcomes, overrides, review and per-check p50/p90 from lane records, "
             "receipts, events and run history (lanefather.history).", prog=prog)
     p.add_argument("--days", type=float, default=7, help="the window in days (default 7; 0: everything kept)")
-    p.add_argument("--lane", help="only this lane's runs")
+    p.add_argument("--lane", help="scope all stats blocks to this lane")
     p.add_argument("--json", action="store_true", help="the version-1 report")
     p.set_defaults(run=history.command)
     p = add(root, commands, "settings", "Review start, rerun wait, slot priorities, free-disk floor "

@@ -291,7 +291,7 @@ def _index_lease_item(
 def lease_history(
     timeout: float = 2.0,
 ) -> tuple[bool, dict[str, dict[str, float | None]], dict[str, dict[str, float | None]]]:
-    """Best-effort read of Slotfather lease wait/run history via `slotfather history export` (fallback `stats --json`).
+    """Best-effort read of Slotfather lease wait/run history via `slotfather history export`.
 
     Returns `(available, by_lease_id, by_run_id)`. Never raises when Slotfather is missing, fails, or prints bad JSON.
     """
@@ -304,32 +304,15 @@ def lease_history(
         exported = subprocess.run([found, "history", "export"], capture_output=True, text=True, timeout=timeout)
     except (OSError, subprocess.SubprocessError):
         return False, {}, {}
-    if exported.returncode == 0:
-        for raw_line in exported.stdout.splitlines():
-            if not raw_line.strip():
-                continue
-            try:
-                parsed: Any = json.loads(raw_line)
-            except ValueError:
-                continue
-            if isinstance(parsed, dict):
-                _index_lease_item(cast(dict[str, Any], parsed), by_lease, by_run)
-        return True, by_lease, by_run
-    try:
-        stats_res = subprocess.run([found, "stats", "--json"], capture_output=True, text=True, timeout=timeout)
-    except (OSError, subprocess.SubprocessError):
+    if exported.returncode != 0:
         return False, {}, {}
-    if stats_res.returncode != 0:
-        return False, {}, {}
-    try:
-        payload: Any = json.loads(stats_res.stdout)
-    except ValueError:
-        return False, {}, {}
-    if not isinstance(payload, dict):
-        return False, {}, {}
-    raw_leases = cast(dict[str, Any], payload).get("leases")
-    if isinstance(raw_leases, list):
-        for raw_item in cast(list[Any], raw_leases):
-            if isinstance(raw_item, dict):
-                _index_lease_item(cast(dict[str, Any], raw_item), by_lease, by_run)
+    for raw_line in exported.stdout.splitlines():
+        if not raw_line.strip():
+            continue
+        try:
+            parsed: Any = json.loads(raw_line)
+        except ValueError:
+            continue
+        if isinstance(parsed, dict):
+            _index_lease_item(cast(dict[str, Any], parsed), by_lease, by_run)
     return True, by_lease, by_run

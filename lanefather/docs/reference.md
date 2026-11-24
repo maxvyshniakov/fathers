@@ -806,25 +806,29 @@ nothing, runs no project hook and makes no network call. `capabilities --json` a
 ## Stats and orchestration metrics
 
 `lanefather stats [--days N] [--lane ID] [--json]` summarizes check health and orchestration flow over the last `N`
-days (default 7; `0` for everything kept), optionally scoped to one lane (fathers#92, fathers#47, fathers#151). It
-reads lane records, check and review receipts, `<state>/history/*.jsonl`, `<state>/promote/promote-*.json`,
-`events.jsonl`, and Slotfather lease history (`slotfather history export`, falling back to `slotfather stats --json`)
-when Slotfather is available.
+days (default 7; `0` for everything kept), optionally scoped to one lane across all blocks (fathers#92, fathers#47,
+fathers#151). It reads lane records, check and review receipts, `<state>/history/*.jsonl`,
+`<state>/promote/promote-*.json`, `events.jsonl`, and Slotfather lease history (`slotfather history export`) when
+Slotfather is available. Currently `active` and `planned` lanes are included in the window alongside lanes with
+activity in the last `N` days.
 
 Under `"v": 1`, `stats --json` returns the existing `checks` and `reviewers` tables alongside four structured blocks:
 
 - `lane_flow`: `lanes` count, `to_first_green`, `to_land`, and `to_promote` (`{"count", "p50", "p90"}` in seconds from
-  lane `created` to first green receipt, `landed.at`, and `promoted.at` or matching `promote.finished` / completed
-  promote record; lanes that have not reached a milestone are omitted rather than counted as `0`), `slotfather_available`,
-  and per-phase `phases` (`phase`, `runs`, `matched_leases`, `run_p50`, `run_p90`, `wait_p50`, `wait_p90`,
-  `wait_status`). Queue wait is joined by `lease_id` (or `run`); when Slotfather is absent or has no matching lease,
-  `wait_p50` and `wait_p90` are `null` and `wait_status` is `"unknown"` (never `0`).
+  lane `created` to its earliest green `lane.checked` event in `events.jsonl` — falling back to a green check receipt
+  when no green event exists — to `landed.at`, and to `promoted.at` or the earliest matching `promote.finished` /
+  completed promote record; lanes that have not reached a milestone are omitted rather than counted as `0`),
+  `slotfather_available`, and per-phase `phases` (`phase`, `runs`, `matched_leases`, `run_p50`, `run_p90`, `wait_p50`,
+  `wait_p90`, `wait_status`). Queue wait is joined by `lease_id` (or `run`); when Slotfather is absent or has no
+  matching lease, `wait_p50` and `wait_p90` are `null` and `wait_status` is `"unknown"` (never `0`).
 - `outcomes`: counts of `total`, `landed`, `parked`, `abandoned`, `dropped`, `active`, `planned`, and `other` lanes,
   using `lifecycle.outcome_of` with legacy fallback for records written before `outcome` (fathers#57).
 - `overrides`: `--force-reason` override counts (`total`, `lane`, `promote`, `by_command`), ranked `reasons` and
-  `promote_reasons`, and `fix_lanes` (`total`, `single`, `batch`, `lanes` with `id`, `fix_of`, `batch`).
+  `promote_reasons`, per-batch `batches` (grouped by promote SHA or `"unpromoted"`, with override counts, reasons, and
+  fix lanes), and `fix_lanes` (`total`, `single`, `batch`, `lanes` with `id`, `fix_of`, `batch`).
 - `review`: `reviewed_lanes`, `findings` (plus `p1`, `p2`, `p3`, `fixed`, `rejected`, `unmarked`), `findings_per_lane`,
-  `fixed_share`, `rejected_share`, `unmarked_share`, and `gate` (`held`, `overridden`) from review-gate override events.
+  `fixed_share`, `rejected_share`, `unmarked_share`, and `gate` (`held`, `overridden`) counting held items and override
+  events recorded in review-gate `override` events.
 
 ## Machine settings
 

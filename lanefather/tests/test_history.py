@@ -441,6 +441,258 @@ class StatsMetricsTests(ScratchCase):
             self.assertEqual(report["review"]["reviewed_lanes"], 0)
             self.assertIsNone(report["review"]["findings_per_lane"])
 
+    def test_promote_time_early_exit_and_chronological_stop_minimizes_git_calls(self) -> None:
+        import datetime
+        import os
+        from unittest import mock
+
+        from lanefather import config, history, state
+
+        base = datetime.datetime.now(datetime.UTC).replace(microsecond=0) - datetime.timedelta(hours=1)
+        state_dir = self.tmp / "perf-state"
+        state_dir.mkdir(parents=True, exist_ok=True)
+        fake_repo = self.tmp / "repo"
+        (fake_repo / ".git").mkdir(parents=True, exist_ok=True)
+        store = state.Store(config.DEFAULT, directory=state_dir)
+        events_file = self.tmp / "perf-events.jsonl"
+
+        # Lane 1: already has promoted.at -> must make 0 git calls.
+        (state_dir / "fast.json").write_text(json.dumps({
+            "id": "fast",
+            "status": "done",
+            "outcome": "landed",
+            "common_dir": str(fake_repo / ".git"),
+            "created": self._iso(base, 0),
+            "landed": {"at": self._iso(base, 100), "merge": "11111111"},
+            "promoted": {"at": self._iso(base, 250), "sha": "pppp0001"},
+        }), encoding="utf-8")
+
+        # Lane 2: landed at +300s; promotes at +100s, +200s (skipped), +400s (match), +500s (not reached).
+        (state_dir / "chrono.json").write_text(json.dumps({
+            "id": "chrono",
+            "status": "done",
+            "outcome": "landed",
+            "common_dir": str(fake_repo / ".git"),
+            "created": self._iso(base, 0),
+            "landed": {"at": self._iso(base, 300), "merge": "22222222"},
+        }), encoding="utf-8")
+
+        event_rows = [
+            {
+                "v": 1, "source": "lanefather", "kind": "promote.finished", "time": self._iso(base, offset),
+                "level": "info",
+                "subject": {"type": "commit", "id": sha, "state_dir": str(state_dir)},
+                "details": {"branches": ["dev"], "pushed": True, "failed": []},
+            }
+            for offset, sha in (
+                (500, "prom0500"),
+                (100, "prom0100"),
+                (400, "prom0400"),
+                (200, "prom0200"),
+            )
+        ]
+        events_file.write_text("\n".join(json.dumps(e) for e in event_rows) + "\n", encoding="utf-8")
+
+        git_calls: list[tuple[str, ...]] = []
+
+        def fake_git_ok(_cwd: str, *args: str) -> bool:
+            git_calls.append(args)
+            return args[-2:] == ("22222222", "prom0400")
+
+        with (
+            mock.patch.dict(os.environ, {"LANEFATHER_EVENTS": str(events_file)}),
+            mock.patch("lanefather.slots.command", return_value=None),
+            mock.patch("lanefather.gitops.git_ok", side_effect=fake_git_ok),
+        ):
+            # Only fast lane -> 0 git calls.
+            fast_report = history.stats(store, days=7, lane="fast")
+            self.assertEqual(fast_report["lane_flow"]["to_promote"], {"count": 1, "p50": 250.0, "p90": 250.0})
+            self.assertEqual(git_calls, [])
+
+            # Both lanes -> only 1 git call (for chrono against prom0400; skipped +100/+200 and stopped before +500).
+            full_report = history.stats(store, days=7)
+            self.assertEqual(len(git_calls), 1)
+            self.assertEqual(git_calls[0][-2:], ("22222222", "prom0400"))
+            self.assertEqual(full_report["lane_flow"]["to_promote"], {"count": 2, "p50": 325.0, "p90": 385.0})
+
+    def test_days_window_preserves_first_green_includes_active_and_filters_old_receipts(self) -> None:
+        import datetime
+        import os
+        from unittest import mock
+
+        from lanefather import config, history, state
+
+        now_dt = datetime.datetime.now(datetime.UTC).replace(microsecond=0)
+        day = 86400
+        state_dir = self.tmp / "window-state"
+        state_dir.mkdir(parents=True, exist_ok=True)
+        store = state.Store(config.DEFAULT, directory=state_dir)
+        events_file = self.tmp / "window-events.jsonl"
+
+        created_10d = self._iso(now_dt, -10 * day)
+        green_9d = self._iso(now_dt, -9 * day)
+        recheck_1d = self._iso(now_dt, -1 * day)
+        landed_1d = self._iso(now_dt, -1 * day + 60)
+
+        # Lane created 10 days ago, first green 9 days ago, re-checked and landed 1 day ago.
+        (state_dir / "old-green.json").write_text(json.dumps({
+            "id": "old-green",
+            "status": "done",
+            "outcome": "landed",
+            "created": created_10d,
+            "landed": {"at": landed_1d, "merge": "aaaa9999"},
+        }), encoding="utf-8")
+        (state_dir / "old-green.receipt.json").write_text(json.dumps({
+            "lane_created": created_10d,
+            "status": "green",
+            "started": self._iso(now_dt, -1 * day - 15),
+            "finished": recheck_1d,
+            "leases": [{"run": "recent-run", "lease": "recent-lease"}],
+        }), encoding="utf-8")
+
+        # Currently active lane created 10 days ago with an ancient check receipt.
+        (state_dir / "still-active.json").write_text(json.dumps({
+            "id": "still-active",
+            "status": "active",
+            "created": created_10d,
+        }), encoding="utf-8")
+        (state_dir / "still-active.receipt.json").write_text(json.dumps({
+            "lane_created": created_10d,
+            "status": "red",
+            "started": self._iso(now_dt, -10 * day + 10),
+            "finished": self._iso(now_dt, -10 * day + 30),
+            "leases": [{"run": "ancient-run", "lease": "ancient-lease"}],
+        }), encoding="utf-8")
+
+        events_file.write_text(json.dumps({
+            "v": 1, "source": "lanefather", "kind": "lane.checked", "time": green_9d,
+            "level": "info",
+            "subject": {"type": "lane", "id": "old-green", "state_dir": str(state_dir)},
+            "details": {"status": "green"},
+        }) + "\n", encoding="utf-8")
+
+        with (
+            mock.patch.dict(os.environ, {"LANEFATHER_EVENTS": str(events_file)}),
+            mock.patch("lanefather.slots.command", return_value=None),
+        ):
+            report = history.stats(store, days=7)
+            # First green was 1 day after creation (86400s), NOT 9 days (777600s)!
+            self.assertEqual(report["lane_flow"]["to_first_green"], {"count": 1, "p50": 86400.0, "p90": 86400.0})
+            # Currently active lane is included in outcomes even though created 10 days ago.
+            self.assertEqual(report["outcomes"]["active"], 1)
+            self.assertEqual(report["outcomes"]["landed"], 1)
+            # Ancient 10-day-old receipt lease is filtered out of phases under --days 7.
+            phases = {row["phase"]: row for row in report["lane_flow"]["phases"]}
+            self.assertEqual(phases["check"]["runs"], 1)
+
+    def test_recheck_run_deduplicated_across_post_merge_and_recheck_receipt(self) -> None:
+        import datetime
+        import os
+        from unittest import mock
+
+        from support import FIXTURES
+
+        from lanefather import config, history, state
+
+        base = datetime.datetime.now(datetime.UTC).replace(microsecond=0) - datetime.timedelta(hours=1)
+        state_dir = self.tmp / "recheck-state"
+        state_dir.mkdir(parents=True, exist_ok=True)
+        store = state.Store(config.DEFAULT, directory=state_dir)
+
+        (state_dir / "lane1.json").write_text(json.dumps({
+            "id": "lane1",
+            "status": "landed",
+            "created": self._iso(base, 0),
+            "landed": {"at": self._iso(base, 100), "merge": "cccc1111"},
+        }), encoding="utf-8")
+        # Recheck receipt carries the same run id + lease id that verify.run_smoke logged under phase="post-merge".
+        (state_dir / "lane1.recheck.json").write_text(json.dumps({
+            "lane_created": self._iso(base, 0),
+            "status": "green",
+            "started": self._iso(base, 120),
+            "finished": self._iso(base, 145),
+            "leases": [{"run": "run-recheck-1", "lease": "lease-recheck-1"}],
+        }), encoding="utf-8")
+
+        history_dir = state_dir / "history"
+        history_dir.mkdir(parents=True, exist_ok=True)
+        month = base.strftime("%Y-%m")
+        (history_dir / f"{month}.jsonl").write_text(json.dumps({
+            "v": 1, "kind": "check", "at": self._iso(base, 145), "lane": "lane1", "phase": "post-merge",
+            "check": "lib-check", "status": "passed", "seconds": 25.0,
+            "started": self._iso(base, 120), "finished": self._iso(base, 145),
+            "run": "run-recheck-1",
+        }) + "\n", encoding="utf-8")
+
+        sf_history = self.tmp / "recheck-sf.jsonl"
+        sf_history.write_text(json.dumps({
+            "v": 2, "lease_id": "lease-recheck-1", "waited": 7, "ran": 25,
+        }) + "\n", encoding="utf-8")
+
+        with (
+            mock.patch.dict(os.environ, {
+                "LANEFATHER_EVENTS": str(self.tmp / "missing-events.jsonl"),
+                "FAKE_SLOTFATHER_HISTORY": str(sf_history),
+            }),
+            mock.patch("lanefather.slots.command", return_value=str(FIXTURES / "slotfather")),
+        ):
+            report = history.stats(store, days=7)
+            phases = {row["phase"]: row for row in report["lane_flow"]["phases"]}
+            self.assertEqual(set(phases), {"post-merge"})
+            self.assertEqual(phases["post-merge"]["runs"], 1)
+            self.assertEqual(phases["post-merge"]["matched_leases"], 1)
+            self.assertEqual(phases["post-merge"]["wait_p50"], 7.0)
+
+    def test_overrides_per_batch_breakdown_and_lane_scoping_parity(self) -> None:
+        import os
+        from unittest import mock
+
+        from lanefather import history
+
+        store, events_file, base = self._setup_fixture_store()
+        # Add a review receipt without an explicit raw "lane" field to verify reviewer_totals --lane parity.
+        (store.directory / "beta.review.json").write_text(json.dumps({
+            "version": 1,
+            "label": "beta",
+            "lane_created": self._iso(base, 0),
+            "status": "finished",
+            "reviewer": "opus",
+            "model": "claude-opus-5-5",
+            "finished": self._iso(base, 520),
+            "findings": [{"n": 1, "severity": "P2", "title": "check", "mark": {"kind": "fixed", "merge": "eeee5555"}}],
+        }), encoding="utf-8")
+
+        with (
+            mock.patch.dict(os.environ, {"LANEFATHER_EVENTS": str(events_file)}),
+            mock.patch("lanefather.slots.command", return_value=None),
+        ):
+            report = history.stats(store, days=7)
+            batches = {row["batch"]: row for row in report["overrides"]["batches"]}
+            self.assertEqual(set(batches), {"aaaa1111", "unpromoted"})
+            self.assertEqual(batches["aaaa1111"], {
+                "batch": "aaaa1111",
+                "overrides": 1,
+                "lane_overrides": 0,
+                "promote_overrides": 1,
+                "reasons": [{"reason": "release window", "count": 1}],
+                "fix_lanes": [],
+            })
+            self.assertEqual(batches["unpromoted"], {
+                "batch": "unpromoted",
+                "overrides": 1,
+                "lane_overrides": 1,
+                "promote_overrides": 0,
+                "reasons": [{"reason": "urgent hotfix", "count": 1}],
+                "fix_lanes": ["delta"],
+            })
+
+            # --lane beta scopes all blocks consistently, including reviewer_totals when raw["lane"] is absent.
+            beta_only = history.stats(store, days=7, lane="beta")
+            self.assertEqual(beta_only["outcomes"]["total"], 1)
+            self.assertEqual(beta_only["overrides"]["total"], 1)
+            self.assertEqual(beta_only["review"]["reviewed_lanes"], 1)
+            self.assertEqual([r["reviewer"] for r in beta_only["reviewers"]], ["opus"])
+
 
 if __name__ == "__main__":
     unittest.main()
