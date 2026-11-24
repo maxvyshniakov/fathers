@@ -160,6 +160,7 @@ class Stale:
     reviewer: Any = None
     missing_members: tuple[str, ...] = ()
     delta: ReviewVerdict | None = None
+    is_active: bool = False
 
 
 ReviewVerdict = Absent | Running | Died | Failed | PartialPanel | Exempt | Unmarked | Complete | Stale
@@ -282,7 +283,26 @@ def is_clean_integration_merge(
     return (lane_before == lane_after, p1)
 
 
-def _fixed_shas_of(findings: Sequence[dict[str, Any]]) -> set[str]:
+def _in_lane_fixed_shas(
+    findings: Sequence[dict[str, Any]],
+    *,
+    main: str,
+    reviewed_tip: str,
+    target_tip: str,
+    landed_info: dict[str, Any] | None,
+    has_delta: bool,
+) -> set[str]:
+    """Return commit SHAs from `fixed:<sha>` marks that represent in-lane pre-land fixes.
+
+    On an active lane (`landed_info is None`), every valid `fixed` mark is treated as an in-lane fix (so resetting
+    away a fix commit makes the review stale). On a landed lane, post-land follow-up merges (not ancestors of
+    `target_tip`, or marked after landing, or when a matching delta review already exists) are excluded so they
+    neither flip a clean parent to `Stale` nor retroactively cover unreviewed commits in `reviewed_tip..target_tip`.
+    """
+    if has_delta and landed_info is not None:
+        return set()
+    landed_at = landed_info.get("at") if landed_info is not None else None
+    landed_at_str = landed_at if isinstance(landed_at, str) and landed_at else None
     fixed: set[str] = set()
     for finding in findings:
         raw_mark: Any = finding.get("mark")
@@ -292,8 +312,22 @@ def _fixed_shas_of(findings: Sequence[dict[str, Any]]) -> set[str]:
         if mark.get("kind") != "fixed":
             continue
         merge_sha: Any = mark.get("merge")
-        if isinstance(merge_sha, str) and OID_RE.fullmatch(merge_sha):
-            fixed.add(merge_sha)
+        if not isinstance(merge_sha, str) or not OID_RE.fullmatch(merge_sha):
+            continue
+        if landed_info is not None:
+            if mark.get("post_land") is True:
+                continue
+            mark_at = mark.get("at")
+            if landed_at_str and isinstance(mark_at, str) and mark_at > landed_at_str:
+                continue
+            if not (
+                main
+                and merge_sha != reviewed_tip
+                and git_ok(main, "merge-base", "--is-ancestor", reviewed_tip, merge_sha)
+                and git_ok(main, "merge-base", "--is-ancestor", merge_sha, target_tip)
+            ):
+                continue
+        fixed.add(merge_sha)
     return fixed
 
 
@@ -310,13 +344,18 @@ def _is_tip_covered(
     merges and valid marked pre-land fixes."""
     if not git_ok(main, "merge-base", "--is-ancestor", reviewed_tip, target_tip):
         return False
+    valid_trees = bool(OID_RE.fullmatch(reviewed_tree) and OID_RE.fullmatch(target_tree))
     if fixed_shas:
         for fix_sha in fixed_shas:
             if not git_ok(main, "merge-base", "--is-ancestor", fix_sha, target_tip):
                 return False
-        if reviewed_tree and target_tree and target_tree == reviewed_tree:
+        if valid_trees and target_tree == reviewed_tree:
             return False
-    elif reviewed_tree and target_tree and target_tree == reviewed_tree:
+    elif (
+        valid_trees
+        and target_tree == reviewed_tree
+        and not _git_read(main, "rev-list", "--merges", "-n", "1", f"{reviewed_tip}..{target_tip}")
+    ):
         return True
     visited: set[str] = set()
     queue: list[str] = [target_tip]
@@ -347,76 +386,132 @@ def _is_tip_covered(
     return True
 
 
-def _resolve_integration_heads(main: str, record: Record, *, landed_info: dict[str, Any] | None) -> list[str]:
-    heads: list[str] = []
+def _resolve_integration_heads(
+    main: str,
+    record: Record,
+    *,
+    landed_info: dict[str, Any] | None,
+    target_tip: str,
+) -> list[str]:
+    """Resolve trusted integration heads for clean-merge validation.
+
+    For landed lanes, trust ONLY `landed_info["previous"]` (never post-land integration HEAD or `refs/heads/<base>`).
+    For active lanes, use the integration worktree HEAD and `base` ref, excluding any ref that already contains
+    `target_tip`.
+    """
+    candidates: list[str] = []
     if landed_info is not None:
         prev = landed_info.get("previous")
-        if isinstance(prev, str) and prev:
-            heads.append(prev)
-        int_wt = landed_info.get("integration")
-        if isinstance(int_wt, str) and int_wt and os.path.isdir(int_wt):
-            head = _git_read(int_wt, "rev-parse", "--verify", "--quiet", "HEAD")
-            if head:
-                heads.append(head)
-    rec_int = record.get("integration")
-    if isinstance(rec_int, str) and rec_int and os.path.isdir(rec_int):
-        head = _git_read(rec_int, "rev-parse", "--verify", "--quiet", "HEAD")
-        if head:
-            heads.append(head)
-    base = record.get("base")
-    if isinstance(base, str) and base:
-        base_head = _git_read(main, "rev-parse", "--verify", "--quiet", f"refs/heads/{base}^{{commit}}")
-        if base_head:
-            heads.append(base_head)
-        else:
-            raw_base = _git_read(main, "rev-parse", "--verify", "--quiet", f"{base}^{{commit}}")
-            if raw_base:
-                heads.append(raw_base)
-    return list(dict.fromkeys(heads))
+        if isinstance(prev, str) and OID_RE.fullmatch(prev):
+            candidates.append(prev)
+    else:
+        rec_int = record.get("integration")
+        if isinstance(rec_int, str) and rec_int and os.path.isdir(rec_int):
+            head = _git_read(rec_int, "rev-parse", "--verify", "--quiet", "HEAD")
+            if OID_RE.fullmatch(head):
+                candidates.append(head)
+        base = record.get("base")
+        if isinstance(base, str) and base:
+            base_head = _git_read(main, "rev-parse", "--verify", "--quiet", f"refs/heads/{base}^{{commit}}")
+            if OID_RE.fullmatch(base_head):
+                candidates.append(base_head)
+            else:
+                raw_base = _git_read(main, "rev-parse", "--verify", "--quiet", f"{base}^{{commit}}")
+                if OID_RE.fullmatch(raw_base):
+                    candidates.append(raw_base)
+    trusted: list[str] = []
+    for head in dict.fromkeys(candidates):
+        if (
+            target_tip
+            and OID_RE.fullmatch(target_tip)
+            and git_ok(main, "merge-base", "--is-ancestor", target_tip, head)
+        ):
+            continue
+        trusted.append(head)
+    return trusted
 
 
-def _stale_tips(raw: Receipt, record: Record | None) -> tuple[str, str] | None:
-    """Return `(reviewed_tip, target_tip)` when finished lane review `raw` does not cover `record`'s landed or
-    current active tip (ignoring clean integration merges and valid marked pre-land fixes), else `None`."""
+def _target_tip_and_tree(record: Record | None) -> tuple[str, str, bool, dict[str, Any] | None, str]:
+    """Return `(target_tip, target_tree, is_active, landed_info, main)` for `record`."""
     if record is None:
-        return None
-    kind = raw.get("kind")
-    if kind is not None and kind != "lane":
-        return None
-    raw_reviewed_tip = raw.get("tip")
-    if not isinstance(raw_reviewed_tip, str) or not raw_reviewed_tip:
-        return None
-    reviewed_tip = raw_reviewed_tip
-    raw_reviewed_tree = raw.get("tree")
-    reviewed_tree = raw_reviewed_tree if isinstance(raw_reviewed_tree, str) else ""
-
+        return "", "", False, None, ""
     raw_common = record.get("common_dir")
     common = raw_common if isinstance(raw_common, str) and raw_common else ""
     main = main_checkout(common) if common and os.path.isdir(common) else ""
-
-    target_tip = ""
-    target_tree = ""
     raw_landed: Any = record.get("landed")
     landed_info = cast(dict[str, Any], raw_landed) if isinstance(raw_landed, dict) else None
     if landed_info is not None and isinstance(landed_info.get("tip"), str) and landed_info["tip"]:
         target_tip = landed_info["tip"]
         raw_ltree = landed_info.get("tree")
         target_tree = raw_ltree if isinstance(raw_ltree, str) else ""
-    elif lifecycle.active(record) and main:
+        return target_tip, target_tree, False, landed_info, main
+    if lifecycle.active(record) and main:
         branch = record.get("branch")
         if isinstance(branch, str) and branch:
             target_tip = _git_read(main, "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}^{{commit}}")
             if target_tip:
                 target_tree = _git_read(main, "rev-parse", "--verify", "--quiet", f"{target_tip}^{{tree}}")
+                return target_tip, target_tree, True, None, main
+    return "", "", False, landed_info, main
+
+
+def matching_delta(
+    raw: Receipt | None,
+    reviewed_tip: str,
+    target_tip: str,
+    *,
+    target_tree: str = "",
+) -> Receipt | None:
+    """Return `raw['delta']` when it is a delta receipt covering `reviewed_tip..target_tip`."""
+    if raw is None or not reviewed_tip or not target_tip:
+        return None
+    raw_delta: Any = raw.get("delta")
+    if not isinstance(raw_delta, dict):
+        return None
+    delta = cast(Receipt, raw_delta)
+    if delta.get("kind") != "delta":
+        return None
+    if delta.get("base") != reviewed_tip or delta.get("tip") != target_tip:
+        return None
+    if target_tree:
+        delta_tree = delta.get("tree")
+        if delta_tree is not None and (not isinstance(delta_tree, str) or delta_tree != target_tree):
+            return None
+    return delta
+
+
+def _stale_tips(raw: Receipt, record: Record | None) -> tuple[str, str, bool] | None:
+    """Return `(reviewed_tip, target_tip, is_active)` when finished lane review `raw` does not cover `record`'s
+    landed or current active tip (ignoring clean integration merges and valid marked pre-land fixes), else `None`."""
+    if record is None:
+        return None
+    kind = raw.get("kind")
+    if kind is not None and kind != "lane":
+        return None
+    target_tip, target_tree, is_active, landed_info, main = _target_tip_and_tree(record)
     if not target_tip:
         return None
+
+    # Only legacy receipts without `tip` and without `pre_land=True` may skip tip binding.
+    if "tip" not in raw and raw.get("pre_land") is not True:
+        return None
+    raw_reviewed_tip = raw.get("tip")
+    if not isinstance(raw_reviewed_tip, str) or not raw_reviewed_tip:
+        return "", target_tip, is_active
+    reviewed_tip = raw_reviewed_tip
+
+    has_tree_key = "tree" in raw
+    raw_reviewed_tree = raw.get("tree")
+    if has_tree_key and (not isinstance(raw_reviewed_tree, str) or not raw_reviewed_tree):
+        return reviewed_tip, target_tip, is_active
+    reviewed_tree = raw_reviewed_tree if isinstance(raw_reviewed_tree, str) else ""
+
     if reviewed_tip == target_tip:
+        if reviewed_tree and target_tree and reviewed_tree != target_tree:
+            return reviewed_tip, target_tip, is_active
         return None
 
-    fixed_shas = _fixed_shas_of(extract_findings(raw))
-    if not fixed_shas and reviewed_tree and target_tree and reviewed_tree == target_tree:
-        return None
-
+    has_delta = matching_delta(raw, reviewed_tip, target_tip, target_tree=target_tree) is not None
     if (
         main
         and OID_RE.fullmatch(reviewed_tip)
@@ -430,7 +525,17 @@ def _stale_tips(raw: Receipt, record: Record | None) -> tuple[str, str] | None:
         resolved_target_tree = target_tree or _git_read(
             main, "rev-parse", "--verify", "--quiet", f"{target_tip}^{{tree}}"
         )
-        integration_heads = _resolve_integration_heads(main, record, landed_info=landed_info)
+        fixed_shas = _in_lane_fixed_shas(
+            extract_findings(raw),
+            main=main,
+            reviewed_tip=reviewed_tip,
+            target_tip=target_tip,
+            landed_info=landed_info,
+            has_delta=has_delta,
+        )
+        integration_heads = _resolve_integration_heads(
+            main, record, landed_info=landed_info, target_tip=target_tip
+        )
         if _is_tip_covered(
             main,
             reviewed_tip,
@@ -441,22 +546,46 @@ def _stale_tips(raw: Receipt, record: Record | None) -> tuple[str, str] | None:
             integration_heads,
         ):
             return None
-        return reviewed_tip, target_tip
+        return reviewed_tip, target_tip, is_active
 
-    return reviewed_tip, target_tip
+    return reviewed_tip, target_tip, is_active
 
 
-def _matching_delta(raw: Receipt, reviewed_tip: str, target_tip: str) -> Receipt | None:
-    """Return `raw['delta']` when it is a delta receipt covering `reviewed_tip..target_tip`."""
-    raw_delta: Any = raw.get("delta")
-    if not isinstance(raw_delta, dict):
+def _combine_delta_verdict(
+    delta_verdict: ReviewVerdict,
+    findings: tuple[dict[str, Any], ...],
+    unmarked: tuple[dict[str, Any], ...],
+    missing: tuple[str, ...],
+    reviewer: Any,
+    *,
+    panel_required: bool,
+) -> ReviewVerdict | None:
+    """Combine a finished delta verdict with the primary review; returns `None` when delta is not finished."""
+    if not isinstance(delta_verdict, (Complete, Unmarked, PartialPanel)):
         return None
-    delta = cast(Receipt, raw_delta)
-    if delta.get("kind") != "delta":
-        return None
-    if delta.get("base") != reviewed_tip or delta.get("tip") != target_tip:
-        return None
-    return delta
+    delta_unmarked = delta_verdict.unmarked if isinstance(delta_verdict, (Unmarked, PartialPanel)) else ()
+    all_findings = findings + delta_verdict.findings
+    all_unmarked = unmarked + delta_unmarked
+    all_missing = missing + delta_verdict.missing_members
+    if all_missing and panel_required:
+        return PartialPanel(
+            missing_members=all_missing,
+            findings=all_findings,
+            unmarked=all_unmarked,
+            reviewer=reviewer,
+        )
+    if all_unmarked:
+        return Unmarked(
+            findings=all_findings,
+            unmarked=all_unmarked,
+            reviewer=reviewer,
+            missing_members=all_missing,
+        )
+    return Complete(
+        findings=all_findings,
+        reviewer=reviewer,
+        missing_members=all_missing,
+    )
 
 
 def derive_verdict(
@@ -487,45 +616,35 @@ def derive_verdict(
     missing = tuple(missing_members(raw))
     reviewer = raw.get("reviewer")
 
+    # Under panel_required=True, an incomplete primary panel is never masked by Stale or delta eligibility.
+    if missing and panel_required:
+        return PartialPanel(
+            missing_members=missing,
+            findings=findings,
+            unmarked=unmarked,
+            reviewer=reviewer,
+        )
+
+    target_tip, target_tree, _is_active, _landed_info, _main = _target_tip_and_tree(record)
+    raw_reviewed_tip = raw.get("tip")
+    reviewed_tip_str = raw_reviewed_tip if isinstance(raw_reviewed_tip, str) else ""
+    existing_delta = matching_delta(raw, reviewed_tip_str, target_tip, target_tree=target_tree)
+
     stale = _stale_tips(raw, record)
     if stale is not None:
-        reviewed_tip, landed_tip = stale
-        delta_raw = _matching_delta(raw, reviewed_tip, landed_tip)
+        reviewed_tip, landed_tip, is_active = stale
+        delta_raw = matching_delta(raw, reviewed_tip, landed_tip, target_tree=target_tree)
         delta_verdict = (
             derive_verdict(delta_raw, panel_required=panel_required)
             if delta_raw is not None
             else None
         )
-        if isinstance(delta_verdict, (Complete, Unmarked, PartialPanel, Exempt)):
-            delta_findings = delta_verdict.findings if not isinstance(delta_verdict, Exempt) else ()
-            delta_unmarked = (
-                delta_verdict.unmarked
-                if isinstance(delta_verdict, (Unmarked, PartialPanel))
-                else ()
+        if delta_verdict is not None:
+            combined = _combine_delta_verdict(
+                delta_verdict, findings, unmarked, missing, reviewer, panel_required=panel_required
             )
-            delta_missing = delta_verdict.missing_members if not isinstance(delta_verdict, Exempt) else ()
-            all_findings = findings + delta_findings
-            all_unmarked = unmarked + delta_unmarked
-            all_missing = missing + delta_missing
-            if all_missing and panel_required:
-                return PartialPanel(
-                    missing_members=all_missing,
-                    findings=all_findings,
-                    unmarked=all_unmarked,
-                    reviewer=reviewer,
-                )
-            if all_unmarked:
-                return Unmarked(
-                    findings=all_findings,
-                    unmarked=all_unmarked,
-                    reviewer=reviewer,
-                    missing_members=all_missing,
-                )
-            return Complete(
-                findings=all_findings,
-                reviewer=reviewer,
-                missing_members=all_missing,
-            )
+            if combined is not None:
+                return combined
         return Stale(
             reviewed_tip=reviewed_tip,
             landed_tip=landed_tip,
@@ -534,15 +653,28 @@ def derive_verdict(
             reviewer=reviewer,
             missing_members=missing,
             delta=delta_verdict,
+            is_active=is_active,
         )
 
-    if missing and panel_required:
-        return PartialPanel(
-            missing_members=missing,
+    # Never ignore a matching delta receipt once it exists on `raw` (e.g. post-land marks cannot drop delta findings).
+    if existing_delta is not None:
+        delta_verdict = derive_verdict(existing_delta, panel_required=panel_required)
+        combined = _combine_delta_verdict(
+            delta_verdict, findings, unmarked, missing, reviewer, panel_required=panel_required
+        )
+        if combined is not None:
+            return combined
+        return Stale(
+            reviewed_tip=reviewed_tip_str,
+            landed_tip=target_tip,
             findings=findings,
             unmarked=unmarked,
             reviewer=reviewer,
+            missing_members=missing,
+            delta=delta_verdict,
+            is_active=_is_active,
         )
+
     if unmarked:
         return Unmarked(
             findings=findings,
@@ -575,7 +707,9 @@ def review_words(label: str, verdict: ReviewVerdict, *, prog: str = "lanefather"
     if isinstance(verdict, Failed):
         return False, f"review failed: {verdict.error}; rerun {prog} review {label}"
     if isinstance(verdict, Stale):
-        span = f"reviewed {verdict.reviewed_tip[:10]}, landed {verdict.landed_tip[:10]}"
+        reviewed_short = verdict.reviewed_tip[:10] if verdict.reviewed_tip else "(missing)"
+        target_label = "current" if verdict.is_active else "landed"
+        span = f"reviewed {reviewed_short}, {target_label} {verdict.landed_tip[:10]}"
         if isinstance(verdict.delta, Running):
             return False, (
                 f"review stale ({span}); delta review running since {verdict.delta.started} "
@@ -591,6 +725,8 @@ def review_words(label: str, verdict: ReviewVerdict, *, prog: str = "lanefather"
                 f"review stale ({span}); delta review failed: {verdict.delta.error}; "
                 f"rerun {prog} review {label}"
             )
+        if verdict.is_active:
+            return False, f"review stale ({span}): run {prog} review {label} --force-reason <why>"
         return False, f"review stale ({span}): run {prog} review {label}"
     if isinstance(verdict, Unmarked):
         return False, (
@@ -676,10 +812,16 @@ class MarkApplication:
     merge: str | None = None
     reason: str | None = None
     at: str = ""
+    post_land: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         if self.kind == "fixed":
-            return {"kind": "fixed", "merge": self.merge, "at": self.at}
+            return {
+                "kind": "fixed",
+                "merge": self.merge,
+                "at": self.at,
+                **({"post_land": True} if self.post_land else {}),
+            }
         return {"kind": "rejected", "reason": self.reason, "at": self.at}
 
 
@@ -721,6 +863,10 @@ def _resolve_fix_merge(
         landed_info = cast(dict[str, Any], raw_landed) if isinstance(raw_landed, dict) else {}
         landed_merge = landed_info.get("merge")
         if isinstance(landed_merge, str) and landed_merge:
+            if marking_lane_id is not None and value == marking_lane_id:
+                raise LaneError(
+                    f"fixed:{value}: lane {value} is already landed; give the follow-up fix lane or commit"
+                )
             return landed_merge
         if lifecycle.active(target) and (marking_lane_id is None or value == marking_lane_id):
             target_rev = ReviewRecord.load(store, value, record=target)
@@ -792,6 +938,21 @@ class ReviewRecord:
             return None
         raw_delta: Any = self.raw.get("delta")
         return cast(Receipt, raw_delta) if isinstance(raw_delta, dict) else None
+
+    def matching_delta(self, record: Record | None = None) -> Receipt | None:
+        """The `delta` sub-receipt when it matches this review's tip and `record`'s target tip/tree."""
+        if self.raw is None:
+            return None
+        reviewed_tip = self.reviewed_tip
+        if not reviewed_tip:
+            return None
+        if record is None:
+            delta = self.delta_raw
+            if delta is None or delta.get("kind") != "delta" or delta.get("base") != reviewed_tip:
+                return None
+            return delta
+        target_tip, target_tree, _is_active, _landed_info, _main = _target_tip_and_tree(record)
+        return matching_delta(self.raw, reviewed_tip, target_tip, target_tree=target_tree)
 
     @property
     def findings(self) -> tuple[dict[str, Any], ...]:
@@ -1271,10 +1432,21 @@ class ReviewRecord:
         def _build(existing: Receipt | None) -> Receipt:
             assert existing is not None
             prev_delta: Any = existing.get("delta")
-            if isinstance(prev_delta, dict) and receipt_phase(cast(Receipt, prev_delta)) is ReceiptPhase.RUNNING:
-                raise LaneError(
-                    f"delta review {label}: already running (pid {cast(Receipt, prev_delta).get('pid')})"
-                )
+            if isinstance(prev_delta, dict):
+                prev_dict = cast(Receipt, prev_delta)
+                prev_phase = receipt_phase(prev_dict)
+                if prev_phase is ReceiptPhase.RUNNING:
+                    raise LaneError(
+                        f"delta review {label}: already running (pid {prev_dict.get('pid')})"
+                    )
+                if (
+                    prev_phase is ReceiptPhase.FINISHED
+                    and prev_dict.get("base") == base
+                    and prev_dict.get("tip") == tip
+                ):
+                    raise LaneError(
+                        f"delta review {label}: already finished for {base[:10]}..{tip[:10]}"
+                    )
             log.parent.mkdir(parents=True, exist_ok=True)
             with open(log, "w", encoding="utf-8") as out:
                 child = subprocess.Popen(
@@ -1438,24 +1610,38 @@ class ReviewRecord:
             def _build(existing: Receipt | None) -> Receipt:
                 assert existing is not None
                 findings_copy = [dict(f) for f in extract_findings(existing)]
-                raw_delta: Any = existing.get("delta")
+                target_tip, target_tree, _is_active, landed_info, _main = _target_tip_and_tree(record)
+                raw_reviewed_tip = existing.get("tip")
+                reviewed_tip_str = raw_reviewed_tip if isinstance(raw_reviewed_tip, str) else ""
+                matched_delta = matching_delta(existing, reviewed_tip_str, target_tip, target_tree=target_tree)
                 has_finished_delta = (
-                    isinstance(raw_delta, dict)
-                    and cast(Receipt, raw_delta).get("status") == ReceiptPhase.FINISHED.value
+                    matched_delta is not None
+                    and matched_delta.get("status") == ReceiptPhase.FINISHED.value
                 )
-                delta_copy = dict(cast(Receipt, raw_delta)) if has_finished_delta else None
+                delta_copy = dict(matched_delta) if has_finished_delta and matched_delta is not None else None
                 delta_findings_copy = (
                     [dict(f) for f in extract_findings(delta_copy)] if delta_copy is not None else []
                 )
-                # Map finding number -> (finding_dict, is_delta)
-                by_number: dict[int, tuple[dict[str, Any], bool]] = {
-                    int(f["n"]): (f, False) for f in findings_copy if "n" in f
-                }
+                # Map finding number -> (finding_dict, is_delta); validate strict ints and refuse collisions.
+                by_number: dict[int, tuple[dict[str, Any], bool]] = {}
+                for f in findings_copy:
+                    raw_n = f.get("n")
+                    if isinstance(raw_n, int) and not isinstance(raw_n, bool):
+                        by_number[raw_n] = (f, False)
                 for f in delta_findings_copy:
-                    if "n" in f:
-                        n_val = int(f["n"])
-                        if n_val not in by_number or by_number[n_val][0].get("mark"):
-                            by_number[n_val] = (f, True)
+                    raw_n = f.get("n")
+                    if isinstance(raw_n, int) and not isinstance(raw_n, bool):
+                        if raw_n in by_number:
+                            raise LaneError(
+                                f"review {lane_id}: delta finding #{raw_n} collides with primary finding #{raw_n}"
+                            )
+                        by_number[raw_n] = (f, True)
+                is_landed = lifecycle.landed(record)
+                landed_merge = (
+                    landed_info["merge"]
+                    if landed_info is not None and isinstance(landed_info.get("merge"), str) and landed_info["merge"]
+                    else ""
+                )
                 for number, value in raw_marks:
                     found_entry = by_number.get(int(number)) if number.isdigit() else None
                     if found_entry is None:
@@ -1466,41 +1652,73 @@ class ReviewRecord:
                     detail = detail.strip()
                     if kind == "fixed":
                         fix_sha = _resolve_fix_merge(store, common, detail, marking_lane_id=lane_id)
-                        reviewed_sha = (
-                            ""
-                            if is_delta_finding
-                            else (
+                        main = main_checkout(common)
+                        if is_delta_finding:
+                            delta_tip = (
+                                delta_copy["tip"]
+                                if delta_copy is not None and isinstance(delta_copy.get("tip"), str)
+                                else ""
+                            )
+                            refs = [r for r in (delta_tip, landed_merge) if r and OID_RE.fullmatch(r)]
+                            for ref_sha in dict.fromkeys(refs):
+                                if fix_sha == ref_sha or not git_ok(
+                                    main, "merge-base", "--is-ancestor", ref_sha, fix_sha
+                                ):
+                                    raise LaneError(
+                                        f"--mark {number} fixed:{detail}: commit {fix_sha[:10]} does not advance past "
+                                        f"the delta-reviewed commit {ref_sha[:10]}; commit the fix on top of it first"
+                                    )
+                                ref_tree = gitops.git(
+                                    main, "rev-parse", "--verify", "--quiet", f"{ref_sha}^{{tree}}", check=False
+                                )
+                                fix_tree = gitops.git(
+                                    main, "rev-parse", "--verify", "--quiet", f"{fix_sha}^{{tree}}", check=False
+                                )
+                                if ref_tree and fix_tree == ref_tree:
+                                    raise LaneError(
+                                        f"--mark {number} fixed:{detail}: commit {fix_sha[:10]} has the same tree as "
+                                        f"the delta-reviewed commit {ref_sha[:10]}; commit a real fix first"
+                                    )
+                        else:
+                            if is_landed and (
+                                (target_tip and fix_sha == target_tip)
+                                or (landed_merge and fix_sha == landed_merge)
+                            ):
+                                raise LaneError(
+                                    f"--mark {number} fixed:{detail}: commit {fix_sha[:10]} is the landed lane "
+                                    "itself; give the follow-up fix commit or lane"
+                                )
+                            reviewed_sha = (
                                 pre_land.reviewed_sha
                                 if pre_land is not None
                                 else (loaded.reviewed_tip if loaded.is_pre_land else "")
                             )
-                        )
-                        if reviewed_sha:
-                            main = main_checkout(common)
-                            if fix_sha == reviewed_sha or not git_ok(
-                                main, "merge-base", "--is-ancestor", reviewed_sha, fix_sha
-                            ):
-                                raise LaneError(
-                                    f"--mark {number} fixed:{detail}: commit {fix_sha[:10]} does not advance past "
-                                    f"the reviewed commit {reviewed_sha[:10]}; commit the fix on top of it first"
+                            if reviewed_sha:
+                                if fix_sha == reviewed_sha or not git_ok(
+                                    main, "merge-base", "--is-ancestor", reviewed_sha, fix_sha
+                                ):
+                                    raise LaneError(
+                                        f"--mark {number} fixed:{detail}: commit {fix_sha[:10]} does not advance past "
+                                        f"the reviewed commit {reviewed_sha[:10]}; commit the fix on top of it first"
+                                    )
+                                reviewed_tree = gitops.git(
+                                    main, "rev-parse", "--verify", "--quiet", f"{reviewed_sha}^{{tree}}", check=False
                                 )
-                            reviewed_tree = gitops.git(
-                                main, "rev-parse", "--verify", "--quiet", f"{reviewed_sha}^{{tree}}", check=False
-                            )
-                            fix_tree = gitops.git(
-                                main, "rev-parse", "--verify", "--quiet", f"{fix_sha}^{{tree}}", check=False
-                            )
-                            if reviewed_tree and fix_tree == reviewed_tree:
-                                raise LaneError(
-                                    f"--mark {number} fixed:{detail}: commit {fix_sha[:10]} has the same tree as "
-                                    f"the reviewed commit {reviewed_sha[:10]}; commit a real fix first"
+                                fix_tree = gitops.git(
+                                    main, "rev-parse", "--verify", "--quiet", f"{fix_sha}^{{tree}}", check=False
                                 )
+                                if reviewed_tree and fix_tree == reviewed_tree:
+                                    raise LaneError(
+                                        f"--mark {number} fixed:{detail}: commit {fix_sha[:10]} has the same tree as "
+                                        f"the reviewed commit {reviewed_sha[:10]}; commit a real fix first"
+                                    )
                         applied.append(
                             MarkApplication(
                                 finding_n=int(finding["n"]),
                                 kind="fixed",
                                 merge=fix_sha,
                                 at=journal.now(),
+                                post_land=is_landed,
                             )
                         )
                     elif kind == "rejected":

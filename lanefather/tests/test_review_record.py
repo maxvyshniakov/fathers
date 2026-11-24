@@ -540,6 +540,106 @@ class StaleAndDeltaReviewRecordTests(unittest.TestCase):
         self.assertIsInstance(marked.review.verdict, Complete)
         self.assertTrue(marked.review.allows_promote)
 
+    def test_non_ancestor_stale_start_lane_review_does_not_crash(self) -> None:
+        # P2 #7: start_lane_review with force_fresh=False on non-ancestor Stale returns a clean message.
+        rec: state.Record = {
+            "id": "a",
+            "ticket": "42",
+            "status": "landed",
+            "common_dir": "/nonexistent/repo/.git",
+            "created": "2026-11-17T00:00:00Z",
+            "landed": {"merge": "m2", "tip": "tip-two", "tree": "tree-two"},
+        }
+        self.store.save(rec)
+        state.write_json(
+            self.store.receipt_path("a", "review"),
+            {
+                "version": 1,
+                "label": "a",
+                "kind": "lane",
+                "lane": "a",
+                "lane_created": rec["created"],
+                "status": "finished",
+                "tip": "tip-one",
+                "tree": "tree-one",
+                "reviewer": "sol",
+                "findings": [],
+            },
+        )
+        msg = review.start_lane_review(self.store, rec, force_fresh=False)
+        self.assertIn("review stale (cannot delta)", msg)
+        self.assertIn("--force-reason", msg)
+
+    def test_partial_panel_takes_precedence_over_stale_and_corrupt_tip_fails_closed(self) -> None:
+        # P2 #6 + P2 #8 + P2 #9: PartialPanel is not masked by Stale; corrupt tip fails closed; exempt delta rejected.
+        rec: state.Record = {
+            "id": "p",
+            "status": "landed",
+            "common_dir": "/nonexistent/repo/.git",
+            "created": "2026-11-17T00:00:00Z",
+            "landed": {"merge": "m2", "tip": "tip-two", "tree": "tree-two"},
+        }
+        panel_store = state.Store(
+            config.Config(project="Alpha", review_panel_required=True), directory=self.tmp / "state"
+        )
+        panel_store.save(rec)
+        state.write_json(
+            panel_store.receipt_path("p", "review"),
+            {
+                "version": 1,
+                "label": "p",
+                "kind": "lane",
+                "lane": "p",
+                "lane_created": rec["created"],
+                "status": "finished",
+                "tip": "tip-one",
+                "tree": "tree-one",
+                "reviewer": "sol",
+                "panel": [{"member": "opus", "status": "failed", "error": "boom"}],
+                "findings": [],
+            },
+        )
+        loaded = ReviewRecord.load(panel_store, "p", record=rec)
+        self.assertIsInstance(loaded.verdict, PartialPanel)
+
+        # Corrupt/empty tip fails closed as Stale; exempt delta does NOT clear Stale.
+        corrupt_verdict = review_record.derive_verdict(
+            {
+                "status": "finished",
+                "kind": "lane",
+                "tip": "",
+                "tree": "tree-one",
+                "findings": [],
+                "delta": {"kind": "delta", "base": "", "tip": "tip-two", "status": "exempt", "exempt": "fake"},
+            },
+            record=rec,
+        )
+        self.assertIsInstance(corrupt_verdict, review_record.Stale)
+
+        # Delta with status=exempt on matching base/tip stays Stale.
+        exempt_delta = review_record.derive_verdict(
+            {
+                "status": "finished",
+                "kind": "lane",
+                "tip": "tip-one",
+                "tree": "tree-one",
+                "findings": [],
+                "delta": {"kind": "delta", "base": "tip-one", "tip": "tip-two", "status": "exempt", "exempt": "fake"},
+            },
+            record=rec,
+        )
+        self.assertIsInstance(exempt_delta, review_record.Stale)
+
+    def test_status_latest_logs_recognizes_delta_review_log(self) -> None:
+        from lanefather import status
+
+        logs_dir = self.tmp / "state" / "logs"
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        delta_log = logs_dir / "review-a-delta-20261124T100000.log"
+        delta_log.write_text("delta\n")
+        found = status.latest_logs(self.tmp / "state", {"a"})
+        self.assertEqual(found.get("a", {}).get("review"), str(delta_log))
+
 
 if __name__ == "__main__":
     unittest.main()

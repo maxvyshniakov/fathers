@@ -585,6 +585,7 @@ class LaneView:
     review_pre_land: bool = False
     review_tip: str | None = None
     review_pre_land_current: bool = True
+    review_has_delta: bool = False
 
     def _check_status_word(self, *, default: str) -> str:
         if isinstance(self.check, NoReceipt):
@@ -631,11 +632,11 @@ class LaneView:
 
     def pre_land_reviewed_text(self) -> str | None:
         """Short summary for a lane with a completed pre-land review (fathers#242, fathers#53)."""
-        if self.review_pre_land and self.review_tip:
+        if self.review_pre_land and self.review_tip and not self.review_has_delta:
             if isinstance(self.review, review_record.Complete):
                 return f"reviewed before land at {self.review_tip[:10]}"
             if self.is_active and isinstance(self.review, review_record.Stale):
-                return f"review stale; reviewed before land at {self.review_tip[:10]} (stale)"
+                return f"reviewed before land at {self.review_tip[:10]} (stale)"
         return None
 
     def list_receipt_text(self) -> str:
@@ -856,4 +857,5 @@ def lane_view(
         review_pre_land=rev.is_pre_land,
         review_tip=rev.reviewed_tip or None,
         review_pre_land_current=pre_land_current,
+        review_has_delta=rev.matching_delta(record) is not None,
     )

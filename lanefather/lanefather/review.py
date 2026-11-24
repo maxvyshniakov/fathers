@@ -356,17 +356,22 @@ def _format_finding_lines(findings: Iterable[dict[str, Any]]) -> list[str]:
         where = f"{f['file']}:{f['line']}" if f.get("file") and f.get("line") else f.get("file") or "-"
         raw_mark: Any = f.get("mark")
         mark = cast(dict[str, Any], raw_mark) if isinstance(raw_mark, dict) else None
+        raw_merge = mark.get("merge") if mark is not None else None
+        merge_short = raw_merge[:10] if isinstance(raw_merge, str) else ""
         marked = (
             ""
             if not mark
-            else f"  [fixed: {str(mark['merge'])[:10]}]"
+            else f"  [fixed: {merge_short}]"
             if mark.get("kind") == "fixed"
             else f"  [rejected: {mark.get('reason')}]"
         )
         category = f" [{f['category']}]" if f.get("category") else ""
         by = f" ({f['reviewer']})" if f.get("reviewer") else ""
-        lines.append(f"  {f['n']}. {f['severity']}{category} {where} {f['title']}{by}{marked}")
-        lines += [f"     {line}" for line in f.get("detail", "").splitlines()[:6]]
+        severity = f["severity"] if isinstance(f.get("severity"), str) else "?"
+        lines.append(f"  {f.get('n', '?')}. {severity}{category} {where} {f.get('title', '')}{by}{marked}")
+        raw_detail = f.get("detail")
+        if isinstance(raw_detail, str) and raw_detail:
+            lines += [f"     {line}" for line in raw_detail.splitlines()[:6]]
     return lines
 
 
@@ -376,21 +381,34 @@ def _delta_review_lines(
     *,
     prog: str,
 ) -> list[str]:
-    base = str(delta_raw.get("base") or "")[:10]
-    tip = str(delta_raw.get("tip") or "")[:10]
+    raw_base = delta_raw.get("base")
+    raw_tip = delta_raw.get("tip")
+    base = raw_base[:10] if isinstance(raw_base, str) else ""
+    tip = raw_tip[:10] if isinstance(raw_tip, str) else ""
     delta_verdict = review_record.derive_verdict(delta_raw)
-    if isinstance(delta_verdict, (review_record.Running, review_record.Died)):
+    if isinstance(delta_verdict, review_record.Running):
         return [
             f"Delta review of {label} ({base}...{tip}): running since {delta_verdict.started} "
             f"(pid {delta_verdict.pid}, log {delta_verdict.log})"
         ]
+    if isinstance(delta_verdict, review_record.Died):
+        return [
+            f"Delta review of {label} ({base}...{tip}): died "
+            f"(pid {delta_verdict.pid}, log {delta_verdict.log}): rerun {prog} review {label}"
+        ]
     if isinstance(delta_verdict, review_record.Failed):
         return [f"Delta review of {label} ({base}...{tip}): failed: {delta_verdict.error}"]
     delta_findings = review_record.extract_findings(delta_raw)
+    raw_seconds = delta_raw.get("seconds")
+    seconds_val = (
+        float(raw_seconds)
+        if isinstance(raw_seconds, (int, float)) and not isinstance(raw_seconds, bool)
+        else 0.0
+    )
     head = (
         f"Delta review of {label} ({base}...{tip}) by "
         f"{delta_raw.get('model')} {delta_raw.get('effort')}"
-        + f", {delta_raw.get('seconds', 0):.0f} s: {len(delta_findings)} findings  ({delta_raw.get('output')})"
+        + f", {seconds_val:.0f} s: {len(delta_findings)} findings  ({delta_raw.get('output')})"
     )
     return [head, *_format_finding_lines(delta_findings)]
 
@@ -448,7 +466,7 @@ def review_lines(
             + (f"; note: {entry['note']}" if entry.get("note") else "")
         )
     lines += _format_finding_lines(primary_findings)
-    delta_raw = rev.delta_raw
+    delta_raw = rev.matching_delta(record)
     if delta_raw is not None:
         lines += _delta_review_lines(label, delta_raw, prog=cmd_prog)
     if isinstance(verdict, review_record.Stale):
@@ -696,12 +714,20 @@ def perform_delta_review(
         )
     delta_raw = completed.delta_raw or {}
     delta_findings = review_record.extract_findings(delta_raw)
-    counts = " ".join(f"{s.lower()}={sum(1 for f in delta_findings if f['severity'] == s)}" for s in SEVERITIES)
+    counts = " ".join(
+        f"{s.lower()}={sum(1 for f in delta_findings if f.get('severity') == s)}" for s in SEVERITIES
+    )
+    raw_delta_seconds = delta_raw.get("seconds")
+    delta_seconds = (
+        float(raw_delta_seconds)
+        if isinstance(raw_delta_seconds, (int, float)) and not isinstance(raw_delta_seconds, bool)
+        else seconds
+    )
     journal.ledger(
         f"review {lane_id} delta {outcome_status} reviewer={delta_raw.get('reviewer', '-')} "
         f"model={delta_raw.get('model', '-')} effort={delta_raw.get('effort', '-')} "
         f"left={'-' if delta_raw.get('codex_left') is None else delta_raw['codex_left']} "
-        f"seconds={delta_raw.get('seconds', seconds):.0f} findings={len(delta_findings)} {counts}"
+        f"seconds={delta_seconds:.0f} findings={len(delta_findings)} {counts}"
         + (f" fallback: {delta_raw['fallback']}" if delta_raw.get("fallback") else ""),
         kind="review.finished",
         level="info" if outcome_status == "finished" else "warn",
@@ -717,9 +743,11 @@ def perform_delta_review(
             "model": delta_raw.get("model"),
             "effort": delta_raw.get("effort"),
             "options": delta_raw.get("options"),
-            "seconds": delta_raw.get("seconds", seconds),
+            "seconds": delta_seconds,
             "findings": len(delta_findings),
-            "severities": {s.lower(): sum(1 for f in delta_findings if f["severity"] == s) for s in SEVERITIES},
+            "severities": {
+                s.lower(): sum(1 for f in delta_findings if f.get("severity") == s) for s in SEVERITIES
+            },
             "fallback": delta_raw.get("fallback"),
             "error": delta_raw.get("error"),
         },
@@ -734,25 +762,26 @@ def start_lane_review(store: state.Store, record: Record, *, force_fresh: bool =
     lane_id = record["id"]
     rev = review_record.ReviewRecord.load(store, lane_id, record=record)
     verdict = rev.verdict
-    if isinstance(verdict, review_record.Stale) and _can_delta_review(
-        record, verdict.reviewed_tip, verdict.landed_tip
-    ):
-        if isinstance(verdict.delta, review_record.Running):
-            return f"delta review kept: {rev.summary()[1]}"
-        if review_start_manual(store.project):
+    if isinstance(verdict, review_record.Stale):
+        if _can_delta_review(record, verdict.reviewed_tip, verdict.landed_tip):
+            if isinstance(verdict.delta, review_record.Running):
+                return f"delta review kept: {rev.summary()[1]}"
+            if review_start_manual(store.project):
+                return (
+                    f"delta review not started ({review_start_source(store.project)}): "
+                    f"run {store.prog} review {lane_id}"
+                )
+            started = spawn_delta_review(store, record, verdict.reviewed_tip, verdict.landed_tip)
+            delta_raw = started.delta_raw or {}
             return (
-                f"delta review not started ({review_start_source(store.project)}): "
-                f"run {store.prog} review {lane_id}"
+                f"delta review started in the background "
+                f"(pid {delta_raw.get('pid')}, log {delta_raw.get('log')})"
             )
-        started = spawn_delta_review(store, record, verdict.reviewed_tip, verdict.landed_tip)
-        delta_raw = started.delta_raw or {}
-        return (
-            f"delta review started in the background "
-            f"(pid {delta_raw.get('pid')}, log {delta_raw.get('log')})"
-        )
-    if force_fresh and rev.exists and not isinstance(
-        verdict, (review_record.Exempt, review_record.Unmarked, review_record.Complete)
-    ):
+        if not force_fresh:
+            return (
+                f"review stale (cannot delta): run {store.prog} review {lane_id} --force-reason <why>"
+            )
+    if force_fresh and rev.exists and not isinstance(verdict, (review_record.Exempt, review_record.Unmarked)):
         review_record.ReviewRecord.clear_stale(store, lane_id, lane_created=state.lane_created_of(record))
         rev = review_record.ReviewRecord.load(store, lane_id, record=record)
         verdict = rev.verdict
@@ -1363,7 +1392,7 @@ def pre_land_review_problem(
         return f"lane {lane_id}'s pre-land review is still running ({rev.summary(prog=prog)[1]})"
     if isinstance(verdict, review_record.PartialPanel):
         return f"lane {lane_id}'s pre-land review is incomplete ({rev.summary(prog=prog)[1]})"
-    if isinstance(verdict, review_record.Unmarked):
+    if isinstance(verdict, (review_record.Unmarked, review_record.Stale)):
         blocks = store.project.review_blocks
         blocking = [f for f in verdict.unmarked if f.get("severity", "P2") in blocks]
         if blocking:
@@ -1413,7 +1442,15 @@ def pre_land_review_problem(
             f"{reviewed_tip[:10]} despite findings marked fixed; commit the fix or rerun "
             f"{prog} review {lane_id} --force-reason <why>"
         )
-    if not fixed_shas and (tip == reviewed_tip or (reviewed_tree and tree == reviewed_tree)):
+    if not fixed_shas and (
+        tip == reviewed_tip
+        or (
+            review_record.OID_RE.fullmatch(reviewed_tree)
+            and review_record.OID_RE.fullmatch(tree)
+            and tree == reviewed_tree
+            and not git(main, "rev-list", "--merges", "-n", "1", f"{reviewed_tip}..{tip}", check=False)
+        )
+    ):
         return None
     int_head = git(integration, "rev-parse", "--verify", "--quiet", "HEAD", check=False)
     visited: set[str] = set()
