@@ -16,7 +16,7 @@ import json
 import math
 import os
 import sys
-from typing import Any, Callable
+from typing import Any, Callable, cast
 
 from . import config as _config
 
@@ -69,8 +69,12 @@ def _order_options() -> tuple[OptionSpec, ...]:
         elif knob == "load_gate":
             opts.append(OptionSpec((flag,), metavar="X", help="hold grants beside running leases at X times the "
                                                               "cores of sustained unleased load (0: off)"))
+        elif knob == "memory_budget_mb":
+            opts.append(OptionSpec((flag,), metavar="MB", help="explicit expected-peak memory budget in MB (0: use memory_share only)"))
         else:
             opts.append(OptionSpec((flag,), metavar="N", help=f"set {knob.replace('_', ' ')}"))
+    opts.append(OptionSpec(("--group-cap",), metavar="GROUP=N|off", multi=True,
+                           help="cap concurrent leases in GROUP at N (>= 1), or off/0 to remove (repeatable)"))
     return tuple(opts)
 
 
@@ -804,6 +808,12 @@ def available_command(values: dict[str, Any], positionals: list[str], after_dash
 def order_line(found: dict[str, Any]) -> str:
     def ages(key: str) -> str:
         return f"after {found[key]:g} s" if found[key] else "never"
+    extra = ""
+    if found.get("memory_budget_mb"):
+        extra += f"; memory budget {found['memory_budget_mb']:g} MB"
+    caps = found.get("group_caps")
+    if isinstance(caps, dict) and caps:
+        extra += "; group caps " + ", ".join(f"{k}={v}" for k, v in sorted(cast(dict[str, int], caps).items()))
     return (f"{found['order']}: safety {found['safety']:g}, limit {found['limit']:g} s, fallback "
             f"{found['fallback']:g} s, overrun {found['overrun']:g}; interactive {found['interactive']:g} s ahead, "
             f"batch {found['batch']:g} s behind, yield after {found['yield_after']:g} s; idle below "
@@ -811,7 +821,7 @@ def order_line(found: dict[str, Any]) -> str:
             f"{ages('aging_normal')}; warn after {found['warn_wait']:g} s waiting; a blocked head gives way "
             f"{ages('reservation_timeout')} past its reserved start; memory pressure warning admits "
             f"{'one 1-slot lease at a time' if found['warning_admits'] >= 1 else 'nothing'}; CPU load holds grants "
-            f"beside running leases {load_gate(found)} "
+            f"beside running leases {load_gate(found)}{extra} "
             f"({'saved' if found['saved'] else 'default'})")
 
 
@@ -851,10 +861,31 @@ def order_command(values: dict[str, Any], positionals: list[str], after_dash: li
         except ValueError:
             kind = "seconds, or a duration such as 30m or 1.5h" if knob in _config.DURATION_KNOBS else "a number"
             raise UsageError(f"{flag} takes {kind}, not {raw!r}", "order") from None
+    merge_group_caps = False
+    if "--group-cap" in values:
+        cap_patch: dict[str, int | None] = {}
+        for raw_item in values["--group-cap"]:
+            text = str(raw_item)
+            if "=" not in text:
+                raise UsageError(f"--group-cap takes GROUP=N or GROUP=off, not {text!r}", "order")
+            group, _, raw_val = text.partition("=")
+            group = group.strip()
+            raw_val = raw_val.strip().lower()
+            if not _config.GROUP_NAME.fullmatch(group):
+                raise UsageError(f"--group-cap group must be a lowercase identifier, not {group!r}", "order")
+            if raw_val in ("0", "off", "none"):
+                cap_patch[group] = None
+            elif raw_val.isascii() and raw_val.isdigit() and int(raw_val) >= 1:
+                cap_patch[group] = int(raw_val)
+            else:
+                raise UsageError(f"--group-cap {group} takes an integer >= 1 or off, not {raw_val!r}", "order")
+        changes["group_caps"] = cap_patch
+        merge_group_caps = True
     if reset and changes:
         raise UsageError("order reset takes nothing else", "order")
     if changes or reset:
-        _settings.configure({"order.json": None if reset else changes}, granted=_leases.grant_now)
+        _settings.configure({"order.json": None if reset else changes}, granted=_leases.grant_now,
+                            merge_group_caps=merge_group_caps)
     saved = _settings.order_settings(directory, environment=False)
     moved = _settings.order_extension_keys(saved)
     if (changes or reset) and moved:

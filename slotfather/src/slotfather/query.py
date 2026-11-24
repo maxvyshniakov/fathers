@@ -5,7 +5,7 @@ import contextlib
 import math
 import time
 from pathlib import Path
-from typing import Any, Callable, Iterator, NamedTuple
+from typing import Any, Callable, Iterator, NamedTuple, cast
 
 from . import config as _config
 from . import entry as _entry
@@ -291,7 +291,7 @@ def unknown_item(path: Path, entry: dict[str, Any], table: dict[int, tuple[int, 
                 unknown=_entry.unknown(entry), holds=unknown_holds(entry, table),
                 warning=unknown_text(path, entry, table),
                 effective_priority=item["priority"], aged=False, reprioritized=None, est_start=None, head=False,
-                reserved=None, waited=None, long_wait=False, memory_wait=None, load_wait=None)
+                reserved=None, waited=None, long_wait=False, memory_wait=None, load_wait=None, group_wait=None)
     return item
 
 
@@ -318,6 +318,8 @@ def waiter_tags(entry: dict[str, Any], expected: dict[str, Any] | None) -> str:
         tags += f' memory-wait="{expected["memory_wait"]}"'
     if expected.get("load_wait"):  # fathers#184
         tags += f' load-wait="{expected["load_wait"]}"'
+    if expected.get("group_wait"):  # fathers#251
+        tags += f' group-wait="{expected["group_wait"]}"'
     if expected["long_wait"]:
         tags += f" long-wait={_config.duration(expected['waited'])}"
     if expected.get("gave_way"):  # fathers#160
@@ -371,6 +373,7 @@ def long_wait_report(directory: Path, path: Path) -> tuple[str, _events.WaitingL
     served = expect["priority"] + (f", aged from {_entry.priority_of(mine)}" if expect["aged"] else "")
     memory = f"; {expect['memory_wait']}" if expect.get("memory_wait") else ""
     memory += f"; {expect['load_wait']}" if expect.get("load_wait") else ""
+    memory += f"; {expect['group_wait']}" if expect.get("group_wait") else ""
     line = (f"{mine.get('label')} (pid {mine.get('pid')}, {served}) waiting {_config.duration(expect['waited'] or 0)} "
             f"behind {' and '.join(behind) or 'nothing'}: est. start {when}{memory}{hint}")
     return line, {"waited": round(expect["waited"] or 0), "est_start": iso(start),
@@ -489,7 +492,8 @@ def status_json(
                     reserved=iso(found["reserved"]) if found else None,
                     waited=None if not found or found["waited"] is None else round(found["waited"]),
                     long_wait=bool(found and found["long_wait"]), memory_wait=found["memory_wait"] if found else None,
-                    load_wait=found.get("load_wait") if found else None)
+                    load_wait=found.get("load_wait") if found else None,
+                    group_wait=found.get("group_wait") if found else None)
         if found and found.get("blocked_by"):  # fathers#160: added only where a head is blocked
             item.update(blocked_by=found["blocked_by"], idle_slots=found["idle"])
         if found and found.get("gave_way"):
@@ -527,6 +531,9 @@ def status_json(
         found["query"] = {"pid": pid, "start": table[pid][1] if pid in table else None}
         if membership.unknown:  # its environment cannot be read: in or out of the leases outside its tree is unknown
             found["lease_unknown"] = membership.unknown
+    group_caps = settings.get("group_caps")
+    if isinstance(group_caps, dict) and group_caps:
+        found["group_caps"] = dict(cast(dict[str, int], group_caps))
     return {"v": 2, "slots": slots, "held": held, "free": max(0, slots - held), "draining": draining(held, slots),
             "entries": entries_found,
             "legacy": legacy, **found}
@@ -578,7 +585,24 @@ def advise(maximum: int | None = None, exclusive: bool = False, cores_now: int |
     block = adm.advise_block(label, command)
     found = size(maximum or slots, machine, slots, averages, min(held, slots), block.waiting, exclusive)
     found["run_estimate"] = block.run_estimate
-    found.update(capacity_mode=basis["mode"], gib_per_slot=basis["gib_per_slot"], memory_gib=basis["memory_gib"],
+    ram_gib = basis["memory_gib"]
+    if ram_gib is None:
+        measured_gib = _platform.memory_gib()
+        ram_gib = None if measured_gib is None else round(measured_gib, 1)
+    gib_per_slot = basis["gib_per_slot"]
+    gib_per_slot_source: str | None = "configured" if gib_per_slot is not None else None
+    if gib_per_slot is None and ram_gib is not None and slots > 0:
+        gib_per_slot = round(ram_gib / slots, 2)
+        gib_per_slot_source = "derived"
+    recommended_gib: float | None = None
+    with contextlib.suppress(OSError, ValueError, TypeError):
+        from . import estimates as _estimates
+        recommended_gib = _estimates.cached_estimates(found_look.directory).recommended_gib_per_slot()
+    found.update(capacity_mode=basis["mode"], gib_per_slot=gib_per_slot,
+                 gib_per_slot_source=gib_per_slot_source, memory_gib=ram_gib,
+                 recommended_gib_per_slot=recommended_gib,
+                 memory_budget_mb=block.memory_budget_mb, memory_expected_mb=block.memory_expected_mb,
                  memory_short=block.memory_short, memory_level=block.memory_level,
-                 load_block=block.load_block, memory_budget_block=block.memory_budget_block)
+                 load_block=block.load_block, memory_budget_block=block.memory_budget_block,
+                 group_cap_block=block.group_cap_block)
     return found

@@ -49,6 +49,20 @@ line's `count` is the slots it took. `advise [--cores C|auto]` adds `weight`:
 
 The dashboard block's `advice` has no `weight`.
 
+**Advice memory and group fields** (fathers#251). `slotfather advise [--json]` (`contract.AdviseReply`, `v: 1`) also
+reports:
+
+- `gib_per_slot`, `gib_per_slot_source`, `memory_gib`: GiB per slot (`"configured"` in `automatic`/`memory`/`lower`
+  modes, `"derived"` as `memory_gib / total` in `fixed` mode when RAM is known, or `null` when RAM is unknown) and host
+  RAM in GiB.
+- `recommended_gib_per_slot`: 90th-percentile per-slot peak RSS (`rss_peak_mb / count`) across labels from history,
+  rounded up to 0.5 GiB (at least 1.0 GiB), or `null` without recorded peaks.
+- `memory_budget_mb`, `memory_expected_mb`, `memory_budget_block`: effective expected-peak memory budget in MB (lower
+  of `memory_share × RAM` and `memory_budget_mb`), currently held expected peak memory in MB, and why the request would
+  wait for the budget (or `null`).
+- `group_cap_block`: why a per-group concurrency cap would hold the request back (probed by `label` and `cmd`), or
+  `null`.
+
 **Lease metadata.**
 
 - Set via repeatable `run --meta key=value` (library: `acquire(..., meta={...})`) for caller context (`lane`, `phase`, `model`, `session`, and custom tags).
@@ -69,6 +83,7 @@ Top-level fields:
 - `legacy`: leases still held in earlier queues during migration.
 - `query` (`--pid PID` only): `{"pid", "start"}` where `start` is `ps -o lstart=` (`null` if not running), so a caller can check against PID reuse.
 - `lease_unknown` (`--pid PID` only, when unreadable): `[PID]` when the process's environment cannot be read (another user's process or an Apple platform binary on macOS).
+- `group_caps` (only when configured, fathers#251): active per-group concurrency caps (`{"browser": 3}`).
 
 Per-entry fields:
 
@@ -80,7 +95,7 @@ Per-entry fields:
 - `priority`, `ticket`, `effective_priority`, `aged`, `reprioritized`: requested class and ticket, served class, whether ageing promoted it, and original class before `reprioritize` (`null` if unchanged).
 - `yieldable`, `yields`, `yield_asked`, `position`, `lock`: cooperative-yield settings, yield count, standing yield request, queue position, and lock path while waiting on `slotfather lock` (only when waiting on a lock).
 - `idle_since`: epoch seconds since a held lease became idle, or `null` (see Idle leases in scheduling).
-- `est_start`, `head`, `reserved`, `waited`, `long_wait`, `memory_wait`, `load_wait`: waiter's expected start, head flag, reserved start (UTC or `null`), wait duration in seconds, whether it passed `warn_wait`, why memory holds admission back, and why sustained CPU load holds it back beside running leases (fathers#184; each `null` otherwise).
+- `est_start`, `head`, `reserved`, `waited`, `long_wait`, `memory_wait`, `load_wait`, `group_wait`: waiter's expected start, head flag, reserved start (UTC or `null`), wait duration in seconds, whether it passed `warn_wait`, why memory holds admission back, why sustained CPU load holds it back beside running leases (fathers#184), and why a per-group concurrency cap holds it back (fathers#251; each `null` otherwise).
 - `est_memory_mb`, `est_memory_source`, `expected`, `overrun` (omitted with `--pid`): expected peak RSS in MB and its source (`"history"` or `"default"`), expected run-type duration summary (see Run types below), and whether a held lease passed its `p90` (`overrun` only on held entries with `p90`).
 - `session` (measurement sessions only): active [session](sessions.md) summary (`name`, `idle`, `expect`, `stopping`, `runs`, `busy`, `last_use`, `active`).
 - `blocked_by`, `idle_slots`, `gave_way` (only when applicable, fathers#160): leases with no end estimate blocking a head past its reserved start (`[{"label", "pid"}]`), idle slot count, and the blocking list recorded when a head gave way.

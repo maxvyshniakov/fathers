@@ -34,6 +34,7 @@ class Estimates:
     def __init__(self, runs: Iterable[Any] = ()) -> None:  # Run tuples, as the history or a replay gives them
         self.runs: dict[Key, list[float]] = {}
         self.peaks: dict[Key, list[float]] = {}  # peak RSS (MB) of recent runs by label/family/run_type/tag (fathers#9)
+        self.slot_peaks: dict[str, list[float]] = {}  # per-slot peak RSS (MB) per label (fathers#251)
         for label, command, ran in cast(Iterable[Run], runs):
             self.add(label, command, ran)
 
@@ -67,14 +68,19 @@ class Estimates:
             del recent[:-_config.ESTIMATE_RUNS]
 
     def add_memory(self, label: str | None, command: str | None, peak_mb: float, *,
-                   meta: dict[str, str] | None = None, run_key: str | None = None) -> None:
-        """Record a finished run's peak RSS (MB) for memory-aware admission (fathers#9)."""
+                   meta: dict[str, str] | None = None, run_key: str | None = None,
+                   count: int = 1) -> None:
+        """Record a finished run's peak RSS (MB) for memory-aware admission (fathers#9, fathers#251)."""
         if peak_mb <= 0:
             return
         for key in self.memory_keys(label, command, meta=meta, run_key=run_key):
             recent = self.peaks.setdefault(key, [])
             recent.append(float(peak_mb))
             del recent[:-_config.ESTIMATE_RUNS]
+        slots = count if type(count) is int and count >= 1 else 1
+        bucket = self.slot_peaks.setdefault(label or "", [])
+        bucket.append(float(peak_mb) / slots)
+        del bucket[:-_config.ESTIMATE_RUNS]
 
     def save(self) -> dict[str, list[float]]:
         return {json.dumps(key): runs for key, runs in self.runs.items()}
@@ -82,14 +88,21 @@ class Estimates:
     def save_peaks(self) -> dict[str, list[float]]:
         return {json.dumps(key): peaks for key, peaks in self.peaks.items()}
 
+    def save_slot_peaks(self) -> dict[str, list[float]]:
+        return {label: list(vals) for label, vals in self.slot_peaks.items()}
+
     @classmethod
-    def load(cls, saved: dict[str, Any], peaks: dict[str, Any] | None = None) -> "Estimates":
+    def load(cls, saved: dict[str, Any], peaks: dict[str, Any] | None = None,
+             slot_peaks: dict[str, Any] | None = None) -> "Estimates":
         found = cls()
         found.runs = {tuple(cast(list[Any], json.loads(key))): [float(v) for v in cast(list[Any], runs)]
                       for key, runs in saved.items()}
         if isinstance(peaks, dict):
             found.peaks = {tuple(cast(list[Any], json.loads(key))): [float(v) for v in cast(list[Any], vals)]
                            for key, vals in peaks.items()}
+        if isinstance(slot_peaks, dict):
+            found.slot_peaks = {str(label): [float(v) for v in cast(list[Any], vals)]
+                                for label, vals in slot_peaks.items()}
         return found
 
     def peak_mb(self, label: str | None, command: str | None, *,
@@ -100,6 +113,25 @@ class Estimates:
             if recent:
                 return _runtype.percentile(recent, 90)
         return None
+
+    def recommended_gib_per_slot(self) -> float | None:
+        """Recommended GiB per slot from per-slot peak RSS (rss_peak_mb / count): takes each label's p90 so
+        frequent labels do not skew rarer ones, then the 90th percentile across labels (rounded up to 0.5 GiB,
+        at least 1.0 GiB), or None when history has no recorded peaks."""
+        import math
+        per_label: list[float] = []
+        for vals in self.slot_peaks.values():
+            if vals:
+                label_p90 = _runtype.percentile(vals, 90)
+                if label_p90 is not None:
+                    per_label.append(float(label_p90))
+        if not per_label:
+            return None
+        p90_mb = _runtype.percentile(per_label, 90)
+        if p90_mb is None:
+            return None
+        p90_gib = float(p90_mb) / 1024.0
+        return max(1.0, math.ceil(p90_gib * 2.0) / 2.0)
 
     def p90(self, label: str | None, command: str | None) -> float | None:
         """The 90th percentile (runtype.percentile()) of the closest kind's last runs, as of() finds them; None for
@@ -143,9 +175,12 @@ def history_estimates(directory: Path) -> Estimates:
             peak = item.get("rss_peak_mb")
             if isinstance(peak, (int, float)) and not isinstance(peak, bool) and peak > 0:
                 run_key = item.get("run_key")
+                raw_count = item.get("count")
+                slot_count = raw_count if isinstance(raw_count, int) and not isinstance(raw_count, bool) and raw_count >= 1 else 1
                 found.add_memory(item.get("label"), item.get("cmd"), float(peak),
                                  meta=_entry.meta_of(item),
-                                 run_key=run_key if isinstance(run_key, str) else None)
+                                 run_key=run_key if isinstance(run_key, str) else None,
+                                 count=slot_count)
     return found
 
 
@@ -172,13 +207,13 @@ def cached_estimates(directory: Path) -> Estimates:
     with contextlib.suppress(OSError, ValueError, TypeError, AttributeError, KeyError):
         saved: dict[str, Any] = json.loads(cache.read_text())
         if saved["stamp"] == stamp and saved.get("v") == _config.ESTIMATES_VERSION:
-            found = Estimates.load(saved["runs"], saved.get("peaks"))
+            found = Estimates.load(saved["runs"], saved.get("peaks"), saved.get("slot_peaks"))
     if found is None:
         found = history_estimates(directory)
         if _state.foreign_owner(directory) is None:
             with contextlib.suppress(OSError):
                 _state.write(cache, {"v": _config.ESTIMATES_VERSION, "stamp": stamp, "runs": found.save(),
-                                     "peaks": found.save_peaks()})
+                                     "peaks": found.save_peaks(), "slot_peaks": found.save_slot_peaks()})
     _estimates.clear()
     _estimates[key] = found
     return found

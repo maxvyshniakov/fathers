@@ -451,7 +451,8 @@ def grant(directory: Path, table: _queue.Table) -> str | None:
                        "lease.granted", _events.request(entry, paths[id(entry)]), details, _events.holder(entry))
     if outcome.gated:  # memory or CPU load holds a request back: no yield is asked, since the slots it frees might not start it
         return outcome.reason
-    rest = [e for e in waiters if not any(e is g for g in starting)]
+    capped_ids = set(outcome.plan.group_capped)
+    rest = [e for e in waiters if not any(e is g for g in starting) and id(e) not in capped_ids]
     with contextlib.suppress(OSError, _config.SlotError):
         ask(directory, live, held + starting, rest, estimate, other, shared,
             _settings.total(), time.time(), window)

@@ -13,6 +13,7 @@ from .entry import Entry
 __all__ = [
     "KINDS",
     "Actor",
+    "AdviseReply",
     "Blocker",
     "CapacityChanged",
     "DashboardBlock",
@@ -109,6 +110,7 @@ class _StatusEntryBase(TypedDict):
     long_wait: bool
     memory_wait: Optional[str]
     load_wait: Optional[str]
+    group_wait: Optional[str]
 
 
 class StatusEntry(_StatusEntryBase, total=False):
@@ -144,6 +146,7 @@ class StatusSnapshot(_StatusSnapshotBase, total=False):
     """`slotfather status --json` top-level response (version 2)."""
     query: PidQuery
     lease_unknown: list[int]
+    group_caps: dict[str, int]
 
 
 class DashboardRow(TypedDict):
@@ -248,6 +251,43 @@ class FullSnapshot(StatusSnapshot):
     host: str
     time: str
     dashboard: DashboardBlock
+
+
+class _AdviseReplyBase(TypedDict):
+    v: int
+    jobs: int
+    maximum: int
+    exclusive: bool
+    cores: int
+    total: int
+    cores_per_slot: float
+    held: int
+    waiting: bool
+    free: int
+    load: float
+    load1: float
+    load5: float
+    load15: float
+    unleased_load: float
+    capacity: int
+    run_estimate: Optional[float]
+    capacity_mode: str
+    gib_per_slot: Optional[float]
+    gib_per_slot_source: Optional[str]
+    memory_gib: Optional[float]
+    recommended_gib_per_slot: Optional[float]
+    memory_budget_mb: Optional[float]
+    memory_expected_mb: float
+    memory_short: Optional[str]
+    memory_level: str
+    load_block: Optional[str]
+    memory_budget_block: Optional[str]
+    group_cap_block: Optional[str]
+
+
+class AdviseReply(_AdviseReplyBase, total=False):
+    """`slotfather advise [--json]` response (version 1); `weight` is added by the CLI."""
+    weight: dict[str, Any]
 
 
 # events.jsonl contracts (Godfather shared event schema v1)

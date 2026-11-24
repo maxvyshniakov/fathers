@@ -46,6 +46,8 @@ A saved value persists across shells and process restarts in `capacity.json` und
 | `SLOTFATHER_SAMPLE_MAX` | Longest interval, in seconds, between a holder's looks at its command's process tree; default 10. |
 | `SLOTFATHER_MACHINE_EVERY` | Seconds between machine samples while leases run; default 15. |
 | `SLOTFATHER_LOAD_GATE` | Hold grants beside running leases at a lower sustained CPU load than `slotfather order --load-gate` saved (a multiple of the cores; lower nonzero values only, `0` cannot turn the saved gate off). |
+| `SLOTFATHER_MEMORY_BUDGET_MB` | Explicit expected-peak memory budget cap in MB for this client's looks/runs (lower nonzero values only; `0` cannot disable a saved budget). |
+| `SLOTFATHER_GROUP_CAPS` | Tighten per-group concurrency caps for this client's looks/runs (`browser=3` or `{"browser": 3}`; lower positive integers only, cannot raise or remove saved caps; invalid values warn on stderr). |
 | `SLOTFATHER_LOADAVG` | Load test/diagnostic override for advice and the CPU load gate: one number or `load1 load5 load15`. |
 | `SLOTFATHER_MEMORY_FILE` | Memory test seam: file containing `free_swap_MB pressure_level` (1 normal, 2 warning, 4 critical); it replaces both the macOS and the Linux signals, and the swap floor applies at every level. |
 | `SLOTFATHER_CGROUP_ROOT` | Linux test seam: the cgroup v2 mount, default `/sys/fs/cgroup`. |

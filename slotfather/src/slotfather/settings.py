@@ -16,6 +16,7 @@ import hashlib
 import json
 import math
 from pathlib import Path
+import sys
 from typing import Any, Callable, Mapping, cast
 
 from . import config as _config
@@ -150,6 +151,53 @@ def capacity_change(argv: list[str], note: Callable[[str], None] | None = None) 
 
 # Order
 
+def checked_group_caps(value: Any) -> dict[str, int]:
+    """Validate `group_caps`: mapping of lowercase group names to positive integers (>= 1, rejecting bools)."""
+    if not isinstance(value, dict):
+        raise ValueError(f"group_caps must be an object mapping group names to positive integers, not {value!r}")
+    found: dict[str, int] = {}
+    for group, cap in cast(dict[Any, Any], value).items():
+        if not isinstance(group, str) or not _config.GROUP_NAME.fullmatch(group):
+            raise ValueError(f"group_caps key must be a lowercase identifier, not {group!r}")
+        if not isinstance(cap, int) or isinstance(cap, bool) or cap < 1:
+            raise ValueError(f"group_caps[{group!r}] must be an integer of at least 1, not {cap!r}")
+        found[group] = cap
+    return dict(sorted(found.items()))
+
+
+def parse_group_caps_env(raw: str) -> dict[str, int]:
+    """Parse SLOTFATHER_GROUP_CAPS as JSON object or comma-separated GROUP=N pairs (strict lowercase group names,
+    integer >= 1); warns on stderr for malformed input."""
+    text = raw.strip()
+    if not text:
+        return {}
+    if text.startswith("{"):
+        try:
+            return checked_group_caps(json.loads(text))
+        except (ValueError, TypeError) as error:
+            print(f"slotfather: warning: ignoring invalid SLOTFATHER_GROUP_CAPS: {error}", file=sys.stderr)
+            return {}
+    found: dict[str, int] = {}
+    bad: list[str] = []
+    for item in text.split(","):
+        part = item.strip()
+        if not part:
+            continue
+        if "=" not in part:
+            bad.append(part)
+            continue
+        group, _, raw_cap = part.partition("=")
+        group = group.strip()
+        raw_cap = raw_cap.strip()
+        if not _config.GROUP_NAME.fullmatch(group) or not (raw_cap.isascii() and raw_cap.isdigit()) or int(raw_cap) < 1:
+            bad.append(part)
+            continue
+        found[group] = int(raw_cap)
+    if bad:
+        print(f"slotfather: warning: ignoring invalid SLOTFATHER_GROUP_CAPS entry: {', '.join(bad)}", file=sys.stderr)
+    return dict(sorted(found.items()))
+
+
 def order_extension_keys(saved: dict[str, Any]) -> list[str]:
     """Non-default keys that older Slotfather releases may reject in order.json."""
     return [key for key, default in _config.ORDER_DEFAULTS.items()
@@ -162,7 +210,8 @@ def order_compatibility(keys: list[str], *, historical: bool = False) -> str:
         warning += (" Releases 3e3a621 and earlier know no classes. Releases before ageing know no aging or warn "
                     "settings. Releases before the memory warning allowance know no warning_admits. Releases before "
                     "fathers#160 know no reservation_timeout. Releases before "
-                    "fathers#184 know no load_gate. An unknown key makes their looks use the window order.")
+                    "fathers#184 know no load_gate. Releases before fathers#251 know no memory_budget_mb or "
+                    "group_caps. An unknown key makes their looks use the window order.")
     return warning
 
 
@@ -172,7 +221,7 @@ def order_settings(directory: Path | None = None, environment: bool = True) -> d
     falls back to the window order, a higher SLOTFATHER_BACKFILL_SAFETY or _FALLBACK, a lower _OVERRUN and a lower
     (nonzero) _LIMIT count; looser values are ignored, since every client's look grants for the whole queue. A file
     that cannot be read gives the window order."""
-    found: dict[str, Any] = dict(_config.ORDER_DEFAULTS, saved=False)
+    found: dict[str, Any] = dict(_config.ORDER_DEFAULTS, group_caps={}, saved=False)
     try:
         data = json.loads(((directory or _config.state_dir()) / "order.json").read_text())
         found.update(checked_order(data), saved=True)
@@ -201,6 +250,13 @@ def order_settings(directory: Path | None = None, environment: bool = True) -> d
             found[key] = value
         elif value > 0:  # limit: 0 is no limit, the loosest
             found[key] = value if not found[key] else min(found[key], value)
+    env_caps = parse_group_caps_env(_config.setting("GROUP_CAPS") or "")
+    if env_caps:
+        merged_caps = dict(cast(dict[str, int], found["group_caps"]))
+        for group, cap in env_caps.items():
+            if group not in merged_caps or cap < merged_caps[group]:
+                merged_caps[group] = cap
+        found["group_caps"] = dict(sorted(merged_caps.items()))
     return found
 
 
@@ -211,7 +267,9 @@ def checked_order(data: Any) -> dict[str, Any]:
         raise ValueError(f"not order settings: {data!r}")
     found: dict[str, Any] = {}
     for key, value in cast(dict[str, Any], data).items():
-        if key != "order":
+        if key == "group_caps":
+            found[key] = checked_group_caps(value)
+        elif key != "order":
             least = _config.ORDER_KNOBS[key][1]
             if type(value) not in (int, float) or not math.isfinite(value) or value < least:
                 raise ValueError(f"{key} must be a number of at least {least:g}, not {value!r}")
@@ -219,7 +277,9 @@ def checked_order(data: Any) -> dict[str, Any]:
                 raise ValueError(f"warning_admits must be 1 or 0, not {value!r}")
             if key == "memory_share" and value > 1.0:
                 raise ValueError(f"memory_share must be at most 1, not {value!r}")
-        found[key] = value
+            found[key] = value
+        else:
+            found[key] = value
     return found
 
 
@@ -228,8 +288,18 @@ def order_bytes(values: Mapping[str, Any]) -> dict[str, Any]:
     default, since a slotfather before them refuses a file with keys it does not know (and falls back to the window
     order)."""
     defaults = _config.ORDER_DEFAULTS
-    return {k: values.get(k, defaults[k]) if k == "order" else float(values.get(k, defaults[k]))
-            for k in defaults if k in _config.ORDER_BASE or values.get(k, defaults[k]) != defaults[k]}
+    out: dict[str, Any] = {}
+    for k, default in defaults.items():
+        val = values.get(k, default)
+        if k not in _config.ORDER_BASE and val == default:
+            continue
+        if k == "order":
+            out[k] = val
+        elif k == "group_caps":
+            out[k] = dict(cast(dict[str, int], val))
+        else:
+            out[k] = float(val)
+    return out
 
 
 # Sweep
@@ -359,7 +429,7 @@ class Conflict(_config.SlotError):
 def configure(changes: Mapping[str, Mapping[str, Any] | None], *,
               expected: Mapping[str, bytes | None] | None = None, revisions: Mapping[str, str] | None = None,
               granted: Callable[[Path], None] | None = None, what: str = "a settings change",
-              directory: Path | None = None) -> None:
+              directory: Path | None = None, merge_group_caps: bool = False) -> None:
     """The one write path of capacity.json, order.json and sweep.json, shared by the CLI and the dashboard:
     validation, ownership, conflict checking and the queue lock. A change applies at once, also while requests run
     or wait. order.json and sweep.json changes merge over the saved values (a sweep.json that cannot be read is
@@ -393,10 +463,19 @@ def configure(changes: Mapping[str, Mapping[str, Any] | None], *,
         values: dict[str, Any] = dict(changes)
         try:
             if values.get("order.json") is not None:
-                saved = dict(_config.ORDER_DEFAULTS)
+                saved = dict(_config.ORDER_DEFAULTS, group_caps={})
                 with contextlib.suppress(OSError, ValueError, TypeError, AttributeError):
                     saved.update(checked_order(json.loads(before["order.json"] or b"{}")))
-                values["order.json"] = order_bytes(checked_order({**saved, **values["order.json"]}))
+                incoming = dict(values["order.json"])
+                if merge_group_caps and isinstance(incoming.get("group_caps"), dict):
+                    merged_caps = dict(cast(dict[str, int], saved["group_caps"]))
+                    for group, cap in cast(dict[Any, Any], incoming["group_caps"]).items():
+                        if cap is None:
+                            merged_caps.pop(group, None)
+                        else:
+                            merged_caps[group] = cap
+                    incoming["group_caps"] = merged_caps
+                values["order.json"] = order_bytes(checked_order({**saved, **incoming}))
             if values.get("sweep.json") is not None:
                 current = sweep_defaults() if "sweep.json" in unreadable else sweep_from(before["sweep.json"])
                 if "error" in current:  # a broken file is replaced by the defaults and these changes
