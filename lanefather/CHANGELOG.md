@@ -8,6 +8,18 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
 
 ### Added
 
+- Built-in verified-tree stamp ledger and `lanefather stamp` CLI (fathers#48):
+  - Shipped `lanefather.stamp` with the tree-keyed ledger in `<git common dir>/<stamp_file>` (default
+    `verified-trees`, 50-entry retention, atomic replacement via `fathers_common.atomic.atomic_write`, exclusive
+    `flock` locking, and transactional `abort`/`complete` rollback journals).
+  - Added `lanefather stamp` (`record`, `check`, `list`, `start`, `finish`, `abort`, `complete`) with `--json`
+    (`"v": 1`) output, standard `Verified tree <tree> stamped.` / `Verified tree not stamped: <reason>.` lines
+    parsed by `lanefather.verify`, and the `.md`-only equivalence rule (a tree differing from a stamped tree only in
+    `.md` files counts as verified).
+  - Added `[gate] stamp_tool = "builtin"` support in `lanefather.gate` and `lanefather.promote` (advertised as
+    capability `verified-tree.stamp`) so external adapters such as Repo-Kit's `lanefather.mjs` and Straylight can
+    use Lanefather's built-in stamp tool while preserving full backwards compatibility for custom `stamp_tool`
+    scripts.
 - Area-split and path-filtered overall reviews (fathers#155):
   - `lanefather review --overall <sha> --since <base> --paths GLOB...` (repeatable) restricts the diff and file list
     shown to the reviewer to paths matching the given globs, skips cleanly when no changed files match, and stores

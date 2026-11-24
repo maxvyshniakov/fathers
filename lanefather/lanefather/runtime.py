@@ -20,7 +20,7 @@ CAPABILITIES = ('project.readiness', 'project.update_queue', 'project-hook', 'ca
                 'promote.step-leases', 'tickets.lifecycle', 'slots.priority', 'dashboard.events',
                 'dashboard.status', 'dashboard.settings', 'host.min_disk_gb', 'lane.drop',
                 'post_merge.cleared', 'lane.wait', 'review.fix_of', 'lane.load_advisory', 'project.policy',
-                'checks.min_slots.default')
+                'checks.min_slots.default', 'verified-tree.stamp')
 # The dashboard contract versions Godfather reads (its SPEC.md, "Capabilities contract").
 DASHBOARD = 1
 

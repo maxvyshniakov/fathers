@@ -29,6 +29,7 @@ from . import (
     review_record,
     scope,
     slots,
+    stamp,
     state,
     tickets,
     verify,
@@ -517,10 +518,17 @@ def step_review_gate(run: PromoteRun) -> None:
                         "--force-reason overrides, logged")
 
 
+def has_batch_gate(cwd: str, sha: str, cfg: config.Config) -> bool:
+    if not cfg.stamp_tool or not git_ok(cwd, "cat-file", "-e", f"{sha}:{cfg.verify}"):
+        return False
+    if cfg.stamp_tool == stamp.BUILTIN:
+        return True
+    return git_ok(cwd, "cat-file", "-e", f"{sha}:{cfg.stamp_tool}")
+
+
 def step_batch_gate(run: PromoteRun) -> None:
     cfg = run.store.project
-    if (cfg.stamp_tool and git_ok(run.cwd, "cat-file", "-e", f"{run.sha}:{cfg.verify}")
-            and git_ok(run.cwd, "cat-file", "-e", f"{run.sha}:{cfg.stamp_tool}")):
+    if has_batch_gate(run.cwd, run.sha, cfg):
         if gate.verified(run.cwd, run.common, run.sha, cfg):
             why = gate.verified_why(run.store, run.cwd, run.sha)
             print(f"lane: {run.sha[:10]}'s tree is already verified ({why}); no batch gate needed")

@@ -32,6 +32,7 @@ lanefather promote <sha> [--ship] [--no-push] [--install [--deploy HOST]]
 lanefather sync [--drop-local]
 lanefather perf <sha>
 lanefather shipped <version> --since REF [--head REF]    comment a published version on the issues it fixes
+lanefather stamp record|check [REV] [--token HEX32] [--json] | list [--json] | start | finish STATE | abort|complete TOKEN
 lanefather list [--all] [--all-projects] [--json]   this repository's lanes
 lanefather show <id> [--state-dir DIR] [--project-dir DIR] [--json]   read-only lane context
 lanefather status [--json]                every registered project's lanes on this machine, read-only
@@ -373,7 +374,7 @@ self-contained configuration in the README for a Repo-Kit consumer.
 | `[checks]` `gate_only` | check-id patterns (fnmatch) the post-merge smoke leaves to the batch gate, such as tooling self-tests (fathers#94); a tree whose plan names whole suites has no check ids to match, so its smoke runs them |
 | `[checks.min_slots]` | table mapping check-id or suite fnmatch patterns (or the reserved `default` fallback key, not a literal suite/check name pattern, for checks/suites matched by no other pattern or declared floor) to positive integer minimum slot floors for lane checks and red-check reruns (fathers#173, fathers#247); raises `<slot_env>_MIN_JOBS` and `--jobs` for matching selections (clamped at the machine's total slot capacity when known, while `--slots` still overrides), leaves unmatched selections at `default` (or `1` when `default` is omitted), and is reported under `policy.min_slots` in `capabilities --json` (capability `checks.min_slots.default`) |
 | `[lane]` `worktrees_root`, `targets`, `target_label`, `cache_partitions`, `cache_depfiles` | managed worktree root (default `.claude/worktrees`), per-lane build directories and label, and shared cache partition depfile globs (default `debug/*.d`, `release/*.d`) |
-| `[gate]` `stamp_tool`, `stamp_file`, `pre_push_hook` | the verified-tree stamp of the full gate |
+| `[gate]` `stamp_tool`, `stamp_file`, `pre_push_hook` | the verified-tree stamp of the full gate (`stamp_tool = "builtin"` uses Lanefather's built-in `lanefather stamp`, fathers#48; a script path keeps custom adapter compatibility) |
 | `[promote]` `branches`, `install`, `deploy`, `after`, `ship_refuses` | promoted branches (default `["dev", "main"]`; fathers#131) and what promote runs after moving them |
 | `[gc]` `dirs`, `branches`, `collect_uncommitted_sessions`, `disposable` | what `gc` collects (fnmatch patterns, fathers#44). A worktree under the main checkout's `.claude/worktrees` is a candidate when a `dirs` pattern matches its name (a pattern without `/`) or its path from the main checkout (`.claude/worktrees/*`), or a `branches` pattern matches its branch. Every candidate must be clean, idle for 2 h, unused by any process, owned by no open lane, unlocked (a `claude agent` lock counts only while its pid is dead), and hold no other worktree or Git repository anywhere below it. An agent or lane worktree (`agent-*`, `lane-*`, `worktree-agent-*`, `lane/*`) must be merged into origin/dev, origin/main or a local `integrate/*`. Any other candidate is a session worktree: its HEAD must be in origin/dev or origin/main, it must have a commit of its own in its HEAD reflog unless `collect_uncommitted_sessions = true`, and every ignored path in it must have a component that `disposable` names (default `node_modules`, `__pycache__`, `target`, `.build`, `dist`, `build`, `.venv`, `.turbo`, `.next`, `storybook-static`, `coverage`, `.pytest_cache`, `.ruff_cache`, `.DS_Store`). A merged branch is deleted only when `branches` names it, no worktree or lane uses it and it is merged as its family requires; any other branch outlives its worktree. Defaults: `dirs = ["agent-*", "lane-*", ".claude/worktrees/*"]` (Codex's `codex-*` worktrees are under `.claude/worktrees`), `branches = ["worktree-agent-*", "lane/*", "claude/*", "codex/*"]`; `dev`, `main` and `integrate/*` are never collected. |
 | `[gc]` `after_remove`, `after_remove_report` | project cache cleanup after removal (`{worktree}`, `{name}`, `{project}`). Stdout is ignored by default, preserving existing hooks. With `after_remove_report = true`, a successful hook must emit `{"v":1,"freed":123}` to add its actually removed bytes; diagnostics go to stderr. Invalid reports add zero bytes and a report error. |
@@ -420,6 +421,48 @@ of its runs until it unsets it.
 request carries the effective priority and its source as metadata `lanefather.priority` (for example
 `batch (.lanefather.toml [slots.priority] default)`), which `slotfather status` shows. This feature advertises
 `slots.priority`; older engines reject the unknown `[slots]` table.
+
+### Verified-tree stamp
+
+Lanefather owns the verified-tree stamp ledger and CLI (`lanefather stamp`, capability `verified-tree.stamp`,
+fathers#48). A full verification run stamps the committed Git **tree** hash (not commit SHA) in
+`<git common dir>/<stamp_file>` (default `verified-trees`), so every worktree of the clone shares the ledger and
+commit-message edits, amends, or rebases that leave the tree identical stay verified.
+
+- **Ledger format**: one space-separated row per stamp, retaining the latest 50 rows (oldest evicted first), written
+  atomically under an exclusive `flock` on `<stamp_file>.lock`:
+  ```text
+  <tree> <commit> <utc-iso8601-timestamp>[ <32-hex-token>]
+  ```
+  When a 32-hex transaction token is supplied (`--token`), rows evicted by that write are journaled in
+  `<git common dir>/verified-tree-transaction-<token>.json` before publication so `lanefather stamp abort <token>`
+  rolls back only that run's stamp and restores evicted rows in order; `lanefather stamp complete <token>` removes
+  the journal.
+- **`.md`-only equivalence rule**: `lanefather stamp check [REV]` (and `gate.verified` with `stamp_tool = "builtin"`)
+  exits 0 when `REV`'s tree is in the ledger (`match = "exact"`) **or** when `git diff-tree -r --name-only` against
+  any stamped tree in the ledger contains only lowercase `.md` paths (`match = "md-only"`). Any non-`.md` path
+  change invalidates the stamp (exit 1). An unresolvable `REV` or invalid syntax/token exits 2.
+- **CLI subcommands**:
+  - `lanefather stamp record [REV] [--token HEX32] [--file NAME] [--json]`: trusts the caller, records `REV`'s tree
+    (default `HEAD`), and prints `Verified tree <tree> stamped.` (the line `lanefather.verify` parses). Use
+    `start`/`finish` for a guarded stamp that rejects dirty or changed worktrees.
+  - `lanefather stamp check [REV] [--file NAME] [--json]`: exits 0 if `REV` (default `HEAD`) is verified (exact or
+    `.md`-only), 1 if not stamped, 2 if `REV` cannot be resolved or arguments are invalid. `--json` prints `{"v": 1,
+    "verified", "rev", "tree", "match", "matched_tree", "md_paths", "ledger"}`.
+  - `lanefather stamp list [--file NAME] [--json]`: lists stamped rows (`--json` prints `{"v": 1, "ledger",
+    "entries"}`).
+  - `lanefather stamp start` / `finish STATE [--token HEX32] [--json]`: captures `HEAD`'s tree and clean/dirty state
+    before a full verification run and stamps only if tracked files stayed clean and `HEAD`'s tree stayed unchanged
+    (otherwise printing `Verified tree not stamped: <reason>.`).
+  - `lanefather stamp abort TOKEN` / `complete TOKEN`: rolls back or finalizes a tokenized stamp transaction.
+- **Project configuration & external adapters**: set `[gate] stamp_tool = "builtin"` in `.lanefather.toml` so
+  `lanefather promote` and `gate.verified` apply the ledger and `.md`-only equivalence directly without a repo-local
+  shell script or `.githooks/pre-push`. `[gate] stamp_file` (and `--file`) must be a plain filename without path
+  separators, `..`, or a leading `.`. External adapters (such as Repo-Kit's `lanefather.mjs` or Straylight's
+  `verify.sh`) run `lanefather stamp start` before a full verification run and `lanefather stamp finish "$snapshot"`
+  (or `lanefather stamp record`) on green completion, emitting the standard stamp line for `lanefather.verify`. A
+  repository's `.githooks/pre-push` hook enforces the rule by running `lanefather stamp check "$local_sha"` for each
+  pushed ref. Projects that configure a custom script path in `[gate] stamp_tool` keep full backwards compatibility.
 
 ### Recorded promote runs
 
