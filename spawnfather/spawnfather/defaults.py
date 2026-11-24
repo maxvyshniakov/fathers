@@ -32,6 +32,7 @@ GRACE = 10.0  # between SIGTERM and SIGKILL (`reap --grace`; setting reap.grace)
 GRACE_MIN = 1.0  # the shortest grace the setting saves (0 is SIGKILL right after SIGTERM, on every path)
 GRACE_MAX = 600.0  # the longest grace the setting saves
 PS_TIMEOUT = 10.0  # a ps or lsof call may take this long
+OWNER_DEAD_DELAY = 2.0  # seconds `reap --if-owner-dead` waits before checking whether the session process exited
 
 # The sweep
 SWEEP_INTERVAL = 3600  # the launchd agent's interval (`sweep --plist --interval`; setting sweep.interval), seconds
@@ -46,6 +47,9 @@ BROWSER_DAEMON_IDLE = 3600.0  # an agent-browser daemon no one owns, idle this l
 BROWSER_IDLE_CPU = 1.0  # under this %cpu (its whole tree) a daemon is idle
 WORKTREE_IDLE = 86400.0  # an unowned worktree unchanged this long (and clean, merged, empty) is removed
 SESSION_END_KEEP = 7 * 86400.0  # the SessionEnd records (leftovers.py) are pruned after this long
+GONE_LOG_LINES = 10  # tail lines recorded when the sweep finds an owned entry already gone
+GONE_LOG_BYTES = 4096  # max trailing bytes read from an entry's log file on gone
+GONE_LOG_LINE_MAX = 200  # max characters per recorded log tail line
 
 # Claims (owner.py)
 CLAIM_WINDOW = 1800.0  # a claim may wait this long for its command (a permission prompt can take a while)

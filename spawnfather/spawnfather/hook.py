@@ -6,8 +6,12 @@ event's JSON on stdin; Mastack's hook dispatcher runs this for the events it is 
                 that is not one explicit `spawnfather own`: answer with the command rewritten to own its shell first
                 (background.py), the one thing the hook prints
   SubagentStop  reap the subagent's explicit ownership, except entries kept for the session
-  SessionEnd    record that the session ended (leftovers.py: what the sweep may stop of a session that is gone), and
-                reap everything the session owns that was not handed to another session
+  SessionEnd    for a terminal reason (`prompt_input_exit`, `clear`, `logout`, `bypass_permissions_disabled`, or an
+                omitted reason), record that the session ended (leftovers.py: what the sweep may stop of a session that
+                is gone) and reap everything the session owns that was not handed to another session; for `other` (sent
+                both by T3 Code between turns and by Claude Code on CLI signal/`-p` exits), schedule a detached reap
+                with `--if-owner-dead` that reaps and records the session ended only if its owning process has exited;
+                transient or invalid reasons such as `resume` leave the session alive
   Stop          (end of a main-agent turn, not of the session) reap the session's entries whose TTL passed
 
 The hook never blocks and always exits 0, and prints only that answer: a reap that has work to do runs in a detached
@@ -27,6 +31,32 @@ from . import entry as _entry
 from . import owner as _owner
 from . import reap as _reap
 from .state import Store, as_dict, as_list
+
+TERMINAL_SESSION_END_REASONS = frozenset({
+    "prompt_input_exit",
+    "clear",
+    "logout",
+    "bypass_permissions_disabled",
+})
+
+
+def _is_terminal_session_end(data: Dict[str, Any]) -> bool:
+    """Whether a SessionEnd payload ends the session for good.
+
+    Omitted/null `reason` is treated as terminal (Codex and older hooks). When present, `reason` must be a known
+    terminal string; transient/harness reasons such as `"other"` (fired between turns in T3 Code) or `"resume"`,
+    as well as non-string values, leave the session alive.
+    """
+    reason = data.get("reason")
+    if reason is None:
+        return True
+    return isinstance(reason, str) and reason in TERMINAL_SESSION_END_REASONS
+
+
+def _is_other_session_end(data: Dict[str, Any]) -> bool:
+    """Whether a SessionEnd payload carries `reason: "other"` (ambiguous: T3 Code between turns or CLI signal exit)."""
+    reason = data.get("reason")
+    return isinstance(reason, str) and reason == "other"
 
 
 def plan(data: Dict[str, Any], store: Store, now: Optional[float] = None) -> Optional[List[str]]:
@@ -49,8 +79,15 @@ def plan(data: Dict[str, Any], store: Store, now: Optional[float] = None) -> Opt
     if event == _reap.Lifecycle.SESSION_END:
         if not running:
             return None
-        return ["reap", "--owner", session, "--lifecycle", _reap.Lifecycle.SESSION_END.value,
-                "--reason", f"session-end ({data.get('reason') or '?'})", "--quiet", "--via", "hook"]
+        if _is_terminal_session_end(data):
+            reason = data.get("reason")
+            label = reason if isinstance(reason, str) and reason else "?"
+            return ["reap", "--owner", session, "--lifecycle", _reap.Lifecycle.SESSION_END.value,
+                    "--reason", f"session-end ({label})", "--quiet", "--via", "hook"]
+        if _is_other_session_end(data):
+            return ["reap", "--owner", session, "--lifecycle", _reap.Lifecycle.SESSION_END.value,
+                    "--if-owner-dead", "--reason", "session-end (other)", "--quiet", "--via", "hook"]
+        return None
     if event == "Stop":
         if not any(_entry.due(e, now) for e in running):
             return None
@@ -72,11 +109,14 @@ def handle(data: Dict[str, Any], store: Store, spawn: Optional[Callable[[List[st
             (emit or _background.answer)(answer)
         return None
     if event == _reap.Lifecycle.SESSION_END:
-        from . import leftovers as _leftovers  # here: PreToolUse, on every Bash call, does not need it
-        try:
-            _leftovers.record_end(store, data.get("session_id"), data.get("reason"))
-        except OSError:
-            pass  # the sweep then has one proof less, and keeps that session's processes report-only
+        if _is_terminal_session_end(data):
+            from . import leftovers as _leftovers  # here: PreToolUse, on every Bash call, does not need it
+            try:
+                _leftovers.record_end(store, data.get("session_id"), data.get("reason"))
+            except OSError:
+                pass  # the sweep then has one proof less, and keeps that session's processes report-only
+        elif not _is_other_session_end(data):
+            return None
     arguments = plan(data, store)
     if arguments:
         from .launch import self_command

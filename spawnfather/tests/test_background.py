@@ -176,7 +176,7 @@ class BackgroundTests(Case):
         self.assertFalse((self.state / "hook.out").exists(), "the turn did not start a reap")
         self.assertEqual("running", self.state_of(entry["id"]))
         self.assertTrue(self.runs(sleeper))
-        self.hook("SessionEnd", "s1", env=self.session_env, reason="other")
+        self.hook("SessionEnd", "s1", env=self.session_env, reason="prompt_input_exit")
         self.wait_for(lambda: self.state_of(entry["id"]) == "reaped", what="the session end to reap it")
         self.assertIsNotNone(shell.wait(10))
         self.assertFalse(self.runs(sleeper))
@@ -231,7 +231,7 @@ class BackgroundTests(Case):
         self.assertTrue(self.runs(auto["pid"]), "the background shell outlives its runner")
         self.assertTrue(self.runs(child), "so does its command")
 
-        self.hook("SessionEnd", "s1", env=self.session_env, reason="other")
+        self.hook("SessionEnd", "s1", env=self.session_env, reason="prompt_input_exit")
         self.wait_for(lambda: self.state_of(auto["id"]) == "reaped", what="session end to reap the background call")
         self.assertFalse(self.runs(auto["pid"]))
         self.assertFalse(self.runs(child))
@@ -267,7 +267,7 @@ class BackgroundTests(Case):
         self.assertEqual("running", self.state_of(entry["id"]))
         (row,) = json.loads(self.cli("list", "--json").stdout)["entries"]
         self.assertTrue(row["no_ttl"])
-        self.hook("SessionEnd", "s1", env=self.session_env, reason="other")
+        self.hook("SessionEnd", "s1", env=self.session_env, reason="prompt_input_exit")
         self.wait_for(lambda: self.state_of(entry["id"]) == "reaped", what="the session end")
         self.assertIsNotNone(shell.wait(10))
 
@@ -369,7 +369,7 @@ class BackgroundTests(Case):
         self.wait_for(sleepers, what="the watcher to record the sleep", seen=lambda: str(self.loaded(entry["id"])))
         (sleeper,) = sleepers()
         self.assertTrue(self.runs(sleeper))
-        self.hook("SessionEnd", "s1", env=self.session_env, reason="other")
+        self.hook("SessionEnd", "s1", env=self.session_env, reason="prompt_input_exit")
         self.wait_for(lambda: self.state_of(entry["id"]) == "reaped", what="session end to reap it",
                       seen=lambda: str(self.loaded(entry["id"])))
         self.wait_for(lambda: not self.runs(sleeper), what="the sleep to end",

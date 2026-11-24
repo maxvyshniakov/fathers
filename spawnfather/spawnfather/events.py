@@ -3,7 +3,7 @@
 Backed by `fathers_common.events`: strips C0/DEL/C1 and U+2028/U+2029, caps strings to 1000 chars (400 for commands),
 bounds nesting at four levels, keeps lines within 16 KiB, and rotates past 4 MiB under a bounded flock on `events.lock`.
 
-Kinds (docs/reference.md, Events): entry.owned, entry.adopted, entry.exited, entry.extended, entry.handed,
+Kinds (docs/reference.md, Events): entry.owned, entry.adopted, entry.exited, entry.gone, entry.extended, entry.handed,
 entry.reaped, entry.reap_failed, resource.owned, resource.stopped, resource.stop_failed, unowned.reported,
 unowned.reaped, sweep.finished, hook.failed.
 """
@@ -24,9 +24,9 @@ LINE_MAX = _common_events.MAX_LINE
 TEXT_MAX = _common_events.MAX_STRING
 COMMAND_MAX = _common_events.MAX_COMMAND
 LOCK_WAIT = _common_events.LOCK_WAIT
-KINDS = ("entry.owned", "entry.adopted", "entry.exited", "entry.extended", "entry.handed", "entry.reaped",
-         "entry.reap_failed", "resource.owned", "resource.stopped", "resource.stop_failed", "unowned.reported",
-         "unowned.reaped", "sweep.finished", "hook.failed")
+KINDS = ("entry.owned", "entry.adopted", "entry.exited", "entry.gone", "entry.extended", "entry.handed",
+         "entry.reaped", "entry.reap_failed", "resource.owned", "resource.stopped", "resource.stop_failed",
+         "unowned.reported", "unowned.reaped", "sweep.finished", "hook.failed")
 
 
 def now() -> str:

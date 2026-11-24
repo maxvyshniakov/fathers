@@ -250,6 +250,46 @@
      "via": "sweep"
     },
     "details": {
+     "how": "gone"
+    },
+    "host": "<host>",
+    "kind": "entry.gone",
+    "source": "spawnfather",
+    "subject": {
+     "id": "<id1>",
+     "pid": <pid2>,
+     "type": "entry"
+    },
+    "time": "<v>",
+    "v": 1
+   },
+   {
+    "actor": {
+     "name": "spawnfather",
+     "type": "tool",
+     "via": "sweep"
+    },
+    "details": {
+     "how": "gone"
+    },
+    "host": "<host>",
+    "kind": "entry.gone",
+    "source": "spawnfather",
+    "subject": {
+     "id": "<id2>",
+     "pid": <pid3>,
+     "type": "entry"
+    },
+    "time": "<v>",
+    "v": 1
+   },
+   {
+    "actor": {
+     "name": "spawnfather",
+     "type": "tool",
+     "via": "sweep"
+    },
+    "details": {
      "errors": [],
      "failed": [],
      "gone": [
