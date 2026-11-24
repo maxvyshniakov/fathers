@@ -174,10 +174,14 @@ def held_time(items: list[dict[str, Any]], since: float | None, until: float, ca
             "all_held": round(full / busy, 3) if busy else None}
 
 
+def _is_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
 def weighed(samples: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[float]]:
     """The timed samples in order, each with the seconds it stands for: the time to the next one, at most GAP; the
     last stands for the usual gap."""
-    samples = sorted((s for s in samples if isinstance(s.get("at"), (int, float))), key=lambda s: float(s["at"]))
+    samples = sorted((s for s in samples if _is_number(s.get("at"))), key=lambda s: float(s["at"]))
     gaps = [float(b["at"]) - float(a["at"]) for a, b in itertools.pairwise(samples)]
     usual = min(percentile(gaps, 50) or _config.MACHINE_EVERY, GAP)
     return samples, ([min(g, GAP) for g in gaps] + [usual] if samples else [])
@@ -264,7 +268,7 @@ def outside(samples: list[dict[str, Any]], top: int = 25) -> dict[str, Any]:
     for sample, weight in zip(*weighed(samples), strict=True):
         found: Any = sample.get("outside")
         record = cast(dict[str, Any], found) if isinstance(found, dict) else {}
-        if not isinstance(record.get("cpu"), (int, float)):
+        if not _is_number(record.get("cpu")):
             continue
         count += 1
         hours += weight / 3600
@@ -272,11 +276,13 @@ def outside(samples: list[dict[str, Any]], top: int = 25) -> dict[str, Any]:
         rows: Any = record.get("top")
         for row in cast(list[Any], rows if isinstance(rows, list) else []):
             item = cast(dict[str, Any], row) if isinstance(row, dict) else {}
-            if not isinstance(item.get("cpu"), (int, float)):
+            if not _is_number(item.get("cpu")):
                 continue
             area = float(item["cpu"]) * weight / 3600
-            name = str(item.get("family") or "?")
-            who = item.get("owner") if isinstance(item.get("owner"), str) else None
+            raw_family = item.get("family")
+            name = raw_family if isinstance(raw_family, str) and raw_family else "?"
+            raw_owner = item.get("owner")
+            who = raw_owner if isinstance(raw_owner, str) and raw_owner else None
             families[name] = families.get(name, 0.0) + area
             owners[who] = owners.get(who, 0.0) + area
 
@@ -356,11 +362,11 @@ def summarize(directory: Path | None = None, since: float | None = None, label: 
         seen = [i["cores"] for i in items if isinstance(i.get("cores"), int) and i["cores"] > 0]
         cores, saved = (int(percentile(seen, 50) or cores) if seen else cores), False
     samples = [s for s in _state.journal(directory / "machine.jsonl")
-               if since is None or (isinstance(s.get("at"), (int, float)) and s["at"] >= since)]
+               if since is None or (_is_number(s.get("at")) and s["at"] >= since)]
     overall = usage_of(items)
     per_slot = overall["cores_per_slot"]
     swept = [i for i in _state.journal(directory / "sweep.jsonl")
-             if since is None or (isinstance(i.get("at"), (int, float)) and i["at"] >= since)]
+             if since is None or (_is_number(i.get("at")) and i["at"] >= since)]
     return {
         "since": since, "label": label, "by": by, "cores": cores, "capacity": capacity, "saved": saved,
         "automatic": automatic, "host": host,

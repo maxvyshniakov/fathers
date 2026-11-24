@@ -25,7 +25,7 @@ argument or a directory, which can hold secrets and paths. An owner is the Spawn
 group holds the process (`spawnfather LABEL`; the holder asks `spawnfather list --json` at most once a minute), else
 the nearest agent or terminal session above it (`claude 4120`), else none. A quieter sample stores no `outside`.
 `ps` CPU share is a decaying average of the last seconds on macOS and the average over the process's life on Linux.
-Samples carrying `outside` are version 2; version 1 samples still read and count in the machine part. Measured on a
+Machine samples are now version 2 (carrying `outside` when unleased work meets the threshold); version 1 samples still read and count in the machine part. Measured on a
 12-core Mac with about 870 processes: the `ps` and the attribution take about 0.1 s of CPU per sample, plus about
 0.2 s for the Spawnfather call once a minute; a fault in any of it leaves `outside` out, never the sample or the
 lease.
