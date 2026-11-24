@@ -307,6 +307,13 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
 
 ### Fixed
 
+- Red checks are no longer classified `pre-existing` (landable) merely because the base rerun of the same check id
+  also failed (fathers#113): `lanefather check` now requires valid, strictly-typed `failure_evidence` v1
+  (`version: 1`, `comparable: true`, `context`, and complete `cases` with `id` and `signature`) across the original
+  candidate run, its solo rerun (when run), and the base run, with identical `context`, matching candidate/alone
+  failing cases, and every candidate failing case matched on base. Missing, non-comparable, malformed, interrupted,
+  cleanup-failed, or exit-mismatched reports and unmatched candidate failing cases stay `unclassified` (RED);
+  receipts and terminal output keep `raw_status` separate from the classified status.
 - Planned lanes can now be activated with `lanefather start <id> --create` without repeating `--ticket` or `--claims`
   once every `--after` dependency has landed, creating the worktree from the current base and keeping the lane's
   existing scope and claims; duplicate `start` refusals on planned or active lanes now point at `start <id> --create`,

@@ -337,7 +337,18 @@ class RedCheckClassificationTests(LaneCase):
         self.assertIn("regression: native-check fails on the lane again when rerun by itself and passes on its base",
                       refusal)
 
+    def test_failed_check_names_without_comparison_evidence_cannot_make_a_green_receipt(self):
+        # fathers#113: the same check can fail in a candidate case and an unrelated base setup.
+        self.commit(self.integration, {"native/straylight-core/corpus.txt": "v2\n"})
+        worktree = self.created("core", "native/**")
+        self.commit(worktree, {"native/straylight-core/notes.txt": "lane\n"})
+        self.lane("check", "core", ok=False)
+        self.assertEqual(self.entries("core")["native-check"]["class"], "unclassified")
+        self.assertEqual(self.receipt("core")["status"], "red")
+        self.lane("land", "core", ok=False)
+
     def test_a_check_its_base_fails_too_is_pre_existing_and_names_the_base_failure(self):
+        self.env["FIXTURE_FAILURE_EVIDENCE"] = "1"
         # The integration branch already breaks the frozen corpus; the lane changes another native file.
         self.commit(self.integration, {"native/straylight-core/corpus.txt": "v2\n"}, "the base breaks the corpus")
         base = self.tip()
@@ -352,8 +363,49 @@ class RedCheckClassificationTests(LaneCase):
         self.assertIn("checks/frozen-corpus.txt", pathlib.Path(entry["base"]["log"]).read_text())
         self.assertIn(f"native-check: pre-existing: the base {base[:10]} fails it too", output)
         self.assertEqual(self.receipt("core")["status"], "green")
+        self.assertEqual(self.receipt("core")["raw_status"], "red")
+        self.assertEqual(self.receipt("core")["classification"]["raw_status"], "red")
+        self.assertEqual(self.receipt("core")["check_results"]["native-check"]["status"], "failed")
+        self.assertIn("raw verification RED", output)
         self.assertEqual(self.base_checkouts("core"), [])
         self.lane("land", "core")
+
+    def test_different_failures_inside_one_check_do_not_count_as_pre_existing(self):
+        self.env["FIXTURE_FAILURE_EVIDENCE"] = "1"
+        self.commit(self.integration, {"checks/native.sh": "cat native/case.txt; exit 1\n",
+                                       "native/case.txt": "prerequisite pin invalid\n"})
+        worktree = self.created("core", "native/**")
+        self.commit(worktree, {"native/case.txt": "candidate assertion A failed\n"})
+        output = self.lane("check", "core", ok=False)
+        entry = self.entries("core")["native-check"]
+        self.assertEqual(entry["class"], "unclassified")
+        self.assertIn("differ", entry["reason"])
+        self.assertEqual(self.receipt("core")["classification"]["raw_status"], "red")
+        self.assertNotIn("classified receipt is green", output)
+        self.lane("land", "core", ok=False)
+
+    def test_a_base_process_setup_failure_cannot_reuse_its_failed_report_as_proof(self):
+        self.env["FIXTURE_FAILURE_EVIDENCE"] = "1"
+        self.env["FIXTURE_EXIT"] = "lane-core-base:9"
+        self.commit(self.integration, {"native/straylight-core/corpus.txt": "v2\n"})
+        worktree = self.created("core", "native/**")
+        self.commit(worktree, {"native/straylight-core/notes.txt": "lane\n"})
+        self.lane("check", "core", ok=False)
+        self.assertEqual(self.entries("core")["native-check"]["class"], "unclassified")
+        self.assertIn("exit", self.entries("core")["native-check"]["reason"])
+
+    def test_original_process_exit_mismatch_is_not_hidden_by_matching_failed_reruns(self):
+        self.env["FIXTURE_FAILURE_EVIDENCE"] = "1"
+        self.env["FIXTURE_EXIT"] = "lane-core:9"
+        self.commit(self.integration, {"native/straylight-core/corpus.txt": "v2\n"})
+        worktree = self.created("core", "native/**")
+        self.commit(worktree, {"native/straylight-core/notes.txt": "lane\n"})
+        self.lane("check", "core", ok=False)
+        receipt = self.receipt("core")
+        self.assertEqual(receipt["results"][1]["exit"], 9)
+        self.assertEqual(self.entries("core")["native-check"]["class"], "unclassified")
+        self.assertIn("process exit differs", self.entries("core")["native-check"]["reason"])
+        self.lane("land", "core", ok=False)
 
     def break_structure(self, base_too: bool = False) -> None:
         """The structure check (the fixture's cheap tier, #639) fails while lib/structure-broken exists."""
@@ -400,6 +452,7 @@ class RedCheckClassificationTests(LaneCase):
 
     def test_a_red_first_check_the_base_fails_too_runs_the_heavier_checks(self):
         """#639: a pre-existing red first check does not block the lane: its heavier checks run and decide."""
+        self.env["FIXTURE_FAILURE_EVIDENCE"] = "1"
         self.break_structure(base_too=True)
         worktree = self.created("cheap", "lib/**")
         self.commit(worktree, {"lib/thing.txt": "lane\n"})
@@ -714,6 +767,12 @@ class RedCheckClassificationTests(LaneCase):
                 row = {"id": cid, "status": "passed" if code == 0 else "failed", "exit": code, "log": str(log_path)}
                 if failed_tests:
                     row["failed_tests"] = failed_tests
+                    row["failure_evidence"] = {
+                        "version": 1,
+                        "comparable": True,
+                        "context": "only-verifier-v1",
+                        "cases": [{"id": t, "signature": f"fail:{t}"} for t in failed_tests],
+                    }
                 if outside:
                     row["outside_failed_tests"] = outside
                 rows.append(row)
@@ -1072,8 +1131,14 @@ class DependencyBlockedTests(LaneCase):
                     st, bb = "failed", []
                 else:
                     st, bb = lane[cid]
-                rows.append({{"id": cid, "suite": "browser", "status": st, "blocked_by": bb,
-                             "log": str(run / (cid.replace(":", "_") + ".log")), "seconds": 0.01}})
+                row = {{"id": cid, "suite": "browser", "status": st, "blocked_by": bb,
+                        "log": str(run / (cid.replace(":", "_") + ".log")), "seconds": 0.01}}
+                if st == "failed":
+                    row["failure_evidence"] = {{
+                        "version": 1, "comparable": True, "context": "interleaved-v1",
+                        "cases": [{{"id": cid, "signature": "fail:" + cid}}],
+                    }}
+                rows.append(row)
             exit_code = int(any(r["status"] != "passed" for r in rows))
             (run / "report.json").write_text(json.dumps({{"exit": exit_code, "checks": rows, "stopped": None}}))
             print("Verification report: " + str(run / "report.json"))
@@ -1225,7 +1290,8 @@ class UnblockedAfterRerunTests(LaneCase):
         self.assertNotIn("blocked_checks", by_suite["app"])
         self.assertIn("core:a passed rerun by itself; running 2 unblocked check(s): app:b, app:c", output)
         self.assertIn("core:a: flaky-under-load", output)
-        self.assertIn("every red check is flaky-under-load or pre-existing: the receipt is green", output)
+        self.assertIn("raw verification RED; every red check is flaky-under-load or pre-existing: "
+                      "the classified receipt is green", output)
         self.env.pop("UNBLOCK_FAIL_FIRST", None)
         self.lane("land", "a")
 
@@ -1473,7 +1539,7 @@ class UnblockedAfterRerunTests(LaneCase):
         )
         flag = self.tmp / "heavier-flake-once"
         flag.touch()
-        self.env.update(LANEFATHER_RERUNS="1", FIXTURE_FLAKE_ONCE=f"lib-check:{flag}")
+        self.env.update(LANEFATHER_RERUNS="1", FIXTURE_FLAKE_ONCE=f"lib-check:{flag}", FIXTURE_FAILURE_EVIDENCE="1")
         worktree = self.created("cheap", "lib/**")
         self.commit(worktree, {"lib/thing.txt": "lane\n"})
         self.lane("check", "cheap")

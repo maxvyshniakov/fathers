@@ -3,9 +3,10 @@
 check runs the checks the tree's plan selects for the lane's diff and writes the receipt for the committed tree,
 reusing each check that passed for an earlier tree of the lane and that no change since selects. Each red check
 reruns by itself on the lane at the lane check's own lease size (lanefather#4), then, red again, on its base, and is
-classified (#568): lane red again and base green, `regression`; base red too, `pre-existing`; lane green on its
-rerun, `flaky-under-load`. Only the last two leave the receipt landable. A red cheap check stops the run before any
-heavier check starts and reruns on the base only; the heavier checks run when it is pre-existing there (#639).
+classified (#568): lane red again and base green, `regression`; equivalent comparable base failure, `pre-existing`;
+lane green on its rerun, `flaky-under-load`. Only the last two leave the receipt landable. A red cheap check stops
+the run before any heavier check starts and reruns on the base only; the heavier checks run when it is pre-existing
+there (#639).
 """
 from __future__ import annotations
 
@@ -276,7 +277,8 @@ def record(store: state.Store, prepared: Prepared, selection: Selected, executed
     results = verify.combined_results(suites, selected, fresh, reused)
     check_results = {} if selected is None else {
         c: reused.get(c) or ran.get(c) or {"suite": s, "status": "not_run"} for s, ids in selected.items() for c in ids}
-    status = "green" if all(r["status"] == "passed" for r in results) else "red"
+    raw_status = "green" if all(r["status"] == "passed" for r in results) else "red"
+    status = raw_status
     first = receipts.ensure_first(store, rec, prepared.previous, head, tree, verify.red_checks(results))
     if status == "red" and classification and classification["green"] and not stopped:
         status = "green"
@@ -297,7 +299,8 @@ def record(store: state.Store, prepared: Prepared, selection: Selected, executed
           "toolchain": selection.toolchain, "platform": selection.platform,
           "jobs": effective_jobs, "jobs_decision": recorded_decision, "results": results,
           "triage": triaged, "classification": classification, "first": first,
-          "changed_red_tests": changed_tests, "stopped": stopped, "status": status, "host": info,
+          "changed_red_tests": changed_tests, "stopped": stopped, "raw_status": raw_status,
+          "status": status, "host": info,
           "started": executed.started, "paths": lane_plan["paths"],
           **({"fix_of": selection.fix_of} if selection.fix_of else {}),
           "leases": verify.leases_of(fresh, classification),
@@ -339,7 +342,10 @@ def record(store: state.Store, prepared: Prepared, selection: Selected, executed
     if stopped:
         print(f"lane: stopped at the first checks (#639): {', '.join(stopped['failed'])} red, so the "
               f"{stopped['not_run']} heavier checks did not start. Fix them, commit and run {prog} check again.")
-    print(f"Receipt {status} for tree {tree}: {path}")
+    if raw_status == "red" and status == "green":
+        print(f"Receipt {status} (raw verification RED, classified green) for tree {tree}: {path}")
+    else:
+        print(f"Receipt {status} for tree {tree}: {path}")
     return 0 if status == "green" else 1
 
 

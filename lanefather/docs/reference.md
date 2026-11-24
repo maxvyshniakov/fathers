@@ -414,10 +414,36 @@ land's comment as the lane's evidence. The capability is `tickets.lifecycle`.
 The plan module (`plan_module`) answers `SUITES`, `checks(...)` and `smoke(root)`; `PERF = "<suite>"` names the perf
 suite, and `CAPABILITIES` may advertise `"only"`. A project without one gets whole suites.
 
-The report is `{checks: [{id, status, log, blocked_by, failed_tests?, outside_failed_tests?}], stopped, environment, capabilities?}`. Optional row fields feed the run
+The report is `{checks: [{id, status, log, blocked_by, failed_tests?, outside_failed_tests?, failure_evidence?}], stopped, environment, capabilities?}`. Optional row fields feed the run
 history (fathers#92): `seconds` (the check's duration; without it `stats` has no p50/p90 for the check), `started`
 and `finished` (ISO times), `junit` (a JUnit XML file whose failed test cases a flake names) and `lease` (the slot
-lease id, also allowed at the report's top level). When a verifier advertises `"only"` (`capabilities`) and reports
+lease id, also allowed at the report's top level).
+
+A verifier may opt into `pre-existing` failure classification with a `failure_evidence` v1 object on each failed
+check row (fathers#113):
+
+```json
+{"version": 1, "comparable": true, "context": "verifier-v2/runtime-compatible/schema-v9",
+ "cases": [{"id": "stable test identity", "signature": "stable assertion/cause identity"}]}
+```
+
+The producer owns these facts: set `comparable: true` only after validating required runtime, report schema,
+setup and complete failing-case collection. `context` identifies compatible verifier/runtime/input conditions
+(excluding expected candidate/base commit differences), and `cases` lists every failing case with unique stable
+`id`s and non-empty `signature`s. Version 1 accepts exactly those four keys (`version`, `comparable`, `context`,
+`cases`) and `{id, signature}` per case.
+
+Lanefather classifies a red check as `pre-existing` only when the original candidate run, its failed solo rerun
+(when run), and the base run all carry valid, strictly-typed `failure_evidence` v1 (`comparable: true`) with
+identical `context`, identical candidate/alone failing cases, and every failing case on the candidate matched
+(`id` and `signature`) on the base. Case order does not matter. Missing, malformed, non-comparable, interrupted,
+environment-failed or cleanup-failed reports, duplicate check ids, reports whose exit code contradicts their rows
+or actual process exit, failures outside any check, and candidate failing cases not matched on base all stay
+`unclassified` (RED). Original `results` and `check_results` retain raw status; `raw_status`,
+`classification.raw_status`, and terminal output distinguish raw RED from a classified GREEN receipt. Existing
+solo-pass (`flaky-under-load`) classification is unchanged.
+
+When a verifier advertises `"only"` (`capabilities`) and reports
 `failed_tests: [...]` on a failing check (fathers#147), red-check reruns pass `--only <test,...>` to both the lane
 and base reruns, record `"tests"` in `classification.checks` and `classification.runs`, and keep a check
 `"unclassified"` if a red test is outside `failed_tests`; otherwise argv and receipts are unchanged. Lanefather hands each run its run id and tree in the slot meta

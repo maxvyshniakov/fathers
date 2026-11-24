@@ -521,6 +521,9 @@ class Run:
         if self.lease is not None and self.argv != self.verify_argv and status == slots.TIMED_OUT and not reports:
             wait = f"{self.lease.wait:g} s" if self.lease.wait is not None else "its wait"
             raise LeaseTimedOut(f"no lease of {self.jobs} slot(s) within {wait} (slotfather status)")
+        if isinstance(report, dict):
+            # Transient process observation; preserve the verifier's on-disk report unchanged.
+            report = dict(report, _lanefather_process_exit=status)
         report_path = Path(reports[-1].strip()) if reports else None
         ids = list(self.selection.items) if self.selection.kind == "checks" else None
         granted_jobs = report_jobs(report)
@@ -1001,12 +1004,106 @@ def red_checks(results: Rows) -> list[str]:
     return found
 
 
-def rerun_problem(report: dict[str, Any] | None, log: Path | None) -> str | None:
+def rerun_problem(report: object, log: Path | None) -> str | None:
     """Why a rerun says nothing about its checks, or None."""
     if report is None:
         return f"the rerun wrote no verification report ({log})"
+    if not isinstance(report, dict):
+        return f"the rerun wrote a malformed verification report ({log})"
+    report = cast(dict[str, Any], report)
+    raw_rows = report.get("checks")
+    malformed = f"the rerun wrote a malformed verification report ({log})"
+    if type(report.get("exit")) is not int or not isinstance(raw_rows, list):
+        return malformed
+    rows: Rows = []
+    seen: set[str] = set()
+    for value in cast(list[Any], raw_rows):
+        if not isinstance(value, dict):
+            return malformed
+        row = cast(dict[str, Any], value)
+        check_id = row.get("id")
+        if (not isinstance(check_id, str) or not check_id or check_id in seen
+                or row.get("status") not in (*PASSING, "failed", "blocked", "unrun", "void")):
+            return malformed
+        seen.add(check_id)
+        rows.append(row)
+    process_exit = report.get("_lanefather_process_exit", report["exit"])
+    if type(process_exit) is not int or process_exit != report["exit"]:
+        return f"the rerun process exit differs from its report exit ({log})"
     if report.get("environment"):
-        return f"the rerun failed on its environment: {report['environment'].get('class')} ({log})"
+        env_val: Any = report["environment"]
+        if isinstance(env_val, dict):
+            env_map = cast(dict[str, Any], env_val)
+            env_desc: Any = env_map.get("class") or env_map
+        else:
+            env_desc = env_val
+        return f"the rerun failed on its environment: {env_desc} ({log})"
+    if report.get("interrupted") or report.get("cleanup_error"):
+        return f"the rerun was interrupted or its cleanup failed ({log})"
+    if not report["exit"] and any(row["status"] == "failed" for row in rows):
+        return f"the rerun report contradicts its failed check status ({log})"
+    if report["exit"] and all(row["status"] in PASSING for row in rows):
+        return f"the rerun failed outside any check ({log})"
+    return None
+
+
+def failure_evidence(row: dict[str, Any]) -> dict[str, Any] | None:
+    """Verifier-owned v1 failure evidence, never inferred from a shared check name or arbitrary log text."""
+    evidence = row.get("failure_evidence")
+    if row.get("status") != "failed" or not isinstance(evidence, dict):
+        return None
+    evidence = cast(dict[str, Any], evidence)
+    if (set(evidence) != {"version", "comparable", "context", "cases"}
+            or type(evidence["version"]) is not int or evidence["version"] != 1
+            or evidence["comparable"] is not True
+            or not isinstance(evidence["context"], str) or not evidence["context"].strip()
+            or not isinstance(evidence["cases"], list) or not evidence["cases"]):
+        return None
+    cases: dict[str, str] = {}
+    for raw_case in cast(list[Any], evidence["cases"]):
+        if not isinstance(raw_case, dict):
+            return None
+        case = cast(dict[str, Any], raw_case)
+        if (set(case) != {"id", "signature"}
+                or not isinstance(case["id"], str) or not case["id"].strip()
+                or not isinstance(case["signature"], str) or not case["signature"].strip()
+                or case["id"] in cases):
+            return None
+        cases[case["id"]] = case["signature"]
+    return {"context": evidence["context"], "cases": cases}
+
+
+def comparison_problem(reports: list[dict[str, Any] | None], check_id: str, selected: list[str]) -> str | None:
+    """A failed base is usable only with valid, comparable failure evidence from every attempt where every
+    failing case on the candidate is also present (matching id + signature and context) on the base."""
+    if len(reports) < 2:
+        return "candidate and base evidence are both required"
+    compared: list[dict[str, Any]] = []
+    for report in reports:
+        problem = rerun_problem(report, None)
+        if problem:
+            return problem
+        assert report is not None
+        if any(row["id"] not in selected and is_executed_failure(row) for row in report["checks"]):
+            return "a comparison run failed outside the selected check"
+        evidence = failure_evidence(report_row(report, check_id))
+        if evidence is None:
+            return "missing or invalid comparable failure_evidence (v1)"
+        compared.append(evidence)
+    first_ev = compared[0]
+    base_ev = compared[-1]
+    candidate_reruns = compared[1:-1]
+    if any(ev["context"] != first_ev["context"] for ev in compared[1:]):
+        return "the runtime/input context or failing cases/signatures differ"
+    if any(ev["cases"] != first_ev["cases"] for ev in candidate_reruns):
+        return "the runtime/input context or failing cases/signatures differ"
+    base_cases: dict[str, str] = base_ev["cases"]
+    unmatched = [cid for cid, sig in first_ev["cases"].items() if base_cases.get(cid) != sig]
+    if unmatched:
+        return (
+            "the runtime/input context or failing cases/signatures differ "
+            f"(not matched on base: {', '.join(unmatched)})"
+        )
     return None
 
 
@@ -1016,7 +1113,15 @@ def not_run(row: dict[str, Any]) -> str:
 
 
 def report_row(report: dict[str, Any] | None, check_id: str) -> dict[str, Any]:
-    return next((r for r in (report or {}).get("checks", []) if r.get("id") == check_id), {"status": "not_run"})
+    rows = report.get("checks") if isinstance(report, dict) else None
+    if not isinstance(rows, list):
+        return {"status": "not_run"}
+    for value in cast(list[Any], rows):
+        if isinstance(value, dict):
+            row = cast(dict[str, Any], value)
+            if row.get("id") == check_id:
+                return row
+    return {"status": "not_run"}
 
 
 def failed_prerequisites(check_id: str, blocked: dict[str, list[str]]) -> list[str]:
@@ -1162,7 +1267,8 @@ def plan_classification(
     stopped_first = bool((report or {}).get("stopped"))
     environment = next((r["environment"] for r in failed if r.get("environment")), None)
     if environment:
-        return {"skipped": f"environment: {environment}: the run's results do not count, so nothing reran",
+        return {"raw_status": "red",
+                "skipped": f"environment: {environment}: the run's results do not count, so nothing reran",
                 "checks": [], "green": False}
     candidates = red_checks(failed)
     blocked_rows = {row["id"]: list(row.get("blocked_by") or []) for row in (report or {}).get("checks", [])
@@ -1307,6 +1413,8 @@ def evaluate_base_row(
     kept_dir: Path | None = None,
     problem: str | None = None,
     check_tests: list[str] | None = None,
+    comparison_reports: list[dict[str, Any] | None] | None = None,
+    selected: list[str] | None = None,
 ) -> dict[str, Any]:
     """Pure transition for one check's `base` rerun row: returns the completed classification entry."""
     entry = dict(prior_entry)
@@ -1339,7 +1447,21 @@ def evaluate_base_row(
     elif actual_row["status"] == "passed":
         entry.update({"class": str(CheckClass.REGRESSION), "base": evidence})
     elif actual_row["status"] == "failed":
-        entry.update({"class": str(CheckClass.PRE_EXISTING), "base": evidence})
+        comparison = (
+            comparison_problem(comparison_reports, check_id, selected if selected is not None else [check_id])
+            if comparison_reports is not None
+            else "candidate and base evidence are both required"
+        )
+        if comparison:
+            entry.update({"class": str(CheckClass.UNCLASSIFIED), "base": evidence, "reason": comparison})
+        else:
+            assert comparison_reports is not None
+            matched_evidence = failure_evidence(report_row(comparison_reports[0], check_id)) or {}
+            entry.update({
+                "class": str(CheckClass.PRE_EXISTING),
+                "base": evidence,
+                "failure_comparison": {"version": 1, **matched_evidence},
+            })
     else:
         entry.update({
             "class": str(CheckClass.UNCLASSIFIED),
@@ -1378,6 +1500,7 @@ def finalize_classification(
     green = bool(checks) and not cplan.unaccounted and all(e["class"] in LANDABLE for e in checks)
     return {
         "base": base,
+        "raw_status": "red",
         "checks": checks,
         "load": load,
         "unaccounted": cplan.unaccounted,
@@ -1409,6 +1532,7 @@ def classify_failures(
         return planned
     entries = dict(planned.entries)
     still_red = list(planned.still_red)
+    candidate_reports: list[dict[str, Any] | None] = [report]
     load: dict[str, Any] = {"first_run": host.load_averages(store.project)}
     runs: list[dict[str, Any]] = []
     if planned.active_rerun and not planned.first:
@@ -1419,6 +1543,7 @@ def classify_failures(
             meta=lane_meta(store, record), ticket=lane_ticket(record), toolchain=toolchain,
             only=planned.alone_tests,
         )
+        candidate_reports.append(alone_report)
         runs.append({"run": alone_run_id, "rerun": "alone",
                      **({"tests": planned.alone_tests} if planned.alone_tests else {})})
         load["alone"] = host.load_averages(store.project)
@@ -1465,6 +1590,7 @@ def classify_failures(
             entries[check_id] = evaluate_base_row(
                 check_id, entries[check_id], base=base, present=is_present, row=row, base_log=base_log,
                 kept_dir=kept, problem=base_problem, check_tests=check_tests,
+                comparison_reports=[*candidate_reports, base_report], selected=planned.candidates,
             )
     return finalize_classification(base, planned, entries, load=load, runs=runs)
 
@@ -1486,7 +1612,7 @@ def classification_lines(classification: dict[str, Any]) -> list[str]:
             detail = ("the base defines no such check" if entry["base"]["status"] == "absent"
                       else f"fails on the lane{again}, the base {base} passes it")
         elif kind == CheckClass.PRE_EXISTING:
-            detail = f"the base {base} fails it too ({entry['base']['log']})"
+            detail = f"the base {base} fails it too, with equivalent failure evidence ({entry['base']['log']})"
         elif kind == CheckClass.FLAKY_UNDER_LOAD:
             detail = (f"passes rerun by itself; load averages {'/'.join(map(str, entry['load']['first_run']))} "
                       f"after the lane run, {'/'.join(map(str, entry['load']['alone']))} after its rerun")
@@ -1505,8 +1631,8 @@ def classification_lines(classification: dict[str, Any]) -> list[str]:
                      f"{' behind ' + ', '.join(behind) if behind else ''}; they used no rerun and count as "
                      "neither passed nor regressed")
     if classification["green"]:
-        lines.append("lane: every red check is flaky-under-load or pre-existing: the receipt is green; a flake "
-                     "ticket cites these lines")
+        lines.append("lane: raw verification RED; every red check is flaky-under-load or pre-existing: "
+                     "the classified receipt is green; a flake ticket cites these lines")
     return lines
 
 
@@ -1627,6 +1753,7 @@ def joined_classification(
     base_dict = first_cls if second_cls is None else second_cls
     return dict(
         base_dict,
+        raw_status="red",
         checks=combined_checks,
         unaccounted=unaccounted,
         runs=runs,
