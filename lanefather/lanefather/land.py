@@ -415,7 +415,7 @@ def merge(
         else:
             diff_base = git(main, "merge-base", int_head, tip, check=False) or int_head
             lane_stats = review_class.diff_stats(main, diff_base, tip)
-        is_fix_lane = bool(list(review.valid_fix_parents(record, store)))
+        is_fix_lane = lifecycle.is_fix_lane(record) and bool(list(review.valid_fix_parents(record, store)))
         class_problems = review_class.land_problems(
             record, lane_stats, store.project, root=main, is_fix_lane=is_fix_lane, receipt=receipt,
         )
@@ -535,7 +535,7 @@ def post_merge(store: state.Store, landed: Landed, slots: int | None) -> Smoke:
                 docs_only = review.documentation_only(list(merged_stats.paths), store.project)
                 eff_cls, eff_why = review_class.effective_class(
                     record, merged_stats, store.project, root=checkout,
-                    is_fix_lane=bool(list(review.valid_fix_parents(record, store))),
+                    is_fix_lane=lifecycle.is_fix_lane(record) and bool(list(review.valid_fix_parents(record, store))),
                     receipt=receipt,
                 )
                 record = store.update(
@@ -579,7 +579,7 @@ def post_merge(store: state.Store, landed: Landed, slots: int | None) -> Smoke:
                 plan_docs_only = review.documentation_only(merged_plan["paths"], store.project)
                 eff_cls, eff_why = review_class.effective_class(
                     record, merged_stats, store.project, root=checkout,
-                    is_fix_lane=bool(list(review.valid_fix_parents(record, store))),
+                    is_fix_lane=lifecycle.is_fix_lane(record) and bool(list(review.valid_fix_parents(record, store))),
                     receipt=receipt,
                 )
                 record = store.update(

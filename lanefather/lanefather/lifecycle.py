@@ -245,6 +245,26 @@ def register(store: state.Store, record: Record, *, status: str = "planned", wor
         return record
 
 
+def resumable_hand_over_worktree(store: state.Store, parent: Record, fix_id: str) -> str | None:
+    """When an interrupted hand-over cleared `parent['worktree']` after recording `handed_over` for `fix_id`,
+    return that worktree path if `fix_id` has no occupying record yet, else `None`."""
+    if not awaiting_done(parent) or parent.get("worktree"):
+        return None
+    raw_ho: Any = parent.get("handed_over")
+    if not isinstance(raw_ho, dict):
+        return None
+    ho = cast(dict[str, Any], raw_ho)
+    if ho.get("to") != fix_id:
+        return None
+    wt = ho.get("worktree")
+    if not isinstance(wt, str) or not wt:
+        return None
+    existing_fix = state.read_json(store.record_path(fix_id))
+    if existing_fix is not None and occupying(existing_fix):
+        return None
+    return wt
+
+
 def hand_over(
     store: state.Store,
     parent_id: str,
@@ -257,27 +277,45 @@ def hand_over(
 ) -> tuple[Record, Record]:
     """Atomically hand over `parent_id`'s worktree to `fix_record` under `store`'s `state` lock (fathers#45).
 
-    Validates `parent_id` can perform `hand_over` and holds a worktree, clears `parent["worktree"]` while recording
-    `handed_over`, and registers `fix_record` as `active` (`kind="fix"`) holding that worktree. Writes the parent
-    first and rolls it back if writing the fix record fails so an interrupted hand-over never leaves both lanes
-    owning the worktree.
+    Validates `parent_id` can perform `hand_over` and holds a worktree (or has an interrupted hand-over to `fix_id`
+    whose fix record was never saved), clears `parent["worktree"]` while recording `handed_over`, and registers
+    `fix_record` as `active` (`kind="fix"`) holding that worktree. Writes the parent first and rolls it back if
+    writing the fix record fails so an interrupted hand-over never leaves both lanes owning the worktree.
     """
     stamp = now or journal.now()
-    fix_id = str(fix_record["id"])
+    raw_fix_id = fix_record.get("id")
+    if not isinstance(raw_fix_id, str) or not raw_fix_id:
+        raise LaneError("hand-over refused: fix lane record has no valid id")
+    fix_id = raw_fix_id
+    if parent_id not in state.fix_parents(fix_record):
+        raise LaneError(f"hand-over refused: fix lane {fix_id} does not name {parent_id} as its fix parent")
     with store.locked("state"):
+        existing_fix = state.read_json(store.record_path(fix_id))
+        if existing_fix is not None and occupying(existing_fix):
+            raise LaneError(f"hand-over refused: lane {fix_id} already exists ({existing_fix.get('status')})")
         original_parent = store.load(parent_id)
         current = str(original_parent.get("status", ""))
         if (current, "hand_over") not in TRANSITIONS:
             raise LaneError(f"lane {parent_id}: cannot hand_over from status {current!r}")
-        worktree = original_parent.get("worktree")
-        if not isinstance(worktree, str) or not worktree:
-            raise LaneError(f"hand-over refused: lane {parent_id} ({current}) has no worktree to hand over")
+        raw_wt = original_parent.get("worktree")
+        resumed = False
+        if isinstance(raw_wt, str) and raw_wt:
+            worktree = raw_wt
+        else:
+            resumed_wt = resumable_hand_over_worktree(store, original_parent, fix_id)
+            if resumed_wt is None:
+                raise LaneError(f"hand-over refused: lane {parent_id} ({current}) has no worktree to hand over")
+            worktree = resumed_wt
+            resumed = True
         target = TRANSITIONS[(current, "hand_over")]
 
-        updated_parent: Record = dict(original_parent)
-        updated_parent["status"] = target
-        updated_parent["worktree"] = None
-        updated_parent["handed_over"] = {"to": fix_id, "worktree": worktree, "at": stamp}
+        if resumed:
+            updated_parent = original_parent
+        else:
+            updated_parent = dict(original_parent)
+            updated_parent["status"] = target
+            updated_parent["worktree"] = None
+            updated_parent["handed_over"] = {"to": fix_id, "worktree": worktree, "at": stamp}
 
         fix_record["status"] = "active"
         fix_record["kind"] = "fix"
@@ -287,13 +325,16 @@ def hand_over(
 
         # Clear parent's worktree first so a hard crash between writes never leaves two owners;
         # on write failure saving the fix record, restore the original parent record.
-        store.save(updated_parent)
-        try:
+        if resumed:
             store.save(fix_record)
-        except BaseException:
-            with contextlib.suppress(BaseException):
-                store.save(original_parent)
-            raise
+        else:
+            store.save(updated_parent)
+            try:
+                store.save(fix_record)
+            except BaseException:
+                with contextlib.suppress(BaseException):
+                    store.save(original_parent)
+                raise
 
         details = dict(ledger_details or {})
         details.setdefault("status", fix_record["status"])

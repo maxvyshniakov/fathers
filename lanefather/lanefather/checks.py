@@ -50,7 +50,7 @@ def integration_refs(store: state.Store, record: Record, worktree: str) -> list[
 
     places: list[Any] = [record.get("integration"), landed_into(record)]
     literal = not git_ok(worktree, "show-ref", "--verify", "--quiet", f"refs/heads/{record['base']}")
-    if literal:
+    if literal and lifecycle.is_fix_lane(record):
         places += [landed_into(state.read_json(store.record_path(parent)) or {})
                    for parent in state.fix_parents(record) if state.ID.match(parent)]
     refs = [branch for path in places if isinstance(path, str) and os.path.isdir(path)
@@ -68,6 +68,8 @@ def integration_refs(store: state.Store, record: Record, worktree: str) -> list[
 
 def fix_parent(store: state.Store, record: Record) -> dict[str, Any] | None:
     """The original lane's per-check receipt for a hand-over. A lane from start --fix-of runs its own plan."""
+    if not lifecycle.is_fix_lane(record):
+        return None
     parent = state.hand_over_parent(record)
     if parent is None:
         return None

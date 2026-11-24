@@ -127,14 +127,18 @@ def prepare(store: state.Store, cwd: Any, lane_id: str, ticket: str, lane_claims
 
 def fix_parent(store: state.Store, record: Record) -> str | None:
     """The landed lane whose kept worktree a fix lane (review --fix-lane) takes over, else None."""
-    if lifecycle.kind_of(record) != "fix":
+    if not lifecycle.is_fix_lane(record):
         return None
     parent_id = state.hand_over_parent(record)
     if parent_id is None:
         return None
     parent = state.read_json(store.record_path(parent_id))
-    if (parent and lifecycle.awaiting_done(parent) and parent.get("worktree")
-            and parent.get("worktree") == record.get("worktree")):
+    if not (parent and lifecycle.awaiting_done(parent)):
+        return None
+    parent_wt = parent.get("worktree")
+    if not parent_wt and isinstance(record.get("id"), str) and record["id"]:
+        parent_wt = lifecycle.resumable_hand_over_worktree(store, parent, record["id"])
+    if parent_wt and parent_wt == record.get("worktree"):
         return parent_id
     return None
 
@@ -818,7 +822,10 @@ def hand_over_fix_lane(
     # The fix lane does part of its parent's tickets: its merge says Refs, never a second Fixes (#64).
     fix, rules = prepare(store, main, fix_id, record["ticket"], fix_paths, base, [], parents=[record["id"]],
                          items=scope.as_partial(scope.of(record)))
-    fix["worktree"] = record["worktree"]
+    worktree = record.get("worktree")
+    if not isinstance(worktree, str) or not worktree:
+        worktree = lifecycle.resumable_hand_over_worktree(store, record, fix_id)
+    fix["worktree"] = worktree
     repaired: str | None = None
     updated_parent: Record | None = None
     while True:

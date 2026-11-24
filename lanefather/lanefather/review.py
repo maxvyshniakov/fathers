@@ -1574,7 +1574,10 @@ def hand_over(args: Any, store: state.Store) -> int:
             f"hand-over refused: lane {args.id} has unsupported status {lane_state!r} "
             "(must be active, landed or released)"
         )
+    fix_id = f"{args.id}-review-fixes"
     worktree = record.get("worktree")
+    if not isinstance(worktree, str) or not worktree:
+        worktree = lifecycle.resumable_hand_over_worktree(store, record, fix_id)
     if not worktree:
         raise LaneError(f"hand-over refused: lane {args.id} ({lane_state}) has no worktree to hand over")
     if not os.path.isdir(worktree):
@@ -1582,7 +1585,6 @@ def hand_over(args: Any, store: state.Store) -> int:
     if lifecycle.active(record):
         return pre_land_fix_round(store, args, record, worktree)
     parent_rev = review_record.ReviewRecord.fix_parent(store, args.id, record["common_dir"], "hand-over refused")
-    fix_id = f"{args.id}-review-fixes"
     main = main_checkout(record["common_dir"])
     fix_paths, held = fix_claims(store, parent_rev, fix_id, record["common_dir"])
     fix, record = lanes.hand_over_fix_lane(

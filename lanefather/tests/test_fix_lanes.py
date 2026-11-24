@@ -284,8 +284,63 @@ class FixLaneKindAndAtomicHandOverTests(LaneCase):
 
             listed_after = json.loads(self.lane("list", "--json"))
             owners_after = [entry["id"] for entry in listed_after["lanes"] if entry.get("worktree") == worktree]
-            self.assertLessEqual(len(owners_after), 1)
-            self.assertEqual(os.path.realpath(worktree), worktree)
+            self.assertEqual(owners_after, [])
+            self.assertIsNone(self.record("a")["worktree"])
+            self.assertEqual(self.record("a")["handed_over"]["to"], "a-review-fixes")
+            self.assertFalse((self.state / "a-review-fixes.json").exists())
+
+        # Retrying `review a --fix-lane` resumes the interrupted hand-over and leaves exactly one owner (`a-review-fixes`).
+        self.lane("review", "a", "--fix-lane")
+        fix = self.record("a-review-fixes")
+        self.assertEqual((fix["status"], fix["kind"], fix["worktree"]), ("active", "fix", worktree))
+        self.assertIsNone(self.record("a")["worktree"])
+        listed_resumed = json.loads(self.lane("list", "--json"))
+        owners_resumed = [entry["id"] for entry in listed_resumed["lanes"] if entry.get("worktree") == worktree]
+        self.assertEqual(owners_resumed, ["a-review-fixes"])
+        self.assertEqual(os.path.realpath(worktree), worktree)
+
+    def test_review_record_fix_lane_edge_cases(self) -> None:
+        from unittest.mock import patch
+
+        from lanefather import config, review_record, state
+
+        self._landed_parent()
+        common = self.record("a")["common_dir"]
+        # Seed a truncated/corrupt lane file to ensure `fix_lane` passes `damaged=[]` and does not crash.
+        (self.state / "corrupt.json").write_text("{not valid json")
+        # Seed another project's fix lane targeting "a" in the shared state directory.
+        (self.state / "00-foreign-fix.json").write_text(json.dumps({
+            "id": "00-foreign-fix", "status": "active", "kind": "fix", "review_fix_of": "a",
+            "ticket": "404", "branch": "lane/00-foreign-fix", "claims": [], "after": [],
+            "common_dir": "/other/repo/.git", "created": "2099-01-01T00:00:00Z",
+        }))
+        # Seed an older done fix lane and a newer active batch fix lane in the same repo.
+        (self.state / "00-batch-old.json").write_text(json.dumps({
+            "id": "00-batch-old", "status": "done", "kind": "fix", "review_fix_of": "a",
+            "review_fix_of_all": ["a", "b"], "ticket": "404", "branch": "lane/00-batch-old",
+            "claims": [], "after": [], "common_dir": common, "created": "2026-11-20T00:00:00Z",
+        }))
+        (self.state / "01-batch-live.json").write_text(json.dumps({
+            "id": "01-batch-live", "status": "active", "kind": "fix", "review_fix_of": "a",
+            "review_fix_of_all": ["a", "b"], "ticket": "404", "branch": "lane/01-batch-live",
+            "claims": [], "after": [], "common_dir": common, "created": "2026-11-21T00:00:00Z",
+        }))
+        with patch.dict("os.environ", self.env, clear=True):
+            cfg = config.load(self.repo / ".lanefather.toml")
+            store = state.Store(cfg, directory=self.state)
+            rev = review_record.ReviewRecord.load(store, "a", record=self.record("a"))
+            # Before hand-over: ignores foreign repo, prefers occupying `01-batch-live` over done `00-batch-old`.
+            self.assertEqual(rev.fix_lane(store), "01-batch-live")
+
+        # After hand-over: parent's `handed_over["to"]` beats lexicographically earlier `01-batch-live`.
+        (self.state / "corrupt.json").unlink()
+        self.lane("review", "a", "--fix-lane")
+        (self.state / "corrupt.json").write_text("{not valid json")
+        with patch.dict("os.environ", self.env, clear=True):
+            cfg = config.load(self.repo / ".lanefather.toml")
+            store = state.Store(cfg, directory=self.state)
+            rev = review_record.ReviewRecord.load(store, "a", record=self.record("a"))
+            self.assertEqual(rev.fix_lane(store), "a-review-fixes")
 
 
 if __name__ == "__main__":

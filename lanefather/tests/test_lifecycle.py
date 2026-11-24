@@ -236,9 +236,19 @@ class LifecycleTableTests(unittest.TestCase):
         # Refuses non-landed parent or parent without worktree.
         self._seed("act", "active", worktree=str(self.tmp / "act"))
         with self.assertRaises(LaneError):
-            lifecycle.hand_over(self.store, "act", dict(fix, id="act-fix"))
+            lifecycle.hand_over(self.store, "act", dict(fix, id="act-fix", review_fix_of="act"))
         with self.assertRaises(LaneError):
-            lifecycle.hand_over(self.store, "p", dict(fix, id="p-fix-2"))
+            lifecycle.hand_over(self.store, "p", dict(fix, id="p-fix-2", review_fix_of="p"))
+
+        # Self-contained validation: refuses missing/mismatched fix parent and existing occupying fix lane.
+        self._seed("q", "landed", worktree=str(self.tmp / "q"))
+        with self.assertRaises(LaneError):
+            lifecycle.hand_over(self.store, "q", dict(fix, id="q-fix", review_fix_of="other"))
+        with self.assertRaises(LaneError):
+            lifecycle.hand_over(self.store, "q", {k: v for k, v in fix.items() if k != "review_fix_of"})
+        self._seed("q-existing", "active", worktree=str(self.tmp / "q-existing"))
+        with self.assertRaises(LaneError):
+            lifecycle.hand_over(self.store, "q", dict(fix, id="q-existing", review_fix_of="q"))
 
         # Rollback on second store.save failure restores parent's worktree.
         self._seed("r", "landed", worktree=str(self.tmp / "r"))
@@ -253,7 +263,7 @@ class LifecycleTableTests(unittest.TestCase):
             real_save(rec)
 
         with mock.patch.object(self.store, "save", side_effect=fail_second), self.assertRaises(OSError):
-            lifecycle.hand_over(self.store, "r", dict(fix, id="r-fix"))
+            lifecycle.hand_over(self.store, "r", dict(fix, id="r-fix", review_fix_of="r"))
         self.assertEqual(self.store.load("r")["worktree"], str(self.tmp / "r"))
         self.assertNotIn("handed_over", self.store.load("r"))
         self.assertFalse(self.store.record_path("r-fix").exists())
