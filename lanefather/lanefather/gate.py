@@ -6,7 +6,7 @@ from pathlib import Path
 import subprocess
 from typing import Any
 
-from . import config, host, journal, plan, receipts, slots, state, verify, worktrees
+from . import config, host, journal, plan, receipts, slots, stamp, state, verify, worktrees
 from . import results as result_store
 from .errors import LaneError
 from .gitops import common_dir, git
@@ -20,15 +20,13 @@ def promote_lock_message(store: state.Store) -> str:
 
 def stamped_trees(common: str, project: config.Config = config.DEFAULT) -> set[str]:
     """The trees a full verify run stamped, from the common Git directory."""
-    try:
-        rows = (Path(common) / project.stamp_file).read_text().splitlines()
-    except OSError:
-        return set()
-    return {row.split()[0] for row in rows if row.split()}
+    return stamp.stamped_trees(common, stamp_file=project.stamp_file)
 
 
 def verified(cwd: str, common: str, sha: str, project: config.Config = config.DEFAULT) -> bool:
-    """Whether pre-push would take the SHA's tree: stamped, or (with the hook) differing only in documentation."""
+    """Whether pre-push would take the SHA's tree: stamped, or differing only in `.md` files (builtin or hook)."""
+    if project.stamp_tool == stamp.BUILTIN:
+        return stamp.check_tree(cwd, common, sha, stamp_file=project.stamp_file).verified
     if git(cwd, "rev-parse", sha + "^{tree}") in stamped_trees(common, project):
         return True
     if not project.stamp_tool:
@@ -47,6 +45,10 @@ def verified_why(store: state.Store, cwd: str, sha: str) -> str:
     top = git(cwd, "rev-parse", "--show-toplevel", check=False) or cwd
     entry = result_store.full_green(store, tree, plan.toolchain_state(top, store.project))
     if entry is None:
+        if store.project.stamp_tool == stamp.BUILTIN:
+            checked = stamp.check_tree(cwd, common_dir(cwd), sha, stamp_file=store.project.stamp_file)
+            if checked.verified and checked.match == "md-only" and checked.matched_tree is not None:
+                return f"tree {tree[:10]} matches stamped tree {checked.matched_tree[:10]} (.md-only)"
         return f"tree {tree[:10]} is stamped"
     source = f"the batch gate of {str(entry.get('sha'))[:10]}" if entry.get("source") == "gate" else entry.get("source")
     return (f"{source} passed tree {tree[:10]} at {entry.get('at')}"

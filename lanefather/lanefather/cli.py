@@ -43,6 +43,7 @@ from . import (
     runtime,
     settings,
     show,
+    stamp,
     state,
     status,
     tickets,
@@ -128,6 +129,10 @@ COMMANDS: dict[str, Command] = {
     "results": Command("check results by tree and plan",
                        "key|lookup|record <rev> (--full | --checks A,B) [--status S] [--json]",
                        "lookup HEAD --full"),
+    "stamp": Command("verified-tree stamp ledger: record, check, list, start, finish, abort or complete",
+                     "record|check [REV] [--token HEX32] [--file NAME] [--json] | list [--file NAME] [--json] | "
+                     "start | finish STATE [--token HEX32] | abort|complete TOKEN",
+                     "check HEAD --json"),
     "stats": Command("lane flow, outcomes, overrides, review and check health", "[--days N] [--lane ID] [--json]",
                      "--days 3 --json"),
     "settings": Command("this machine's settings: show, check, set, reset",
@@ -497,6 +502,18 @@ def parser(project: config.Config = config.DEFAULT) -> Parser:
                                       "host's); a result stands only for its own platform")
     p.add_argument("--json", action="store_true")
     p.set_defaults(run=results.command)
+    p = add(root, commands, "stamp", "Tree-keyed verified-tree stamp ledger in the Git common directory with "
+            ".md-only equivalence (lanefather.stamp, fathers#48). Full verifiers call record (or start/finish) to "
+            "emit the standard stamp line; pre-push hooks and promote call check.", prog=prog)
+    p.add_argument("action", choices=("record", "check", "list", "start", "finish", "abort", "complete"))
+    p.add_argument("target", nargs="?", metavar="REV|STATE|TOKEN",
+                   help="rev for record/check (default HEAD), snapshot for finish, or 32-hex token for abort/complete")
+    p.add_argument("--token", metavar="HEX32",
+                   help="32-hex transaction token for transactional record/finish/abort/complete")
+    p.add_argument("--file", metavar="NAME",
+                   help="ledger filename in the Git common directory (default: [gate] stamp_file or verified-trees)")
+    p.add_argument("--json", action="store_true", help="the version-1 JSON reply")
+    p.set_defaults(run=stamp.command)
     p = add(root, commands, "stats", "Lane flow, outcomes, overrides, review and per-check p50/p90 from lane records, "
             "receipts, events and run history (lanefather.history).", prog=prog)
     p.add_argument("--days", type=float, default=7, help="the window in days (default 7; 0: everything kept)")
@@ -696,6 +713,10 @@ def main(argv: list[str] | None = None) -> int:
             return args.run(args, loaded_cfg)
         if args.command == "show":
             return show.show(args, loaded_cfg, cfg_err)
+        if args.command == "stamp":
+            if cfg_err is not None:
+                raise cfg_err
+            return stamp.command(args, loaded_cfg or config.DEFAULT)
         if cfg_err is not None:
             raise cfg_err
         assert loaded_cfg is not None
