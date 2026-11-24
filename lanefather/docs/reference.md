@@ -20,6 +20,9 @@ lanefather review --overall <sha> --since <base>
 lanefather done <id>
 lanefather done --finished [--dry-run]    done on every finished lane of the registered projects
 lanefather drop <id> [<id> ...]           remove an active lane that adds nothing to its base
+lanefather park <id> --reason REASON      park a lane on park/<id> and free its cap, claims and worktree
+lanefather unpark <id> [--base REF] [--agent KIND] [--force-reason REASON]   resume a parked lane from park/<id>
+lanefather abandon <id> --reason REASON [--keep-branch REF] [--force-reason REASON]   abandon an unlanded lane
 lanefather recheck <id> [--slots N]       rerun a red post-merge smoke on the integration tip
 lanefather smoke <id> [--rerun [--slots N] | --accept REASON]   post-merge smoke status, rerun or accept
 lanefather keep <id> [--off]              auto-done and done --finished leave the lane
@@ -38,7 +41,7 @@ Several projects may share one Store (its `lanes` directory, fathers#149). `list
 lanes of the repository it runs in, as the lane cap counts them; `--all-projects` shows every lane of the Store,
 each row ending in `project: <name>` (fathers#236). Every lane object of `list --json` carries `project`, the
 repository's main checkout directory name, and `gone` (below). `check`, `wait`, `land`, `review`, `done`, `drop`,
-`recheck`, `smoke`, `keep` and `scope` refuse an id of another repository's lane, naming that repository and the command to
+`park`, `unpark`, `abandon`, `recheck`, `smoke`, `keep` and `scope` refuse an id of another repository's lane, naming that repository and the command to
 run there (`lane X belongs to sid-kit, not data-grid; run it there (<checkout>): cd <checkout> && lanefather drop
 X`); nothing changes. `show` is read-only and names the lane's project, so it reads any lane of the Store; with
 `--project-dir` it refuses another repository's lane. `status` lists every registered project's lanes by project.
@@ -247,6 +250,19 @@ check's base checkout, a review's, the smoke's and the gate's) and the shared ca
   lane in the same worktree. The record becomes `done` with `dropped` (`why`, `tip`, `base`) and the ledger names
   why (`lane.dropped`). A lane with work refuses, with no flag to override it: land it, or revert its commits on
   the lane first.
+- `lanefather park ID --reason REASON` (fathers#57) saves a planned or active lane's current branch tip on
+  `park/<id>`, frees its lane cap, claims, worktree and lane branch, keeps its receipts, and transitions the record
+  to `done` with `outcome = "parked"` and `parked = {"ref", "tip", "reason", "at"}` (`lane.parked`). A parked lane
+  never counts as landed: `next` skips dependants with `waits for ID (parked)`, `start --create` and `land` refuse
+  dependants, and `list --all` shows `done (parked)`. `lanefather unpark ID [--base REF]` re-registers the lane
+  from `park/<id>`, preserving its scope, claims and base and creating a fresh worktree; its new `created`
+  timestamp ensures older receipts are not inherited (fathers#54).
+- `lanefather abandon ID --reason REASON [--keep-branch REF] [--force-reason REASON]` (fathers#57) transitions a
+  planned or active lane to `done` with `outcome = "abandoned"` (`lane.abandoned`) and removes its worktree, branch,
+  scratch and claims. It refuses when the branch has commits not merged anywhere unless `--keep-branch park/<id>`
+  saves the tip or `--force-reason` overrides (audited via `override`). An abandoned lane never counts as landed
+  (`waits for ID (abandoned)` in `next`, `done (abandoned)` in `list --all`). `done` on an unlanded lane names
+  `park` and `abandon`.
 - A lane is *gone* when it is planned or active, its repository exists, it had a worktree, and neither that
   worktree (as a directory) nor its branch is left: a batch whose branches were deleted by hand leaves such lanes,
   and they hold the lane cap and their claims although they can never land (fathers#237). A planned lane that never
@@ -729,7 +745,7 @@ absolute path as `dashboard.events.path`. One `journal.ledger` call writes both,
 
 Kinds: `lane.started`, `lane.adopted`, `claims.added`, `lane.checked`, `landing.reviewed`, `lane.conflict`,
 `lane.landed`, `lane.post_merge`, `lane.released`, `lane.done_refused`, `lane.unregistered`, `lane.done`, `lane.dropped`,
-`lane.rechecked`, `lane.kept`, `lane.scope_changed`, `process.stopped`,
+`lane.parked`, `lane.abandoned`, `lane.rechecked`, `lane.kept`, `lane.scope_changed`, `process.stopped`,
 `review.started`, `review.kept`, `review.exempted`, `review.finished`, `finding.marked`, `review.marked`,
 `review.handed_over`, `review.ticket_filed`, `gate.finished`, `perf.finished`, `promote.step`, `promote.finished`,
 `sync.finished`, `load.waited`, `landing.lock_taken`, `ticket.marked`, `ticket.skipped`,
@@ -778,7 +794,7 @@ scope in order, with `partial` for one it does only part of (`show --json` carri
 `receipt.tree_match` compares the receipt's tree with the lane branch's, null when
 either is unknown; `review.status` is the review receipt's, `stopped` for a running review whose process is gone;
 `logs` holds the newest run log of each phase (`check`, `rerun`, `base`, `post-merge`, `review`); `gate` is the newest
-batch gate; `outcome` stays null until lane parking is implemented and records one. `checkout` is the project's main
+batch gate; `outcome` is null on the live lanes `status --json` lists, and `"landed"`, `"parked"`, or `"abandoned"` on done lanes in `list --all --json`. `checkout` is the project's main
 checkout (its real path), the project a lane owner names in Spawnfather (`lane:<checkout>/<id>`, fathers#171). `cap` is the project's lifetime admission answer,
 or its derived cap with the reason when admission is unavailable. A project that cannot be read gives
 `{"project", "state_dir", "error"}`, never a failed snapshot; one whose configuration file is missing and that no

@@ -175,8 +175,9 @@ class CallSiteTests(unittest.TestCase):
             self.assertFalse('setdefault("overrides", []).append' in text, f"{path.name} audits an override by hand")
             self.assertFalse('["overrides"].append' in text, f"{path.name} audits an override by hand")
             sites += [path.name] * text.count("journal.override(")
-        self.assertEqual(sorted(sites), ["done.py", "land.py", "land.py", "land.py", "lanes.py", "lanes.py",
-                                        "postmerge.py", "promote.py", "review.py", "review_gate.py"])
+        self.assertEqual(sorted(sites), ["done.py", "done.py", "land.py", "land.py", "land.py", "land.py",
+                                        "lanes.py", "lanes.py", "lanes.py", "postmerge.py", "promote.py",
+                                        "review.py", "review_gate.py"])
 
     def test_journal_override_appends_the_entry_and_writes_the_warn_ledger_line(self):
         directory = pathlib.Path(tempfile.mkdtemp(prefix="lanefather-override-"))

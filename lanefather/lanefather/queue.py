@@ -92,12 +92,12 @@ def queue_states(entries: list[dict[str, Any]], records: list[Record],
             reason = f"blocked: {blocked}" if isinstance(blocked, str) else "blocked"
         elif entry["id"] in by_id:
             existing = by_id[entry["id"]]
-            reason = f"registered ({existing['status']})"
+            reason = f"registered ({lifecycle.display_state(existing)})"
             if lifecycle.planned(existing):
                 reason += f"; run {project.command} start {entry['id']} --create once ready"
         else:
-            waiting = [f"{name} ({by_id[name]['status'] if name in by_id else 'not started'})"
-                       for name in entry.get("after", []) if not lifecycle.landed(by_id.get(name))]
+            waiting = [f"{name} ({lifecycle.display_state(by_id.get(name), missing='not started')})"
+                       for name in entry.get("after", []) if not lifecycle.after_satisfied(by_id.get(name))]
             if waiting:
                 reason = "waits for " + ", ".join(waiting)
             for other in [] if waiting else active:

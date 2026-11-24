@@ -48,18 +48,37 @@ class LifecycleTableTests(unittest.TestCase):
     def test_predicates_cover_all_statuses_and_none(self) -> None:
         from lanefather import lifecycle
         expected = {
-            "planned":  dict(planned=True, active=False, occupying=True, landed=False, released=False, awaiting_done=False, finished=False, live=True),
-            "active":   dict(planned=False, active=True, occupying=True, landed=False, released=False, awaiting_done=False, finished=False, live=True),
-            "landed":   dict(planned=False, active=False, occupying=False, landed=True, released=False, awaiting_done=True, finished=False, live=True),
-            "released": dict(planned=False, active=False, occupying=False, landed=True, released=True, awaiting_done=True, finished=False, live=True),
-            "done":     dict(planned=False, active=False, occupying=False, landed=True, released=False, awaiting_done=False, finished=True, live=False),
+            "planned":  dict(planned=True, active=False, occupying=True, landed=False, released=False, awaiting_done=False, finished=False, live=True, parked=False, abandoned=False),
+            "active":   dict(planned=False, active=True, occupying=True, landed=False, released=False, awaiting_done=False, finished=False, live=True, parked=False, abandoned=False),
+            "landed":   dict(planned=False, active=False, occupying=False, landed=True, released=False, awaiting_done=True, finished=False, live=True, parked=False, abandoned=False),
+            "released": dict(planned=False, active=False, occupying=False, landed=True, released=True, awaiting_done=True, finished=False, live=True, parked=False, abandoned=False),
+            "done":     dict(planned=False, active=False, occupying=False, landed=False, released=False, awaiting_done=False, finished=True, live=False, parked=False, abandoned=False),
         }
         for status, checks in expected.items():
             rec = {"status": status}
             for name, want in checks.items():
                 self.assertEqual(getattr(lifecycle, name)(rec), want, f"{name}({status})")
-        for name in ("planned", "active", "occupying", "landed", "released", "awaiting_done", "finished", "live"):
+        for name in ("planned", "active", "occupying", "landed", "released", "awaiting_done", "finished", "live",
+                     "parked", "abandoned"):
             self.assertFalse(getattr(lifecycle, name)(None), f"{name}(None)")
+        # `done` reads as landed only when its outcome is `landed` or legacy `landed` metadata is present.
+        self.assertTrue(lifecycle.landed({"status": "done", "landed": {"merge": "a" * 40}}))
+        self.assertTrue(lifecycle.landed({"status": "done", "outcome": "landed"}))
+        self.assertFalse(lifecycle.landed({"status": "done", "outcome": "parked"}))
+        self.assertFalse(lifecycle.landed({"status": "done", "outcome": "parked", "landed": {"merge": "a" * 40}}))
+        self.assertFalse(lifecycle.landed({"status": "done", "outcome": "abandoned"}))
+        self.assertTrue(lifecycle.parked({"status": "done", "outcome": "parked"}))
+        self.assertTrue(lifecycle.abandoned({"status": "done", "outcome": "abandoned"}))
+        self.assertTrue(lifecycle.dropped({"status": "done", "dropped": {"why": "empty"}}))
+        self.assertTrue(lifecycle.after_satisfied({"status": "done", "dropped": {"why": "empty"}}))
+        self.assertFalse(lifecycle.landed({"status": "done", "dropped": {"why": "empty"}}))
+        self.assertFalse(lifecycle.after_satisfied({"status": "done", "outcome": "parked"}))
+        self.assertFalse(lifecycle.after_satisfied({"status": "done", "outcome": "abandoned"}))
+        self.assertEqual(lifecycle.display_state({"status": "done", "outcome": "parked"}), "parked")
+        self.assertEqual(lifecycle.display_state({"status": "done", "outcome": "abandoned"}), "abandoned")
+        self.assertEqual(lifecycle.display_state({"status": "done", "outcome": "landed"}), "done")
+        self.assertEqual(lifecycle.display_state({"status": "done", "dropped": {"why": "empty"}}), "dropped")
+        self.assertEqual(lifecycle.display_state(None), "not started")
 
     def test_every_status_event_pair(self) -> None:
         from lanefather import lifecycle
@@ -73,6 +92,10 @@ class LifecycleTableTests(unittest.TestCase):
             ("released", "finish"): "done",
             ("planned", "drop"): "done",
             ("active", "drop"): "done",
+            ("planned", "park"): "done",
+            ("active", "park"): "done",
+            ("planned", "abandon"): "done",
+            ("active", "abandon"): "done",
             ("landed", "hand_over"): "landed",
             ("released", "hand_over"): "released",
             ("landed", "record_smoke"): "landed",

@@ -8,6 +8,17 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
 
 ### Added
 
+- Lane parking and abandoning as explicit outcomes (fathers#57): `lanefather park <id> --reason REASON` saves the
+  lane's tip on `park/<id>`, frees its cap, claims and worktree, keeps its receipts, and transitions `planned|active
+  -> done` with `outcome = "parked"` (`parked = {ref, tip, reason, at}`, event `lane.parked`). `lanefather unpark
+  <id>` re-registers the lane from `park/<id>` preserving scope, claims and base without inheriting older receipts.
+  `lanefather abandon <id> --reason REASON [--keep-branch REF] [--force-reason REASON]` transitions `planned|active
+  -> done` with `outcome = "abandoned"` (event `lane.abandoned`), refusing unmerged commits unless `--keep-branch`
+  or an audited `--force-reason` is given. `lifecycle.landed` checks `outcome` / `landed` metadata rather than
+  `status == "done"` alone, so parked, abandoned, and legacy forced-`done` lanes never satisfy `--after` without
+  `--force-reason` (dropped lanes still satisfy `--after`; `next` reports `waits for X (parked)` / `waits for X
+  (abandoned)`), `done` on an unlanded lane names `park` and `abandon`, and `list --all` shows `done (parked)` /
+  `done (abandoned)`.
 - Pre-land lane review (fathers#242): `lanefather review <id>` works on an active lane with a clean worktree and
   commits beyond its base, recording `tip`, `tree` and `pre_land: true` on the review receipt. Findings can be fixed
   in the same lane and marked with `--mark N fixed:<sha|id>` or `rejected:<reason>` before landing. When the pre-land
