@@ -337,10 +337,11 @@ class ReviewGateTests(ReviewGateCase):
         self.assertIn("Lane a-review-fixes: ticket #404", output)
         self.assertIn("git checkout -B lane/a-review-fixes integrate/q", output)
         fix = self.record("a-review-fixes")
-        self.assertEqual((fix["status"], fix["review_fix_of"], fix["worktree"]), ("planned", "a", worktree))
+        self.assertEqual((fix["status"], fix["kind"], fix["review_fix_of"], fix["worktree"]),
+                         ("active", "fix", "a", worktree))
         self.assertIsNone(self.record("a")["worktree"])
         self.assertEqual(self.record("a")["handed_over"]["to"], "a-review-fixes")
-        self.assertEqual(self.review("a")["fix_lane"], "a-review-fixes")
+        self.assertNotIn("fix_lane", self.review("a"))
         # The resumed agent stays in its worktree: a new branch from the integration tip, then the usual check.
         self.git(worktree, "checkout", "-q", "-B", "lane/a-review-fixes", "integrate/q")
         self.commit(worktree, {"calls/main.txt": "foo\nbaz\n"}, "fix(review): call baz")

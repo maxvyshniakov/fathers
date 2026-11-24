@@ -185,6 +185,79 @@ class LifecycleTableTests(unittest.TestCase):
         with self.assertRaises(LaneError):
             lifecycle.set_keep(self.store, "d", True)
 
+    def test_kind_of_and_is_fix_lane_handle_new_legacy_and_invalid_records(self) -> None:
+        from lanefather import lifecycle
+        self.assertEqual(lifecycle.kind_of({"kind": "lane"}), "lane")
+        self.assertFalse(lifecycle.is_fix_lane({"kind": "lane"}))
+        self.assertEqual(lifecycle.kind_of({"kind": "fix"}), "fix")
+        self.assertTrue(lifecycle.is_fix_lane({"kind": "fix"}))
+        # Legacy records without `kind` default to "lane", or "fix" when `review_fix_of` is set.
+        self.assertEqual(lifecycle.kind_of({"status": "active"}), "lane")
+        self.assertFalse(lifecycle.is_fix_lane({"status": "active"}))
+        self.assertEqual(lifecycle.kind_of({"review_fix_of": "a"}), "fix")
+        self.assertTrue(lifecycle.is_fix_lane({"review_fix_of": "a"}))
+        self.assertEqual(lifecycle.kind_of({"review_fix_of_all": ["a", "b"]}), "fix")
+        # Non-string or unknown `kind` values fall back strictly without str() coercion.
+        self.assertEqual(lifecycle.kind_of({"kind": 123}), "lane")
+        self.assertEqual(lifecycle.kind_of({"kind": True, "review_fix_of": "a"}), "fix")
+        self.assertEqual(lifecycle.kind_of({"kind": "unknown"}), "lane")
+        self.assertEqual(lifecycle.kind_of(None), "lane")
+        self.assertFalse(lifecycle.is_fix_lane(None))
+
+    def test_register_refuses_planned_lane_with_worktree(self) -> None:
+        from lanefather import lifecycle
+        from lanefather.errors import LaneError
+        rec: dict[str, Any] = {
+            "id": "bad", "ticket": "42", "branch": "lane/bad", "base": "integrate/q",
+            "base_sha": "0" * 40, "claims": [], "after": [], "common_dir": str(self.tmp),
+            "worktree": str(self.tmp / "wt"),
+        }
+        with self.assertRaises(LaneError):
+            lifecycle.register(self.store, rec, status="planned", worktree=str(self.tmp / "wt"))
+        self.assertFalse(self.store.record_path("bad").exists())
+
+    def test_hand_over_atomically_transfers_worktree_and_rolls_back_on_failure(self) -> None:
+        from lanefather import lifecycle
+        from lanefather.errors import LaneError
+        wt = str(self.tmp / "p")
+        self._seed("p", "landed", worktree=wt)
+        fix: dict[str, Any] = {
+            "id": "p-review-fixes", "ticket": "42", "branch": "lane/p-review-fixes", "base": "integrate/q",
+            "base_sha": "0" * 40, "claims": ["lib/**"], "after": [], "common_dir": str(self.tmp),
+            "review_fix_of": "p", "worktree": None, "status": "planned",
+        }
+        saved_fix, saved_parent = lifecycle.hand_over(self.store, "p", fix)
+        self.assertEqual((saved_fix["status"], saved_fix["kind"], saved_fix["worktree"]), ("active", "fix", wt))
+        self.assertIsNone(saved_parent["worktree"])
+        self.assertEqual(saved_parent["handed_over"]["to"], "p-review-fixes")
+        self.assertEqual(self.store.load("p-review-fixes")["status"], "active")
+        self.assertIsNone(self.store.load("p")["worktree"])
+
+        # Refuses non-landed parent or parent without worktree.
+        self._seed("act", "active", worktree=str(self.tmp / "act"))
+        with self.assertRaises(LaneError):
+            lifecycle.hand_over(self.store, "act", dict(fix, id="act-fix"))
+        with self.assertRaises(LaneError):
+            lifecycle.hand_over(self.store, "p", dict(fix, id="p-fix-2"))
+
+        # Rollback on second store.save failure restores parent's worktree.
+        self._seed("r", "landed", worktree=str(self.tmp / "r"))
+        real_save = self.store.save
+        calls = 0
+
+        def fail_second(rec: dict[str, Any]) -> None:
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                raise OSError("boom")
+            real_save(rec)
+
+        with mock.patch.object(self.store, "save", side_effect=fail_second), self.assertRaises(OSError):
+            lifecycle.hand_over(self.store, "r", dict(fix, id="r-fix"))
+        self.assertEqual(self.store.load("r")["worktree"], str(self.tmp / "r"))
+        self.assertNotIn("handed_over", self.store.load("r"))
+        self.assertFalse(self.store.record_path("r-fix").exists())
+
 
 class LifecycleGuardTests(unittest.TestCase):
     """Static guard (fathers#69): no module outside `state.py` / `lifecycle.py` mutates lane status or saves a lane

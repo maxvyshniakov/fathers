@@ -98,14 +98,20 @@ toolchain check for a merge that already landed). Read-only commands (`list`, `s
 only and never execute project toolchain resolvers.
 
 `review <id> --fix-lane` starts the fix lane from the branch the lane landed on, which holds its merge, and refuses
-when no branch does; the landed lane keeps its own registration. The fix lane takes over the landed lane's scope
-with every ticket partial, so its merge says `Refs #N` and closes none of them a second time (fathers#64).
+when no branch does; the landed lane keeps its own registration. In one atomic `hand_over` transaction under the
+`state` lock, it clears the parent's `worktree` (recording `handed_over`), registers the fix lane directly as `active`
+with `kind: "fix"` holding that worktree (so no `planned` lane ever holds a worktree), and rolls back on write failure
+so an interrupted hand-over never leaves both lanes owning the worktree (fathers#45). The fix lane takes over the
+landed lane's scope with every ticket partial, so its merge says `Refs #N` and closes none of them a second time
+(fathers#64).
 
 A fix lane is exempt from review at land (`review.exempted`): the one `review <id> --fix-lane` registers for one
 lane, and a batch fix lane started with `start <id> --fix-of A,B,C` for the findings of one or more landed lanes
-(fathers#174). Each parent needs a finished review with at least one unmarked finding. The record keeps the first
-parent's ID in the string `review_fix_of` for older Lanefather versions. The complete batch is in
-`review_fix_of_all`. Mark each parent's findings with the fix lane's merge (`review A --mark N fixed:<fix lane id>`).
+(fathers#174). Both record `kind: "fix"` (normal lanes record `kind: "lane"`, and legacy records without `kind` read
+as `"fix"` when `review_fix_of` is set, else `"lane"`). Each parent needs a finished review with at least one unmarked
+finding. The record keeps the first parent's ID in the string `review_fix_of` for older Lanefather versions. The
+complete batch is in `review_fix_of_all`. Mark each parent's findings with the fix lane's merge
+(`review A --mark N fixed:<fix lane id>`).
 A lane started with `--fix-of` has its own worktree, counts toward the cap like any lane, and runs its own check
 plan even with one parent. `start` refuses an id containing `review-fixes` that names no parent (`--fix-of`,
 overridable with `--force-reason`; fathers#252). A batch fix lane's

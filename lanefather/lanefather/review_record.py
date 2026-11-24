@@ -988,6 +988,37 @@ class ReviewRecord:
                     return PreLandFix.from_dict(legacy)
         return None
 
+    def fix_lane(
+        self,
+        store: state.Store | None = None,
+        *,
+        record: Record | None = None,
+    ) -> str | None:
+        """Follow-up fix lane for this review, derived from lane records with legacy receipt `fix_lane` fallback."""
+        if record is not None:
+            raw_ho: Any = record.get("handed_over")
+            if isinstance(raw_ho, dict):
+                to_id = cast(dict[str, Any], raw_ho).get("to")
+                if isinstance(to_id, str) and to_id:
+                    return to_id
+        if store is not None:
+            for lane in store.lanes():
+                if lane.get("id") == self.label:
+                    raw_ho = lane.get("handed_over")
+                    if isinstance(raw_ho, dict):
+                        to_id = cast(dict[str, Any], raw_ho).get("to")
+                        if isinstance(to_id, str) and to_id:
+                            return to_id
+                elif self.label in state.fix_parents(lane):
+                    lane_id = lane.get("id")
+                    if isinstance(lane_id, str) and lane_id:
+                        return lane_id
+        if self.raw is not None:
+            raw_fix = self.raw.get("fix_lane")
+            if isinstance(raw_fix, str) and raw_fix:
+                return raw_fix
+        return None
+
     def reviewer_views(self) -> list[dict[str, Any]]:
         """Each reviewer of a finished review with its own findings (fathers#151)."""
         payload = self.raw or {}

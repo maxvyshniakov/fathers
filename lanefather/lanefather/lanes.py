@@ -100,7 +100,8 @@ def prepare(store: state.Store, cwd: Any, lane_id: str, ticket: str, lane_claims
     integration = next((w["path"] for w in worktree_list(cwd) if w.get("branch") == base), None)
     rules = claims.rules_for(lane_claims, git(cwd, "rev-parse", "--show-toplevel"), store.project)
     record: Record = {
-        "id": lane_id, "ticket": scope.primary(chosen), "branch": branch or f"lane/{lane_id}",
+        "id": lane_id, "ticket": scope.primary(chosen), "kind": "fix" if parents else "lane",
+        "branch": branch or f"lane/{lane_id}",
         "base": base, "base_sha": base_sha, "claims": lane_claims, "after": after, "common_dir": common,
         "integration": integration, "worktree": None, "status": "planned", "created": journal.now(),
         "scratch": [str(store.directory / f"{lane_id}.scratch"), *(os.path.realpath(s) for s in scratch)],
@@ -126,6 +127,8 @@ def prepare(store: state.Store, cwd: Any, lane_id: str, ticket: str, lane_claims
 
 def fix_parent(store: state.Store, record: Record) -> str | None:
     """The landed lane whose kept worktree a fix lane (review --fix-lane) takes over, else None."""
+    if lifecycle.kind_of(record) != "fix":
+        return None
     parent_id = state.hand_over_parent(record)
     if parent_id is None:
         return None
@@ -225,12 +228,15 @@ def register(store: state.Store, record: Record, rules: list[dict[str, Any]], fo
         print(warning, file=sys.stderr)
 
 
-def register_admitted(store: state.Store, record: Record, decision: admission.Decision, refusals: list[str],
-                      force_reason: str | None, create: bool, *, agent: str | None = None,
-                      start_point: str | None = None,
-                      extra_ledger_details: dict[str, Any] | None = None) -> None:
-    """Under the state lock, once admitted: save the record and log the start."""
-    lane_id, lane_claims, after = record["id"], record["claims"], record["after"]
+def _prepare_admitted_record(
+    store: state.Store,
+    record: Record,
+    decision: admission.Decision,
+    refusals: list[str],
+    force_reason: str | None,
+) -> tuple[int, str, dict[str, Any], str | None]:
+    """Under the state lock, once admitted: bump `created` if reused, prepare scratch, audit overrides."""
+    lane_id = record["id"]
     prev_record = state.read_json(store.record_path(lane_id))
     prev_created = state.lane_created_of(prev_record)
     if prev_created is not None and isinstance(record.get("created"), str) and record["created"] <= prev_created:
@@ -248,6 +254,48 @@ def register_admitted(store: state.Store, record: Record, decision: admission.De
     if refusals:
         journal.override("start", record, force_reason, refusals, described=f"refusals: {'; '.join(refusals)}",
                          store=store)
+    return cap, source, info, parent
+
+
+def _start_ledger_args(
+    record: Record,
+    status: str,
+    worktree: str | None,
+    cap: int,
+    source: str,
+    info: dict[str, Any],
+    extra_ledger_details: dict[str, Any] | None = None,
+) -> tuple[str, dict[str, Any]]:
+    lane_id, lane_claims, after = record["id"], record["claims"], record["after"]
+    message = (
+        f"start {lane_id} ticket={record['ticket']} branch={record['branch']} "
+        f"base={record['base']}@{record['base_sha'][:10]} claims={' '.join(lane_claims)} "
+        f"after={','.join(after) or '-'} cap={cap} ({source}) {host.host_fields(info)}"
+    )
+    details: dict[str, Any] = {
+        "status": status,
+        "kind": lifecycle.kind_of(record),
+        "branch": record["branch"],
+        "base": record["base"],
+        "base_sha": record["base_sha"],
+        "claims": lane_claims,
+        "after": after,
+        "worktree": worktree,
+        "cap": cap,
+        "cap_source": source,
+        **({"scope": record["scope"]} if "scope" in record else {}),
+        **(extra_ledger_details or {}),
+    }
+    return message, details
+
+
+def register_admitted(store: state.Store, record: Record, decision: admission.Decision, refusals: list[str],
+                      force_reason: str | None, create: bool, *, agent: str | None = None,
+                      start_point: str | None = None,
+                      extra_ledger_details: dict[str, Any] | None = None) -> None:
+    """Under the state lock, once admitted: save the record and log the start."""
+    lane_id = record["id"]
+    cap, source, info, parent = _prepare_admitted_record(store, record, decision, refusals, force_reason)
     worktree: str | None = record.get("worktree")
     status = "planned"
     created_main: str | None = None
@@ -259,18 +307,13 @@ def register_admitted(store: state.Store, record: Record, decision: admission.De
             start_point or record["base_sha"])
         worktree = os.path.realpath(str(created_path))
         status = "active"
+    message, details = _start_ledger_args(record, status, worktree, cap, source, info, extra_ledger_details)
     try:
         lifecycle.register(
             store, record, status=status, worktree=worktree,
             agent=events.agent_context(agent), now=journal.now(),
-            ledger_message=(f"start {lane_id} ticket={record['ticket']} branch={record['branch']} "
-                            f"base={record['base']}@{record['base_sha'][:10]} claims={' '.join(lane_claims)} "
-                            f"after={','.join(after) or '-'} cap={cap} ({source}) {host.host_fields(info)}"),
-            ledger_details={"status": status, "branch": record["branch"], "base": record["base"],
-                            "base_sha": record["base_sha"], "claims": lane_claims, "after": after,
-                            "worktree": worktree, "cap": cap, "cap_source": source,
-                            **({"scope": record["scope"]} if "scope" in record else {}),
-                            **(extra_ledger_details or {})},
+            ledger_message=message,
+            ledger_details=details,
         )
     except BaseException:
         if created_main is not None and created_path is not None:
@@ -766,22 +809,48 @@ def hand_over_fix_lane(
     fix_paths: list[str],
     base: str,
     force_reason: str | None,
+    *,
+    agent: str | None = None,
 ) -> tuple[Record, Record]:
-    """Register a follow-up fix lane taking over `record`'s landed worktree and transition `record` via `hand_over`."""
+    """Atomically register a follow-up fix lane as `active` (`kind="fix"`) taking over `record`'s landed worktree
+    and clear `record`'s `worktree` under one `state` lock (fathers#45)."""
     main = main_checkout(record["common_dir"])
     # The fix lane does part of its parent's tickets: its merge says Refs, never a second Fixes (#64).
     fix, rules = prepare(store, main, fix_id, record["ticket"], fix_paths, base, [], parents=[record["id"]],
                          items=scope.as_partial(scope.of(record)))
     fix["worktree"] = record["worktree"]
-    register(store, fix, rules, force_reason, False)
-    updated_parent = lifecycle.transition(
-        store,
-        record["id"],
-        "hand_over",
-        worktree=None,
-        handed_over={"to": fix_id, "worktree": fix["worktree"], "at": journal.now()},
-    )
-    lifetimes.hand_worktree(store, record, store.load(fix_id))
+    repaired: str | None = None
+    updated_parent: Record | None = None
+    while True:
+        with store.locked("state"):
+            decision, refusals = admit(store, fix, force_reason, repaired)
+            if not refusals or force_reason or repaired is not None:
+                if refusals and not force_reason:
+                    raise LaneError("refused:\n- " + "\n- ".join(refusals))
+                cap, source, info, _parent = _prepare_admitted_record(store, fix, decision, refusals, force_reason)
+                message, details = _start_ledger_args(fix, "active", fix["worktree"], cap, source, info)
+                fix, updated_parent = lifecycle.hand_over(
+                    store,
+                    record["id"],
+                    fix,
+                    agent=events.agent_context(agent),
+                    now=journal.now(),
+                    ledger_message=message,
+                    ledger_details=details,
+                )
+                break
+        repaired = done.repair_disk(decision.machine["disk_free_gb"], decision.floor)
+    assert updated_parent is not None
+    lifetimes.register_quietly(store, fix, "start", skip=("worktree",))
+    lifetimes.hand_worktree(store, record, fix)
+    print(header(store, fix, rules))
+    machine = decision.machine
+    if machine["load15"] > machine["load_limit"]:
+        print(f"lane: load15 is {machine['load15']:.1f}, above the advisory limit of {machine['load_limit']:.1f}. "
+              "Checks may wait for a Slotfather slot.", file=sys.stderr)
+    warning = tickets.no_ticket_warning(fix, store.project)
+    if warning:
+        print(warning, file=sys.stderr)
     return fix, updated_parent
 
 
