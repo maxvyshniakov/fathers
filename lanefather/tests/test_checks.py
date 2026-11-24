@@ -403,9 +403,24 @@ class RedCheckClassificationTests(LaneCase):
         self.lane("check", "core", ok=False)
         receipt = self.receipt("core")
         self.assertEqual(receipt["results"][1]["exit"], 9)
-        self.assertEqual(self.entries("core")["native-check"]["class"], "unclassified")
-        self.assertIn("process exit differs", self.entries("core")["native-check"]["reason"])
+        self.assertEqual(receipt["status"], "red")
+        self.assertFalse(receipt["classification"]["green"])
+        self.assertIn("process exit differs", receipt["classification"]["skipped"])
         self.lane("land", "core", ok=False)
+
+    def test_original_process_exit_mismatch_cannot_be_hidden_by_flaky_alone_pass(self):
+        flag = self.tmp / "flake-exit-mismatch"
+        flag.touch()
+        self.env["FIXTURE_FLAKE_ONCE"] = f"lib-check:{flag}"
+        self.env["FIXTURE_EXIT"] = "lane-a:9"
+        worktree = self.created("a", "lib/**")
+        self.commit(worktree, {"lib/api.txt": "foo\nbaz\n"})
+        self.lane("check", "a", ok=False)
+        receipt = self.receipt("a")
+        self.assertEqual(receipt["status"], "red")
+        self.assertFalse(receipt["classification"]["green"])
+        self.assertIn("process exit differs", receipt["classification"]["skipped"])
+        self.lane("land", "a", ok=False)
 
     def break_structure(self, base_too: bool = False) -> None:
         """The structure check (the fixture's cheap tier, #639) fails while lib/structure-broken exists."""

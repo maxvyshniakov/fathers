@@ -19,7 +19,7 @@ import json
 import os
 from pathlib import Path
 import statistics
-from typing import Any
+from typing import Any, cast
 from xml.etree import ElementTree
 
 from . import review_record, state
@@ -111,8 +111,13 @@ def record_run(store: state.Store, report: dict[str, Any] | None, *, lane: str |
                run: str, started: str, finished: str, seconds: float, checks: list[str] | None = None,
                jobs: int | None = None) -> None:
     """One "check" line per row of a verify report; a run without a report gets one line for the run."""
-    given: list[Any] = (report or {}).get("checks", [])
-    rows: list[dict[str, Any]] = [r for r in given if isinstance(r, dict) and r.get("id")]  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
+    raw_checks: Any = report.get("checks") if isinstance(report, dict) else None
+    given: list[Any] = cast(list[Any], raw_checks) if isinstance(raw_checks, list) else []
+    rows: list[dict[str, Any]] = [
+        cast(dict[str, Any], r)
+        for r in given
+        if isinstance(r, dict) and isinstance(cast(dict[str, Any], r).get("id"), str) and cast(dict[str, Any], r)["id"]
+    ]
     lease = (report or {}).get("lease")
     report_jobs = _positive_int(jobs) or _positive_int((report or {}).get("jobs"))
     if not rows:
