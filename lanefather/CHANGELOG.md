@@ -468,6 +468,10 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
 
 ### Fixed
 
+- `hooks/reference-transaction` no longer refuses Git's automatic `pack-refs` (packing loose `refs/heads/main` /
+  `refs/heads/dev` into `packed-refs` at their current OID and pruning the matching loose files) during agent
+  sessions, while continuing to refuse creating, moving, or deleting protected branches—including `git branch -D` and
+  `git update-ref -d` across loose, packed, and dual-stored refs (fathers#254).
 - Scoped check runs and outer-lease / renamed-check base rerun handling (fathers#253):
   - `verify.Selection.checks(..., base=...)` now passes `--base <ref>` alongside `--checks` for scoped (non-full)
     lane checks and their solo reruns when the verifier advertises `"base"` in `capabilities` (or `CAPABILITIES`), so

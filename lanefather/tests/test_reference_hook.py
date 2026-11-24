@@ -76,3 +76,124 @@ class ReferenceHookTests(unittest.TestCase):
     def test_non_agent_transactions_do_not_require_a_landing_token(self) -> None:
         self.env.pop('CLAUDECODE')
         self.assertEqual(self.git('update-ref', 'refs/heads/main', self.tip).returncode, 0)
+
+    def test_pack_refs_succeeds_silently_in_agent_sessions(self) -> None:
+        for label, agent_env in (('claude', {'CLAUDECODE': '1'}), ('codex', {'CODEX_THREAD_ID': '1'})):
+            with self.subTest(agent=label):
+                # Restore loose refs for both main and dev outside an agent session without dropping HEAD's branch.
+                self.env.pop('CLAUDECODE', None)
+                self.env.pop('CODEX_THREAD_ID', None)
+                packed_refs = self.repo / '.git' / 'packed-refs'
+                if packed_refs.exists():
+                    kept = [
+                        line for line in packed_refs.read_text().splitlines()
+                        if not line.endswith((' refs/heads/main', ' refs/heads/dev'))
+                    ]
+                    packed_refs.write_text('\n'.join(kept) + '\n')
+                (self.repo / '.git' / 'refs' / 'heads' / 'main').write_text(self.before + '\n')
+                (self.repo / '.git' / 'refs' / 'heads' / 'dev').write_text(self.before + '\n')
+                self.env.update(agent_env)
+
+                result = self.git('pack-refs', '--all')
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout, '')
+                self.assertEqual(result.stderr, '')
+                self.assertFalse((self.repo / '.git' / 'refs' / 'heads' / 'main').exists())
+                self.assertFalse((self.repo / '.git' / 'refs' / 'heads' / 'dev').exists())
+                packed_lines = packed_refs.read_text().splitlines()
+                self.assertIn(f'{self.before} refs/heads/main', packed_lines)
+                self.assertIn(f'{self.before} refs/heads/dev', packed_lines)
+                self.assertEqual(self.git('rev-parse', 'refs/heads/main').stdout.strip(), self.before)
+                self.assertEqual(self.git('rev-parse', 'refs/heads/dev').stdout.strip(), self.before)
+
+                # Mixed state: main already packed + loose, dev loose only, pruned from a linked worktree.
+                (self.repo / '.git' / 'refs' / 'heads' / 'main').write_text(self.before + '\n')
+                packed_refs.write_text(
+                    '\n'.join(line for line in packed_lines if not line.endswith(' refs/heads/dev')) + '\n'
+                )
+                (self.repo / '.git' / 'refs' / 'heads' / 'dev').write_text(self.before + '\n')
+                wt = self.repo / f'wt-{label}'
+                self.assertEqual(self.git('worktree', 'add', '-q', '-b', f'lane/wt-{label}', str(wt)).returncode, 0)
+                wt_pack = subprocess.run(
+                    ['git', '-C', str(wt), 'pack-refs', '--all', '--prune'],
+                    env=self.env, text=True, capture_output=True, check=False,
+                )
+                self.assertEqual(wt_pack.returncode, 0, wt_pack.stderr)
+                self.assertEqual(wt_pack.stdout, '')
+                self.assertEqual(wt_pack.stderr, '')
+                self.assertFalse((self.repo / '.git' / 'refs' / 'heads' / 'main').exists())
+                self.assertFalse((self.repo / '.git' / 'refs' / 'heads' / 'dev').exists())
+                self.assertEqual(self.git('rev-parse', 'refs/heads/main').stdout.strip(), self.before)
+                self.assertEqual(self.git('rev-parse', 'refs/heads/dev').stdout.strip(), self.before)
+
+    def test_deleting_protected_branch_is_refused_in_all_storage_states(self) -> None:
+        packed_refs = self.repo / '.git' / 'packed-refs'
+        loose_dev = self.repo / '.git' / 'refs' / 'heads' / 'dev'
+
+        def prepare(state: str) -> str:
+            self.env.pop('CLAUDECODE', None)
+            if packed_refs.exists():
+                packed_refs.unlink()
+            loose_dev.write_text(self.before + '\n')
+            if state == 'loose-only':
+                expected = self.before
+            elif state == 'packed-only':
+                self.assertEqual(self.git('pack-refs', '--all').returncode, 0)
+                self.assertFalse(loose_dev.exists())
+                expected = self.before
+            elif state == 'both-same-sha':
+                self.assertEqual(self.git('pack-refs', '--all').returncode, 0)
+                loose_dev.write_text(self.before + '\n')
+                expected = self.before
+            elif state == 'both-diff-sha':
+                self.assertEqual(self.git('pack-refs', '--all').returncode, 0)
+                loose_dev.write_text(self.tip + '\n')
+                expected = self.tip
+            else:
+                raise AssertionError(state)
+            self.env['CLAUDECODE'] = '1'
+            return expected
+
+        for state in ('loose-only', 'packed-only', 'both-same-sha', 'both-diff-sha'):
+            for mode in ('branch -D', 'update-ref -d', 'update-ref -d <old>'):
+                with self.subTest(state=state, mode=mode):
+                    expected = prepare(state)
+                    if mode == 'branch -D':
+                        result = self.git('branch', '-D', 'dev')
+                    elif mode == 'update-ref -d':
+                        result = self.git('update-ref', '-d', 'refs/heads/dev')
+                    else:
+                        result = self.git('update-ref', '-d', 'refs/heads/dev', expected)
+                    self.assertNotEqual(result.returncode, 0, f'{mode} unexpectedly succeeded in {state}')
+                    self.assertIn('refusing to update refs/heads/dev', result.stderr)
+                    self.assertEqual(self.git('rev-parse', '--verify', 'refs/heads/dev').stdout.strip(), expected)
+
+    def test_creating_and_moving_protected_branch_are_still_refused(self) -> None:
+        # Moving dev to a different SHA is refused.
+        for cmd in (('branch', '-f', 'dev', self.tip), ('update-ref', 'refs/heads/dev', self.tip)):
+            with self.subTest(cmd=cmd):
+                result = self.git(*cmd)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('refusing to update refs/heads/dev', result.stderr)
+                self.assertEqual(self.git('rev-parse', 'refs/heads/dev').stdout.strip(), self.before)
+
+        # Same-SHA no-op passes without moving dev.
+        noop = self.git('update-ref', 'refs/heads/dev', self.before)
+        self.assertEqual(noop.returncode, 0, noop.stderr)
+        self.assertEqual(self.git('rev-parse', 'refs/heads/dev').stdout.strip(), self.before)
+
+        # Remove dev outside an agent session, then verify creation is refused (even with a decoy nested ref).
+        self.env.pop('CLAUDECODE')
+        self.assertEqual(self.git('branch', '-D', 'dev').returncode, 0)
+        self.assertEqual(self.git('update-ref', 'refs/heads/refs/heads/dev', self.before).returncode, 0)
+        self.env['CLAUDECODE'] = '1'
+        for cmd in (
+            ('checkout', '-b', 'dev', self.before),
+            ('branch', 'dev', self.before),
+            ('update-ref', 'refs/heads/dev', self.before),
+        ):
+            with self.subTest(create=cmd):
+                result = self.git(*cmd)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('refusing to update refs/heads/dev', result.stderr)
+                self.assertNotEqual(self.git('show-ref', '--verify', '-q', 'refs/heads/dev').returncode, 0)
