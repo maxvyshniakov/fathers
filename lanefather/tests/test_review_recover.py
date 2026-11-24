@@ -238,19 +238,24 @@ class ReviewRecoverTests(LaneCase):
             review_record.PartialEvidence,
         )
 
-        # 2. Standalone clean line paired with an unparsed finding-like line stays partial.
-        url_unparsed = "https://github.com/example/repo/issues/55#issuecomment-5502"
-        self._set_gh(
-            comments_by_id={
-                "5502": {
-                    "id": 5502,
-                    "body": f"merge: {merge_sha[:10]}\n- P1 lib/strict.txt:1 Broken check\n0 findings\n",
-                    "created_at": "2099-01-01T10:00:00Z",
-                }
-            },
-        )
-        out2 = self.lane("review", "strict", "--recover", "--source", url_unparsed, ok=False)
-        self.assertIn("unparsed finding-like", out2.lower())
+        # 2. Standalone clean line paired with unparsed finding-like lines stays partial (`- P1`, `### P1:`, `- [P1]`).
+        for cid, shape in (
+            ("5502", "- P1 lib/strict.txt:1 Broken check"),
+            ("5506", "### P1: auth bypass"),
+            ("5507", "- [P1] lib/strict.txt:3 missing guard"),
+        ):
+            url_unparsed = f"https://github.com/example/repo/issues/55#issuecomment-{cid}"
+            self._set_gh(
+                comments_by_id={
+                    cid: {
+                        "id": int(cid),
+                        "body": f"merge: {merge_sha[:10]}\n{shape}\n0 findings\n",
+                        "created_at": "2099-01-01T10:00:00Z",
+                    }
+                },
+            )
+            out2 = self.lane("review", "strict", "--recover", "--source", url_unparsed, ok=False)
+            self.assertIn("unparsed finding-like", out2.lower())
 
         # 3. Dispositions with no reviewed scope or matching merge stay partial ("reviewed scope unverified").
         url_noscope = "https://github.com/example/repo/issues/55#issuecomment-5503"

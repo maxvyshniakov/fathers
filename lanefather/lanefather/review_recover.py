@@ -72,6 +72,7 @@ CLEAN_REVIEW_RE = re.compile(
     re.IGNORECASE | re.MULTILINE,
 )
 UNPARSED_FINDING_RE = re.compile(r"^\s*[-*]\s*\*?\*?P[0-3]\*?\*?\b", re.IGNORECASE)
+SEVERITY_TOKEN_RE = re.compile(r"\bP[0-3]\b", re.IGNORECASE)
 NUMBERED_ITEM_RE = re.compile(
     r"^\s*(?:[-*]\s*)?(?:finding\s*#?(\d+)|#(\d+)|(\d+)\.)\s*[:\-–—]?\s*(.+)$",
     re.IGNORECASE,
@@ -377,6 +378,7 @@ def parse_historical_evidence(comments: Sequence[SourceComment]) -> ParsedEviden
     dispositions: list[dict[str, Any]] = []
     seen_numbers: dict[int, int] = {}
     unparsed_finding_lines: list[str] = []
+    unparsed_severity_lines: list[str] = []
     next_n = 1
     clean_statement = False
     reviewed_base: str | None = None
@@ -416,6 +418,8 @@ def parse_historical_evidence(comments: Sequence[SourceComment]) -> ParsedEviden
             if parsed is None:
                 if UNPARSED_FINDING_RE.match(raw_line):
                     unparsed_finding_lines.append(raw_line.strip())
+                elif not CLEAN_REVIEW_RE.match(raw_line) and SEVERITY_TOKEN_RE.search(raw_line):
+                    unparsed_severity_lines.append(raw_line.strip())
                 continue
             num = int(parsed["n"])
             if num in seen_numbers:
@@ -440,6 +444,8 @@ def parse_historical_evidence(comments: Sequence[SourceComment]) -> ParsedEviden
                 seen_numbers[num] = len(dispositions)
                 dispositions.append(parsed)
 
+    if clean_statement and unparsed_severity_lines:
+        unparsed_finding_lines.extend(unparsed_severity_lines)
     if unparsed_finding_lines:
         clean_statement = False
 
