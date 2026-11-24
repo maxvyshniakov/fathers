@@ -475,6 +475,40 @@ class ForeignTicketFormTests(unittest.TestCase):
                          ["Merge it", "", f"Fixes {SID_KIT}#97", "Fixes #98", "", "Fixes #12", f"Refs {SID_KIT}#98"],
                          "a given line keeps its ticket; #98 of this repository is not sid-kit's #98")
 
+    def test_loose_fixes_refs_are_skipped_without_raising(self):
+        from lanefather import config, scope, tickets
+        long_owner = "a" * 40
+        long_digits = "1" * 65
+        bogus = f"Fixes foo/.#1\nFixes foo/..#1\nFixes {long_owner}/repo#1\nFixes #{long_digits}\n"
+        rule = config.Tickets(fixes_trailer=True)
+        merged = tickets.merge_message(f"Merge it\n\n{bogus}", [scope.Issue("42")], rule)
+        self.assertIn("Fixes #42", merged)
+        conflicts = tickets.trailer_conflicts(".", "HEAD", "HEAD", [scope.Issue("42", partial=True)],
+                                              message=f"{bogus}Fixes #42\n")
+        self.assertEqual(len(conflicts), 1)
+        self.assertIn("Fixes #42", conflicts[0])
+
+    def test_display_ticket_formats_local_foreign_and_none(self):
+        from lanefather import scope
+        self.assertEqual(scope.display_ticket("42"), "#42")
+        self.assertEqual(scope.display_ticket("#42"), "#42")
+        self.assertEqual(scope.display_ticket(f"{SID_KIT}#97"), f"{SID_KIT}#97")
+        self.assertEqual(scope.display_ticket("none"), "none")
+
+    def test_case_insensitive_owner_repo_and_own_repo_deduplication(self):
+        from lanefather import config, scope, tickets
+        from lanefather.errors import LaneError
+        with self.assertRaises(LaneError):
+            scope.from_options([("owner/repo#5", False), ("Owner/Repo#5", True)])
+        with self.assertRaises(LaneError):
+            scope.from_options([("https://github.com/owner/repo/issues/5", False), ("Owner/Repo#5", True)])
+        rule = config.Tickets(fixes_trailer=True)
+        merged = tickets.merge_message("Merge\n\nFixes Owner/Repo#5\n", [scope.Issue("owner/repo#5")], rule)
+        self.assertEqual(merged.splitlines(), ["Merge", "", "Fixes Owner/Repo#5"])
+        own_rule = config.Tickets(fixes_trailer=True, repo="fixture/straylight")
+        merged_own = tickets.merge_message("Merge\n\nFixes Fixture/Straylight#404\n", [scope.Issue("404")], own_rule)
+        self.assertEqual(merged_own.splitlines(), ["Merge", "", "Fixes Fixture/Straylight#404"])
+
 
 class ForeignTicketLandTests(TicketCase):
     """A lane of this repository (fixture/straylight) that completes or does part of a sid-kit ticket (fathers#238):
@@ -545,6 +579,40 @@ class ForeignTicketLandTests(TicketCase):
         removals = [call for call in self.calls_on(SID_KIT, "edit") if "--remove-label" in call]
         self.assertEqual([call[2] for call in removals], ["97"])
         self.assertEqual(self.issue("97")["labels"], [])
+
+    def test_done_reads_a_foreign_primary_ticket_in_its_repository(self):
+        self.foreign_lane("--ticket", f"{SID_KIT}#97")
+        listed = self.lane("list")
+        self.assertIn(f" {SID_KIT}#97 ", listed)
+        self.assertNotIn(f"#{SID_KIT}#97", listed)
+        scoped = self.lane("scope", "a")
+        self.assertIn(f"(primary ticket {SID_KIT}#97)", scoped)
+        self.assertNotIn(f"#{SID_KIT}#97", scoped)
+        self.lane("land", "a")
+        output = self.lane("review", "a")
+        self.assertIn(f"{SID_KIT}#97 has no comment since the lane started; post the lane's RED->GREEN evidence with "
+                      f"gh issue comment 97 -R {SID_KIT}", output)
+        self.assertNotIn(f"#{SID_KIT}#97", output)
+        self.assertTrue(any(call[2] == "97" and "comments" in call for call in self.calls_on(SID_KIT, "view")))
+        self.assertEqual(self.record("a")["status"], "landed")
+        state = json.loads(self.gh_state.read_text())
+        state["issues"].setdefault("97", {"labels": [], "comments": []})["comments"].append(EVIDENCE)
+        self.gh_state.write_text(json.dumps(state))
+        self.lane("done", "a")
+        self.assertEqual(self.record("a")["status"], "done")
+
+    def test_shipped_deduplicates_case_variants_own_repo_refs_and_skips_loose_refs(self):
+        base = self.tip()
+        long_owner = "a" * 40
+        long_digits = "1" * 65
+        self.commit(self.integration, {"docs/notes.md": "x\n"},
+                    f"Fix issues\n\nFixes {SID_KIT}#97\nFixes MaxVyshniakov/Sid-Kit#97\n"
+                    f"Fixes #404\nFixes Fixture/Straylight#404\n"
+                    f"Fixes foo/.#1\nFixes foo/..#1\nFixes {long_owner}/repo#1\nFixes #{long_digits}\n")
+        output = self.lane("shipped", "v1.5.0", "--since", base)
+        self.assertIn(f"release v1.5.0: commented on 2 of 2 issues it fixes ({SID_KIT}#97, #404)", output)
+        self.assertEqual([call[2] for call in self.calls_on(SID_KIT, "comment")], ["97"])
+        self.assertEqual([call[2] for call in self.calls_on("fixture/straylight", "comment")], ["404"])
 
 
 class ConfigTests(unittest.TestCase):

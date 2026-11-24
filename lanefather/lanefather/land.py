@@ -68,7 +68,7 @@ def touched_lines(failed: list[tuple[str, str]], integration: str, merge: str,
 
     lines: list[str] = []
     for item, suite in failed:
-        names = [f"{r['id']} (#{r['ticket']})" for r in landed if covers(r["id"], item, suite)]
+        names = [f"{r['id']} ({scope.display_ticket(r['ticket'])})" for r in landed if covers(r["id"], item, suite)]
         lines.append(f"  {item}: {', '.join(names) or 'no recorded lane'}")
     return lines
 

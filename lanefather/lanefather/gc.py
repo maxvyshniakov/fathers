@@ -75,53 +75,53 @@ class Project:
                           "refs/heads/integrate/").splitlines()
             if not targets:
                 result.kept.append({"path": self._root, "reason": "no merge target refs"})
-                return result
-            self._proof = lifetimes.Evidence(bases=tuple(targets), disposable=self._settings.gc_disposable,
-                                             stop_inside=lifetimes.stop_inside(self._settings))
-            records = [r for r in self._store.lanes(strict=True) if not lifecycle.finished(r)]
-            entries = worktree_list(self._root)
-            removed: set[str] = set()
-            wt_root = os.path.realpath(worktrees.worktrees_root_from_main(self._root, self._settings))
-            for entry in entries:
-                path = entry["path"]
-                if not path.startswith(wt_root + "/"):
-                    continue
-                reason = self._keep(entry, targets, records)
-                if reason:
-                    result.kept.append({"path": path, "reason": reason})
-                    continue
-                # Read again immediately before removal: don't act on an earlier state snapshot if Git changed.
-                current = next((w for w in worktree_list(self._root) if w["path"] == path), None)
-                reason = self._keep(current, targets, records) if current else "worktree disappeared"
-                if reason:
-                    result.kept.append({"path": path, "reason": reason})
-                    continue
-                assert current is not None
-                try:
-                    self._remove(current, targets, dry_run, result)
-                except Kept as kept:
-                    result.kept.append({"path": path, "reason": f"Spawnfather keeps it: {kept}"})
-                    continue
-                except (LaneError, OSError) as error:
-                    result.errors.append(f"{path}: {error}")
-                    continue
-                removed.add(path)
-            in_use = {e.get("branch") for e in entries if e["path"] not in removed}
-            in_use.update(f"worktree-{os.path.basename(e['path'])}" for e in entries if e["path"] not in removed)
-            in_use.update(r.get("branch") for r in records)
-            for branch in git(self._root, "for-each-ref", "--format=%(refname:short)", "refs/heads/").splitlines():
-                if not self._branch_collected(branch) or branch in in_use:
-                    continue
-                agent = any(fnmatch.fnmatchcase(branch, p) for p in AGENT_BRANCHES)
-                if not any(git_ok(self._root, "merge-base", "--is-ancestor", f"refs/heads/{branch}", t)
-                           for t in (targets if agent else upstream(targets))):
-                    continue
-                try:
-                    if not dry_run:
-                        git(self._root, "branch", "-D", branch)
-                    result.removed.append({"kind": "branch", "path": branch})
-                except LaneError as error:
-                    result.errors.append(str(error))
+            else:
+                self._proof = lifetimes.Evidence(bases=tuple(targets), disposable=self._settings.gc_disposable,
+                                                 stop_inside=lifetimes.stop_inside(self._settings))
+                records = [r for r in self._store.lanes(strict=True) if not lifecycle.finished(r)]
+                entries = worktree_list(self._root)
+                removed: set[str] = set()
+                wt_root = os.path.realpath(worktrees.worktrees_root_from_main(self._root, self._settings))
+                for entry in entries:
+                    path = entry["path"]
+                    if not path.startswith(wt_root + "/"):
+                        continue
+                    reason = self._keep(entry, targets, records)
+                    if reason:
+                        result.kept.append({"path": path, "reason": reason})
+                        continue
+                    # Read again immediately before removal: don't act on an earlier state snapshot if Git changed.
+                    current = next((w for w in worktree_list(self._root) if w["path"] == path), None)
+                    reason = self._keep(current, targets, records) if current else "worktree disappeared"
+                    if reason:
+                        result.kept.append({"path": path, "reason": reason})
+                        continue
+                    assert current is not None
+                    try:
+                        self._remove(current, targets, dry_run, result)
+                    except Kept as kept:
+                        result.kept.append({"path": path, "reason": f"Spawnfather keeps it: {kept}"})
+                        continue
+                    except (LaneError, OSError) as error:
+                        result.errors.append(f"{path}: {error}")
+                        continue
+                    removed.add(path)
+                in_use = {e.get("branch") for e in entries if e["path"] not in removed}
+                in_use.update(f"worktree-{os.path.basename(e['path'])}" for e in entries if e["path"] not in removed)
+                in_use.update(r.get("branch") for r in records)
+                for branch in git(self._root, "for-each-ref", "--format=%(refname:short)", "refs/heads/").splitlines():
+                    if not self._branch_collected(branch) or branch in in_use:
+                        continue
+                    agent = any(fnmatch.fnmatchcase(branch, p) for p in AGENT_BRANCHES)
+                    if not any(git_ok(self._root, "merge-base", "--is-ancestor", f"refs/heads/{branch}", t)
+                               for t in (targets if agent else upstream(targets))):
+                        continue
+                    try:
+                        if not dry_run:
+                            git(self._root, "branch", "-D", branch)
+                        result.removed.append({"kind": "branch", "path": branch})
+                    except LaneError as error:
+                        result.errors.append(str(error))
         self._drop_gone(dry_run, result)
         return result
 
@@ -132,13 +132,12 @@ class Project:
         for record in state.of_project(self._store.lanes(strict=True), here):
             if not admission.gone(record):
                 continue
-            if not dry_run:
-                try:
-                    with contextlib.redirect_stdout(io.StringIO()):
-                        done.drop_lane(record["id"], self._store)
-                except LaneError as error:
-                    result.errors.append(f"lane {record['id']}: {error}")
-                    continue
+            try:
+                with contextlib.redirect_stdout(io.StringIO()):
+                    done.drop_lane(record["id"], self._store, dry_run=dry_run)
+            except LaneError as error:
+                result.errors.append(f"lane {record['id']}: {error}")
+                continue
             result.removed.append({"kind": "lane", "path": record["id"]})
 
     def _keep(self, entry: dict[str, str], targets: list[str], records: list[state.Record]) -> str | None:

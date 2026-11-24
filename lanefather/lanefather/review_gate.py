@@ -5,7 +5,7 @@ import json
 import os
 from typing import Any
 
-from . import journal, review_record, state
+from . import journal, review_record, scope, state
 from .errors import LaneError
 from .gitops import common_dir, git, git_ok
 from .state import Record
@@ -17,8 +17,8 @@ def finding_line(record: Record, finding: dict[str, Any], *, prog: str = "lanefa
     where = ""
     if finding.get("file"):
         where = f" {finding['file']}" + (f":{finding['line']}" if finding.get("line") else "")
-    return (f"lane {lane_id} (#{record['ticket']}): finding #{n} {finding.get('severity', 'P2')}{where} "
-            f"{finding.get('title', '')}: {prog} review {lane_id} --mark {n} fixed:<merge> | "
+    return (f"lane {lane_id} ({scope.display_ticket(record['ticket'])}): finding #{n} {finding.get('severity', 'P2')}"
+            f"{where} {finding.get('title', '')}: {prog} review {lane_id} --mark {n} fixed:<merge> | "
             f"{prog} review {lane_id} --mark {n} rejected:<reason>")
 
 
@@ -48,16 +48,17 @@ def gate_report(store: state.Store, cwd: str, common: str, sha: str,
         _, words = rev.summary(prog=store.prog)
         if isinstance(verdict, review_record.Exempt):
             continue
+        ticket_ref = scope.display_ticket(record["ticket"])
         if isinstance(
             verdict,
             (review_record.Absent, review_record.Running, review_record.Died, review_record.Failed),
         ):
             report["unfinished"].append({"lane": record["id"], "ticket": record["ticket"],
-                                         "text": f"lane {record['id']} (#{record['ticket']}): {words}"})
+                                         "text": f"lane {record['id']} ({ticket_ref}): {words}"})
             continue
         if isinstance(verdict, review_record.PartialPanel):
             report["unfinished"].append({"lane": record["id"], "ticket": record["ticket"],
-                                         "text": f"lane {record['id']} (#{record['ticket']}): {words}"})
+                                         "text": f"lane {record['id']} ({ticket_ref}): {words}"})
         for finding in verdict.findings:
             mark: dict[str, Any] = finding.get("mark") or {}
             entry = {"lane": record["id"], "ticket": record["ticket"], "n": finding.get("n"),
@@ -70,8 +71,8 @@ def gate_report(store: state.Store, cwd: str, common: str, sha: str,
                 report["blocking" if held else "reported"].append(entry)
             elif mark.get("kind") == "fixed" and not git_ok(cwd, "merge-base", "--is-ancestor", fix_merge, sha):
                 report["blocking" if held else "reported"].append(dict(entry, text=(
-                    f"lane {record['id']} (#{record['ticket']}): finding #{finding.get('n')} is marked fixed by "
-                    f"{fix_merge[:10]}, which is not in {sha[:10]}")))
+                    f"lane {record['id']} ({ticket_ref}): finding #{finding.get('n')} "
+                    f"is marked fixed by {fix_merge[:10]}, which is not in {sha[:10]}")))
     if not known:
         merges = git(cwd, "rev-list", "--merges", f"{base}..{sha}" if base else sha, check=False).split()
         report["unknown"] = [{"merge": m, "text": f"merge {m[:10]}: no lane state here knows it; run where the lanes' "

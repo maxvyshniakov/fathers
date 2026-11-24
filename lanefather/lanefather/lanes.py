@@ -39,7 +39,7 @@ from .state import Record
 
 def header(store: state.Store, record: Record, rules: list[dict[str, Any]] | tuple[()] = ()) -> str:
     prog = store.prog
-    ticket = f"#{record['ticket']}" if record["ticket"] != "none" else "none (no ticket)"
+    ticket = scope.display_ticket(record["ticket"]) if record["ticket"] != "none" else "none (no ticket)"
     raw_targets: Any = record.get("cargo_targets") or []
     targets = [str(t) for t in cast(list[Any], raw_targets)] if isinstance(raw_targets, list) else []
     target_label = store.project.target_label or "Build target"
@@ -141,10 +141,10 @@ def admit(store: state.Store, record: Record, force_reason: str | None,
             listed = ", ".join(f"{m} with {t}" for m, t in pairs)
             if admission.gone(other):
                 # fathers#237: --after a lane that can never land would wait forever.
-                raise LaneError(f"claims overlap lane {other['id']} (#{other['ticket']}): {listed}. "
-                                + admission.drop_advice(prog, [other["id"]], "its claims"))
-            raise LaneError(f"claims overlap lane {other['id']} (#{other['ticket']}): {listed}. Run the lanes "
-                            f"in sequence: start this one with --after {other['id']}")
+                raise LaneError(f"claims overlap lane {other['id']} ({scope.display_ticket(other['ticket'])}): "
+                                f"{listed}. " + admission.drop_advice(prog, [other["id"]], "its claims"))
+            raise LaneError(f"claims overlap lane {other['id']} ({scope.display_ticket(other['ticket'])}): {listed}. "
+                            f"Run the lanes in sequence: start this one with --after {other['id']}")
     return decision, refusals
 
 
@@ -228,7 +228,7 @@ def next_lane(args: Any, store: state.Store) -> int:
     data, ready, states = queue.next_ready(store, common_dir(os.getcwd()))
     for entry, reason in states:
         if reason and entry is not ready:
-            print(f"  skip {entry['id']} (#{str(entry['ticket']).lstrip('#')}): {reason}", file=sys.stderr)
+            print(f"  skip {entry['id']} ({scope.display_ticket(entry['ticket'])}): {reason}", file=sys.stderr)
     if ready is None:
         print(f"No ready entry in {queue.queue_path(store)}", file=sys.stderr)
         return 3
@@ -309,7 +309,7 @@ def adopt(args: Any, store: state.Store) -> int:
 def scope_lines(record: Record) -> list[str]:
     items = scope.of(record)
     return [f"Lane {record['id']}: scope {scope.describe(items)} (primary ticket "
-            f"{'#' + record['ticket'] if record['ticket'] != scope.NONE else 'none'})",
+            f"{scope.display_ticket(record['ticket'])})",
             *(f"  {n}. {scope.entry_line(item)}" for n, item in enumerate(items, 1))]
 
 
@@ -326,12 +326,15 @@ def change_scope(store: state.Store, lane_id: str, marks: list[tuple[str, bool]]
         before = scope.of(record)
         current = list(before)
         for number, partial in marks:
+            wanted = scope.Issue(number).key
             index = next((i for i, item in enumerate(current)
-                          if isinstance(item, scope.Issue) and item.number == number), None)
+                          if isinstance(item, scope.Issue) and item.key == wanted), None)
             if index is None:
-                raise LaneError(f"scope refused: lane {lane_id} has no ticket #{number}; add it with --add-ticket "
-                                "or --add-partial")
-            current[index] = scope.Issue(number, partial)
+                raise LaneError(f"scope refused: lane {lane_id} has no ticket {scope.display_ticket(number)}; "
+                                "add it with --add-ticket or --add-partial")
+            existing = current[index]
+            assert isinstance(existing, scope.Issue)
+            current[index] = scope.Issue(existing.number, partial)
         after = (*current, *additions)
         scope.validate(after)
         seen.update(before=before, after=after)
@@ -357,9 +360,10 @@ def scope_command(args: Any, store: state.Store) -> int:
     additions += [scope.parse_spec(path) for path in option_list(args.add_spec)]
     partial_marks = [scope.ticket_number(n) for n in option_list(args.mark_partial)]
     complete_marks = [scope.ticket_number(n) for n in option_list(args.mark_complete)]
-    both = sorted(set(partial_marks) & set(complete_marks))
+    complete_keys = {scope.Issue(n).key for n in complete_marks}
+    both = [n for n in partial_marks if scope.Issue(n).key in complete_keys]
     if both:
-        raise LaneError(f"cannot pass both --mark-partial and --mark-complete for #{both[0]}")
+        raise LaneError(f"cannot pass both --mark-partial and --mark-complete for {scope.display_ticket(both[0])}")
     marks = [(n, True) for n in partial_marks] + [(n, False) for n in complete_marks]
     if additions or marks:
         before, after, record = change_scope(store, args.id, marks, additions)
@@ -379,6 +383,11 @@ def scope_command(args: Any, store: state.Store) -> int:
     return 0
 
 
+def _common_dir(record: Record) -> str | None:
+    value = record.get("common_dir")
+    return value if isinstance(value, str) else None
+
+
 def list_lanes(args: Any, store: state.Store) -> int:
     """The lanes of the repository the command runs in, as the cap counts them (fathers#236); --all-projects every
     lane of the Store, each naming its project."""
@@ -395,7 +404,7 @@ def list_lanes(args: Any, store: state.Store) -> int:
     stale = [r["id"] for r in decision.occupying if admission.gone(r)]
     pending = list(review_record.ReviewRecord.unmarked(store, mine))
     if args.json:
-        print(json.dumps({"lanes": [dict(view.for_list(r), project=state.project_name(r.get("common_dir")),
+        print(json.dumps({"lanes": [dict(view.for_list(r), project=state.project_name(_common_dir(r)),
                                          gone=is_gone) for r, view, is_gone in views],
                           "active": len(decision.occupying), "cap": cap, "cap_source": source,
                           "global": {"active": len(decision.everywhere), "cap": ceiling[0] if ceiling else None,
@@ -405,9 +414,9 @@ def list_lanes(args: Any, store: state.Store) -> int:
                                               for lane, findings in pending]}, indent=2))
         return 0
     for record, view, is_gone in views:
-        print(f"{record['id']}  {record['status']}  #{record['ticket']}  {record['branch']}  "
+        print(f"{record['id']}  {record['status']}  {scope.display_ticket(record['ticket'])}  {record['branch']}  "
               f"receipt: {view.list_receipt_text()}"
-              + (f"  project: {state.project_name(record.get('common_dir'))}" if every else "")
+              + (f"  project: {state.project_name(_common_dir(record))}" if every else "")
               + (f"  gone: {admission.GONE}; {store.prog} drop {record['id']}" if is_gone else ""))
         print(f"    claims: {' '.join(record['claims'])}"
               + (f"  after: {', '.join(record['after'])}" if record["after"] else ""))

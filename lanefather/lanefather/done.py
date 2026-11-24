@@ -24,6 +24,7 @@ import time
 from typing import Any, cast
 
 from . import (
+    admission,
     config,
     github,
     host,
@@ -33,6 +34,7 @@ from . import (
     postmerge,
     registry,
     review_record,
+    scope,
     state,
     tickets,
     worktrees,
@@ -46,18 +48,26 @@ REPAIR_WINDOW = 600.0
 
 def ticket_commented(record: Record, project: config.Config) -> str | None:
     """None when the ticket has a comment since the lane started, else the refusal."""
-    data, error = github.issue_view(record["ticket"], json_fields="comments", common=record["common_dir"],
-                                    project=project)
+    issue = scope.Issue(record["ticket"])
+    rule = project.tickets
+    data, error = github.issue_view(
+        issue.local,
+        json_fields="comments",
+        common=None if issue.repo or rule.repo else record["common_dir"],
+        repo=issue.repo or rule.repo or None,
+        project=project,
+    )
     if data is None:
-        return f"gh could not read #{record['ticket']}: {error}"
+        return f"gh could not read {issue.ref}: {error}"
     since = journal.parse_time(record["created"])
     comments: list[dict[str, Any]] = data.get("comments", [])
     # The comment land posts (#25) is not the lane's evidence.
     if any(journal.parse_time(c["createdAt"]) >= since and not c.get("body", "").startswith(tickets.LAND_MARKER)
            for c in comments):
         return None
-    return (f"#{record['ticket']} has no comment since the lane started; post the lane's RED->GREEN evidence with "
-            f"gh issue comment {record['ticket']}")
+    repo_flag = f" -R {issue.repo}" if issue.repo else ""
+    return (f"{issue.ref} has no comment since the lane started; post the lane's RED->GREEN evidence with "
+            f"gh issue comment {issue.local}{repo_flag}")
 
 
 def done(args: Any, store: state.Store) -> int:
@@ -535,7 +545,7 @@ def finish_refusals(
         if unattended and kept(record):
             raise LaneError(f"lane {lane_id} is kept ({prog} keep {lane_id} --off releases it)")
         common = record.get("common_dir")
-        if not common or not os.path.isdir(common):
+        if not isinstance(common, str) or not common or not os.path.isdir(common):
             raise LaneError(f"lane {lane_id} names no repository that exists ({common or 'none'})")
         main = main_checkout(common)
         worktree = record.get("worktree")
@@ -651,10 +661,11 @@ def nothing_added(cwd: str, commit: str, bases: list[tuple[str, str]]) -> tuple[
 def drop(args: Any, store: state.Store) -> int:
     """`drop ID [ID ...]` (fathers#167, fathers#237): drop_lane on each id in turn; one that refuses is reported and
     the others go on. Exits with the first refusal's code."""
-    ids = [args.id] if isinstance(args.id, str) else list(args.id)
+    ids = list(dict.fromkeys([args.id] if isinstance(args.id, str) else args.id))
     failed = 0
-    for lane_id in dict.fromkeys(ids):
+    for lane_id in ids:
         try:
+            admission.refuse_foreign(store, "drop", lane_id)
             drop_lane(lane_id, store)
         except LaneError as error:
             if len(ids) == 1:
@@ -664,7 +675,7 @@ def drop(args: Any, store: state.Store) -> int:
     return failed
 
 
-def drop_lane(lane_id: str, store: state.Store) -> str:
+def drop_lane(lane_id: str, store: state.Store, *, dry_run: bool = False) -> str:
     """Remove a planned or active lane that adds nothing to its base, with done's cleanup and refusals for what
     still works there; returns why it adds nothing. Nothing it removes can be lost, so it takes no --force-reason:
     a lane with commits beyond its base, a worktree HEAD that has some, or uncommitted or untracked changes
@@ -678,12 +689,14 @@ def drop_lane(lane_id: str, store: state.Store) -> str:
             raise LaneError(f"drop refused: lane {lane_id} is already {record['status']}")
         unmarked = review_record.ReviewRecord.load(store, lane_id).open_findings
         if unmarked:
-            # A dropped lane is done, and a done lane gets no fix round, while its findings go on holding lands.
+            blocks = store.project.review_blocks
+            holds = ", which hold lands" if any(f.get("severity", "P2") in blocks for f in unmarked) else ""
+            # A dropped lane is done, and a done lane gets no fix round; unmarked findings must be marked first.
             raise LaneError(f"drop refused: lane {lane_id}'s review has {len(unmarked)} unmarked "
-                            f"finding{'s' if len(unmarked) != 1 else ''}, which hold lands: mark each first "
+                            f"finding{'s' if len(unmarked) != 1 else ''}{holds}: mark each first "
                             f"({prog} review {lane_id}); a dropped lane gets no fix round")
         common = record.get("common_dir")
-        if not common or not os.path.isdir(common):
+        if not isinstance(common, str) or not common or not os.path.isdir(common):
             raise LaneError(f"lane {lane_id} names no repository that exists ({common or 'none'})")
         main = main_checkout(common)
         base_tip = git(main, "rev-parse", "--verify", "--quiet", str(record.get("base")) + "^{commit}", check=False)
@@ -722,7 +735,7 @@ def drop_lane(lane_id: str, store: state.Store) -> str:
                     vouched.append(head)
         proof = evidence(store, vouched, None)
         held, hard_refusals, _ = holders(
-            record, store, spawnfather, main, proof, verb="drop", clean_stale_base=not refusals
+            record, store, spawnfather, main, proof, verb="drop", clean_stale_base=not refusals and not dry_run
         )
         refusals += held + hard_refusals
         if refusals:
@@ -730,6 +743,8 @@ def drop_lane(lane_id: str, store: state.Store) -> str:
                             + "\n- ".join(refusals) + f"\nLand it with {prog} land {lane_id}, or revert its "
                             "commits on the lane first; drop removes only a lane that adds nothing")
         why = whys[0] if whys else "no branch and no commits"
+        if dry_run:
+            return why
         freed, removed = remove(record, store, spawnfather, main, proof, verb="drop", holding=bases[0][1])
         now = journal.now()
         lifecycle.transition(

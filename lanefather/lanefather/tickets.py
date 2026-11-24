@@ -24,6 +24,7 @@ import sys
 from typing import Any
 
 from . import config, github, journal, receipts, scope, state
+from .errors import LaneError
 from .gitops import common_dir, git, git_ok
 from .state import Record
 
@@ -62,23 +63,35 @@ def merge_message(message: str, issues: Sequence[scope.Issue] | str,
         issues = [item for item in scope.from_ticket(issues) if isinstance(item, scope.Issue)]
     if not rule.fixes_trailer:
         return message
-    named = {_key(ref) for ref in (*FIXES.findall(message), *REFS.findall(message))}
-    lines = [f"{'Refs' if issue.partial else 'Fixes'} {issue.ref}" for issue in issues if issue.number not in named]
+    named = {_norm(key, rule.repo) for ref in (*FIXES.findall(message), *REFS.findall(message))
+             if (key := _key(ref)) is not None}
+    lines = [f"{'Refs' if issue.partial else 'Fixes'} {issue.ref}" for issue in issues
+             if _norm(issue.number, rule.repo) not in named]
     if not lines:
         return message
     return message.rstrip("\n") + "\n\n" + "\n".join(lines)
 
 
-def _key(ref: str) -> str:
-    """A `#N` or `owner/repo#N` reference as the record stores the ticket (scope.Issue.number)."""
-    return scope.ticket_number(ref)
+def _key(ref: str) -> str | None:
+    """A `#N` or `owner/repo#N` reference as the record stores the ticket (scope.Issue.number), or None when invalid."""
+    try:
+        return scope.ticket_number(ref)
+    except LaneError:
+        return None
+
+
+def _norm(key: str, default_repo: str = "") -> str:
+    """Case-folded identity for deduplication, resolving bare numbers against `default_repo` when known."""
+    issue = scope.Issue(key)
+    repo = (issue.repo or default_repo).lower()
+    return f"{repo}#{issue.local}" if repo else issue.local
 
 
 def trailer_conflicts(cwd: str, base: str, head: str, issues: Sequence[scope.Issue],
                       message: str = "") -> list[str]:
     """Each `Fixes #N` line in base..head, or in the merge message, for a ticket the lane does only part of: GitHub
     closes the ticket anyway when that commit reaches the default branch."""
-    partial = {issue.number for issue in issues if issue.partial}
+    partial = {issue.key for issue in issues if issue.partial}
     if not partial:
         return []
     found: list[str] = []
@@ -86,9 +99,11 @@ def trailer_conflicts(cwd: str, base: str, head: str, issues: Sequence[scope.Iss
     for entry in log.split("\0"):
         sha, _, body = entry.strip("\n").partition("\x01")
         found += [f"lane commit {sha[:10]} says Fixes {ref}, which is partial: GitHub closes {ref} when it reaches "
-                  "the default branch" for ref in dict.fromkeys(FIXES.findall(body)) if _key(ref) in partial]
+                  "the default branch" for ref in dict.fromkeys(FIXES.findall(body))
+                  if (key := _key(ref)) is not None and scope.Issue(key).key in partial]
     found += [f"the merge message says Fixes {ref}, which is partial: GitHub closes {ref} when it reaches the "
-              "default branch" for ref in dict.fromkeys(FIXES.findall(message)) if _key(ref) in partial]
+              "default branch" for ref in dict.fromkeys(FIXES.findall(message))
+              if (key := _key(ref)) is not None and scope.Issue(key).key in partial]
     return found
 
 
@@ -105,11 +120,21 @@ def warn_trailer_conflicts(store: state.Store, record: Record, cwd: str, base: s
     return conflicts
 
 
-def fixed_issues(cwd: str, base: str, head: str) -> list[str]:
+def fixed_issues(cwd: str, base: str, head: str, *, repo: str = "") -> list[str]:
     """The tickets `Fixes #N` and `Fixes owner/repo#N` lines name in base..head, oldest commit first, once each, as
     the record stores them (`N`, `owner/repo#N`)."""
     bodies = git(cwd, "log", "--reverse", "--format=%B%x00", f"{base}..{head}")
-    return list(dict.fromkeys(_key(ref) for ref in FIXES.findall(bodies)))
+    seen: set[str] = set()
+    result: list[str] = []
+    for ref in FIXES.findall(bodies):
+        key = _key(ref)
+        if key is None:
+            continue
+        folded = _norm(key, repo)
+        if folded not in seen:
+            seen.add(folded)
+            result.append(key)
+    return result
 
 
 def repository(common: str, rule: config.Tickets | None = None) -> str | None:
@@ -233,7 +258,12 @@ def after_land(store: state.Store, record: Record, merge: str, integration: str,
              ["no GitHub repository: origin is not on GitHub and [tickets] names no repo"], store=store)
         return
     pushed = on_origin(integration, merge) if rule.land_comment else []
+    seen: set[str] = set()
     for issue in issues:
+        folded = _norm(issue.number, repo)
+        if folded in seen:
+            continue
+        seen.add(folded)
         mark_issue(store, record, issue, repo, merge, branch, pushed, receipt, smoke)
 
 
@@ -282,11 +312,11 @@ def release_comments(store: state.Store, cwd: str, common: str, base: str, head:
         warn(f"release {head[:10]}", [f"{base[:10]} is not an ancestor of {head[:10]}: no release comments"],
              store=store)
         return 0
-    numbers = fixed_issues(cwd, base, head)
+    repo = repository(common, rule)
+    numbers = fixed_issues(cwd, base, head, repo=repo or "")
     if not numbers:
         return 0
     what = f"release {version or head[:10]}"
-    repo = repository(common, rule)
     if not repo:
         warn(what, ["no GitHub repository: origin is not on GitHub and [tickets] names no repo"], store=store)
         return 0
