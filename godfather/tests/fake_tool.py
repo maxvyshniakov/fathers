@@ -16,7 +16,7 @@ import sys
 from typing import Any
 
 PATH = os.environ.get("FAKE_TOOL_STATE", "")
-READ_ONLY = {"lanefather": 4, "spawnfather": 5, "junkfather": 5}
+READ_ONLY = {"lanefather": 5, "spawnfather": 5, "junkfather": 5}
 PRIORITY = [{"value": "project", "label": "Project"}, {"value": "interactive", "label": "Interactive"},
             {"value": "normal", "label": "Normal"}, {"value": "batch", "label": "Batch"}]
 SPAWN_ROWS: list[tuple[str, str, str, str, str, Any, dict[str, Any], str, str]] = [

@@ -8,6 +8,18 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
 
 ### Added
 
+- CLI convention conformance and versioned JSON replies (fathers#130):
+  - Every `--json` reply now carries top-level `"v": 1`: added `"v": 1` to `list --json` and `show --json` (keeping
+    legacy `"version": 1` beside `"v"` on `show --json` for existing readers), and added `--json` structured replies
+    to `start`, `check`, `land`, `promote`, `done`, and `smoke`.
+  - Unified the worker-budget flag to `--slots` across `check`, `land`, `recheck`, `smoke`, and `promote`, keeping
+    `--jobs` as a compatible alias on all five commands.
+  - Errors in `cli.main` now prefix with the configured program name instead of hard-coded `lane:`; unexpected
+    non-`LaneError` exceptions print one clean `<prog>: internal error: <type>: <message>` line to stderr (exit 1)
+    while recording the full traceback in `ledger.log` and the event log.
+  - Exit codes conform to `docs/cli.md`: `settings` read-only refusals moved from exit 4 to exit 5, and missing-lane
+    lookups (`state.Store.load`, `show`) exit 6 (`LaneNotFound`).
+
 - Fix lane kind and atomic hand-over transaction (fathers#45 Part (b)):
   - Lane records now carry `kind: "lane" | "fix"` (`lifecycle.kind_of` defaults legacy records without `kind` to
     `"fix"` when `review_fix_of` is set, else `"lane"`), while preserving `review_fix_of` / `review_fix_of_all`

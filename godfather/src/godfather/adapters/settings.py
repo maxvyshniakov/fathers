@@ -1,7 +1,7 @@
 """Any tool's `settings` CLI (SPEC.md, Settings contract): read, check, set and reset, each a short call with the
-tool's exit codes. 0 done, 2 invalid, 3 conflict, and read-only as 4 (Slotfather: another user's queue; Lanefather)
-or 5 (Spawnfather, which keeps 4 for Slotfather's meaning, fathers#118). Any other code is a failure with the tool's
-message."""
+tool's exit codes. 0 done, 2 invalid, 3 conflict, and read-only as 4 (Slotfather: another user's queue; older
+Lanefather releases before fathers#130) or 5 (Lanefather and Spawnfather, fathers#118, fathers#130). Any other code is
+a failure with the tool's message."""
 from __future__ import annotations
 
 from typing import Any, Optional, cast

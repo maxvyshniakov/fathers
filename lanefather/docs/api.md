@@ -7,11 +7,14 @@ change, a removed or changed one changes `v`.
 | --- | --- | --- |
 | `lanefather capabilities --json` | project launchers, Godfather | [reference](reference.md#installed-runtime-contract) |
 | `lanefather status --json` | Godfather | [reference](reference.md#machine-wide-status) |
+| `lanefather show <id> --json` | Godfather, dashboards | `"v": 1` (keeps `"version": 1` beside it) |
+| `lanefather list --json` | people, agents, scripts | `"v": 1` (`lanes`, `active`, `cap`, `host`, `priorities`, `pending_reviews`) |
 | `lanefather settings --json` | Godfather | Godfather's settings contract |
 | `lanefather results key\|lookup\|record` | Repo-Kit's gates and CI | [results](results.md) |
 | `lanefather stats --json` | people, dashboards | below |
 | `lanefather findings <sha> --json` | Repo-Kit's `release:publish` | below |
 | `lanefather changelog --json` | Godfather's what's new | below |
+| `lanefather start\|check\|land\|promote\|done\|smoke --json` | agents, scripts | below |
 | `<verify> --checks … [--only …]` | Lanefather's check & rerun classification | [check contract](#the-check-contract) |
 
 ## `lanefather changelog --json [--since VERSION]`
@@ -70,6 +73,18 @@ ledger.log.
 reads everything kept (twelve months). `reviewers` (fathers#151) counts the finished review receipts of the window
 (and lane) per reviewer alias: its reviews, its failed panel runs, its findings by severity and their marks now, so
 Sol and Opus compare as reviewers.
+
+## Action command `--json` replies (`start`, `check`, `land`, `promote`, `done`, `smoke`)
+
+Every action command with `--json` prints one JSON object on stdout with top-level `"v": 1` and nothing else on
+stdout (fathers#130):
+
+- `lanefather start <id> ... --json`: `{"v": 1, "lane", "status", "ticket", "branch", "base", "base_sha", "worktree", "claims", "after", "activated"}`.
+- `lanefather check <id> [--rerun] [--slots N] --json`: `{"v": 1, "lane", "status", "raw_status", "tree", "head", "reused", "suites", "receipt", "exit_code"}`. Exits 0 when green, 1 when red.
+- `lanefather land <id> [...] --json`: `{"v": 1, "lane", "status", "branch", "onto", "merge", "integration", "post_merge", "summary", "partial", "keep", "exit_code"}`. Exits 0 when post-merge smoke is green, 1 when red.
+- `lanefather promote <sha> [...] --json`: `{"v": 1, "sha", "branches", "remote", "ship", "no_push", "pushed", "install", "deploy", "status", "steps", "exit_code"}`.
+- `lanefather done <id> --json`: `{"v": 1, "lane", "status", "freed_bytes"}`. With `--finished [--dry-run] --json`: `{"v": 1, "finished", "freed_bytes", "dry_run", "refused"}`.
+- `lanefather smoke <id> [--rerun | --accept REASON] --json`: `{"v": 1, "lane", "status", "phase", ...}`.
 
 ## The check contract
 

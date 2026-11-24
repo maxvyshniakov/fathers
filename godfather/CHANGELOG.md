@@ -6,6 +6,9 @@ Versions and release rules: [README.md](README.md#versions).
 
 ### Added
 
+- Settings contract tests and fake tool updated for Lanefather's move from exit 4 to exit 5 on read-only settings
+  (fathers#130); `SettingsClient` continues to accept both 4 and 5 for compatibility with older Lanefather releases.
+
 - EVENTS formats Spawnfather's `entry.gone` event (`gone`, with log line count when present; fathers#245).
 
 - LANE DETAILS lists everything a lane owns through Spawnfather (fathers#171): its worktree, scratch and build

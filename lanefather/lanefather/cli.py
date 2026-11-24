@@ -10,11 +10,14 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Sequence
+import contextlib
+import json
 import os
 from pathlib import Path
 import re
 import sys
 import textwrap
+import traceback
 from typing import Any, NoReturn
 
 from fathers_common.cli import UsageParser
@@ -30,6 +33,7 @@ from . import (
     gate,
     gc,
     history,
+    journal,
     land,
     lanes,
     lifecycle,
@@ -74,7 +78,7 @@ COMMANDS: dict[str, Command] = {
     "start": Command("register a lane, or activate a planned lane with --create",
                      "<id> --ticket N --claims GLOB... [--ticket N|--partial N...] [--decision URL...] "
                      "[--spec PATH...] [--review none|evidence|full|double] [--gate NAME] "
-                     "[--base REF] [--after ID...] [--fix-of ID,ID] [--create] | <id> --create",
+                     "[--base REF] [--after ID...] [--fix-of ID,ID] [--create] [--json] | <id> --create [--json]",
                      "fix-login --ticket 12 --claims 'app/**' --create"),
     "next": Command("the first ready queue entry; --start registers it", "[--start] [--base REF] [--create]",
                     "--start --create"),
@@ -84,13 +88,13 @@ COMMANDS: dict[str, Command] = {
                      "<id> [--add-ticket N] [--add-partial N] [--add-decision URL] [--add-spec PATH] "
                      "[--mark-partial N] [--mark-complete N] [--json]",
                      "fix-login --add-partial 64"),
-    "check": Command("run the lane's checks; the receipt is the evidence", "<id> [--rerun] [--slots N]",
+    "check": Command("run the lane's checks; the receipt is the evidence", "<id> [--rerun] [--slots N] [--json]",
                      "fix-login"),
     "wait": Command("block until a lane is registered, landed or done",
                     "<id> --for registered|landed|done [--timeout S] [--json]",
                     "fix-login --for landed --timeout 3600"),
     "land": Command("merge a green lane, smoke it, start its review",
-                    "<id> [--into WORKTREE] [--keep] [--partial [--remaining TEXT]] [--slots N] [-m MESSAGE]",
+                    "<id> [--into WORKTREE] [--keep] [--partial [--remaining TEXT]] [--slots N] [-m MESSAGE] [--json]",
                     "fix-login --into .claude/worktrees/integrate"),
     "review": Command("a lane's review, its marks and its fix lane",
                       "<id> [--mark N fixed:<merge>|rejected:<reason>] [--fix-lane] [--compare] "
@@ -99,7 +103,8 @@ COMMANDS: dict[str, Command] = {
                       "fix-login --mark 1 fixed:fix-login-review-fixes"),
     "findings": Command("whether a review holds a SHA, for a publish", "<sha> [--since REF] [--json]",
                         "HEAD --json"),
-    "done": Command("clean up a landed lane: worktree, branches, scratch", "<id> | --finished [--dry-run]",
+    "done": Command("clean up a landed lane: worktree, branches, scratch",
+                    "<id> [--json] | --finished [--dry-run] [--json]",
                     "fix-login"),
     "drop": Command("remove a lane that adds nothing to its base", "<id> [<id> ...]", "fix-login"),
     "park": Command("park a lane on park/<id>; frees cap, claims, worktree",
@@ -111,7 +116,7 @@ COMMANDS: dict[str, Command] = {
                        "fix-login --reason 'superseded'"),
     "recheck": Command("rerun a landed lane's red post-merge smoke", "<id> [--slots N]", "fix-login"),
     "smoke": Command("post-merge smoke status, rerun or accept",
-                     "<id> [--rerun [--slots N] | --accept REASON]", "fix-login --rerun"),
+                     "<id> [--rerun [--slots N] | --accept REASON] [--json]", "fix-login --rerun"),
     "keep": Command("keep a lane from auto-done; --off releases it", "<id> [--off]", "fix-login"),
     "list": Command("this repository's non-done lanes: claims, receipts, load",
                     "[--all] [--all-projects] [--json]", "--json"),
@@ -120,7 +125,8 @@ COMMANDS: dict[str, Command] = {
     "status": Command("every registered project's lanes, read-only", "[--json]", "--json"),
     "gc": Command("remove merged idle worktrees and unused branches", "[--dry-run] [--json]", "--dry-run"),
     "promote": Command("the batch gate on a SHA, then move dev (and main)",
-                       "<sha> [--ship] [--no-push] [--jobs N] [--install [--deploy HOST]]", "1a2b3c4 --no-push"),
+                       "<sha> [--ship] [--no-push] [--slots N] [--install [--deploy HOST]] [--json]",
+                       "1a2b3c4 --no-push"),
     "sync": Command("fast-forward local dev and main to the remote", "[--drop-local] [--remote NAME]", ""),
     "perf": Command("the perf suite on a SHA, alone on the machine", "<sha> [--remote NAME]", "1a2b3c4"),
     "shipped": Command("comment a published version on the issues it fixes",
@@ -254,6 +260,7 @@ def parser(project: config.Config = config.DEFAULT) -> Parser:
     p.add_argument("--agent", type=agent_kind,
                    help="the agent starting the lane (e.g. claude-code, codex, antigravity, t3-code)")
     p.add_argument("--force-reason", help="start despite the lane cap or disk floor; logged")
+    p.add_argument("--json", action="store_true", help="the version-1 start result as JSON")
     p.set_defaults(run=lanes.start)
     p = add(root, commands, "next", "Prints the first ready entry of the ranked queue as a brief header.", prog=prog)
     p.add_argument("--start", action="store_true", help="register the lane, as start would")
@@ -295,9 +302,10 @@ def parser(project: config.Config = config.DEFAULT) -> Parser:
     p.add_argument("--agent", type=agent_kind,
                    help="the agent that built the lane, e.g. claude-code, codex, antigravity, t3-code "
                         "(default: the agent session this check runs in)")
-    p.add_argument("--slots", type=int, choices=range(1, 5),
+    p.add_argument("--slots", "--jobs", dest="slots", type=int, choices=range(1, 5),
                    help="verification worker budget passed as verify --jobs (default: slotfather advise, at most "
-                        f"{CHECK_MAX_JOBS})")
+                        f"{CHECK_MAX_JOBS}; alias: --jobs)")
+    p.add_argument("--json", action="store_true", help="the version-1 check result as JSON")
     p.set_defaults(run=checks.check)
     p = add(root, commands, "wait", "Instead of a loop over list: sleeps with a growing pause and reads the lane's "
             "record. Exits 0 once the lane is in the state, 75 with the current state when the timeout passes "
@@ -319,9 +327,9 @@ def parser(project: config.Config = config.DEFAULT) -> Parser:
     p.add_argument("id")
     p.add_argument("--into", help="integration worktree (default: the worktree on the lane's base branch)")
     p.add_argument("-m", "--message")
-    p.add_argument("--slots", type=int, choices=range(1, 5),
+    p.add_argument("--slots", "--jobs", dest="slots", type=int, choices=range(1, 5),
                    help="worker budget passed as verify --jobs for the post-merge smoke "
-                        "(default: slotfather advise --max 3)")
+                        "(default: slotfather advise --max 3; alias: --jobs)")
     p.add_argument("--keep", action="store_true",
                    help="leave the landed lane for done (another lane needs its artifacts)")
     p.add_argument("--partial", action="store_true",
@@ -333,6 +341,7 @@ def parser(project: config.Config = config.DEFAULT) -> Parser:
                    help="finish landing an active lane whose branch is already merged into the integration worktree")
     p.add_argument("--force-reason", help="override a missing green receipt or a review hold, with a logged reason")
     p.add_argument("--wait", type=float, default=120, metavar="SECONDS", help="wait this long for the landing lock")
+    p.add_argument("--json", action="store_true", help="the version-1 land result as JSON")
     p.set_defaults(run=land.land)
     p = add(root, commands, "review", "The lane's one independent review (Sol, Opus, or Neon when another family "
             "or quota calls for it; or the [review] panel), its marks and its fix lane; --overall for promote "
@@ -377,6 +386,7 @@ def parser(project: config.Config = config.DEFAULT) -> Parser:
                         "exempt with every finding marked, not kept")
     p.add_argument("--dry-run", action="store_true", help="with --finished: list the lanes and sizes, remove nothing")
     p.add_argument("--force-reason", help="clean up a lane that is not landed or lacks a ticket comment; logged")
+    p.add_argument("--json", action="store_true", help="the version-1 done result as JSON")
     p.set_defaults(run=done.done)
     p = add(root, commands, "drop", "A planned or active lane with no commits beyond its base, or commits that change "
             "nothing: done's cleanup, with no override; refuses otherwise. Several ids drop each in turn.", prog=prog)
@@ -407,8 +417,8 @@ def parser(project: config.Config = config.DEFAULT) -> Parser:
     p = add(root, commands, "recheck", "On the integration tip that holds its merge; green replaces the red result "
             "(lanefather.land).", prog=prog)
     p.add_argument("id")
-    p.add_argument("--slots", type=int, choices=range(1, 5),
-                   help="worker budget passed as verify --jobs (default: slotfather advise --max 3)")
+    p.add_argument("--slots", "--jobs", dest="slots", type=int, choices=range(1, 5),
+                   help="worker budget passed as verify --jobs (default: slotfather advise --max 3; alias: --jobs)")
     p.set_defaults(run=land.recheck)
     p = add(root, commands, "smoke", "Shows the lane's post-merge smoke status, reruns a red, killed or missing "
             "post-merge smoke (--rerun), or accepts a red, killed or missing smoke with an audited reason "
@@ -418,8 +428,10 @@ def parser(project: config.Config = config.DEFAULT) -> Parser:
                    help="rerun a red, killed or missing post-merge smoke")
     p.add_argument("--accept", metavar="REASON",
                    help="accept a red, killed or missing post-merge smoke with an audited reason")
-    p.add_argument("--slots", type=int, choices=range(1, 5),
-                   help="with --rerun: worker budget passed as verify --jobs (default: slotfather advise --max 3)")
+    p.add_argument("--slots", "--jobs", dest="slots", type=int, choices=range(1, 5),
+                   help="with --rerun: worker budget passed as verify --jobs "
+                        "(default: slotfather advise --max 3; alias: --jobs)")
+    p.add_argument("--json", action="store_true", help="the version-1 smoke status or action result as JSON")
     p.set_defaults(run=_run_smoke)
     p = add(root, commands, "keep", "Auto-done, done --finished and start's disk repair leave a kept lane (its scratch "
             "is in use).", prog=prog)
@@ -453,9 +465,9 @@ def parser(project: config.Config = config.DEFAULT) -> Parser:
     p.add_argument("--ship", action="store_true", help="also main: pushes <sha>:dev and <sha>:main together")
     p.add_argument("--no-push", action="store_true",
                    help="move the local branches only, and only to a SHA the remote already has (#666)")
-    p.add_argument("--jobs", type=int, choices=range(1, 9), metavar="{1..8}",
+    p.add_argument("--slots", "--jobs", dest="jobs", type=int, choices=range(1, 9), metavar="{1..8}",
                    help="worker budget passed as verify --jobs for the batch gate "
-                        "(default: slotfather advise --max 2, sized after any load wait)")
+                        "(default: slotfather advise --max 2, sized after any load wait; alias: --jobs)")
     p.add_argument("--remote", default="origin")
     p.add_argument("--wait", type=float, default=120, metavar="SECONDS", help="wait this long for the landing lock")
     p.add_argument("--install", action="store_true",
@@ -463,6 +475,7 @@ def parser(project: config.Config = config.DEFAULT) -> Parser:
     p.add_argument("--deploy", metavar="HOST", help="with --install: then run the project's deploy steps for HOST")
     p.add_argument("--force-reason", help="move dev although a lane landed since dev lacks a finished, fully marked "
                                           "review; logged")
+    p.add_argument("--json", action="store_true", help="the version-1 promote result as JSON")
     p.set_defaults(run=promote.promote)
     p = add(root, commands, "sync", "Fetches, then moves them under the landing lock; --drop-local resets them to the "
             "remote, keeping a backup branch.", prog=prog)
@@ -622,7 +635,8 @@ def _run_abandon(args: Any, store: state.Store) -> int:
 
 
 def _run_smoke(args: Any, store: state.Store) -> int:
-    """`lanefather smoke <id> [--rerun [--slots N] | --accept REASON]`."""
+    """`lanefather smoke <id> [--rerun [--slots N] | --accept REASON] [--json]`."""
+    as_json = getattr(args, "json", False) is True
     if args.rerun and args.accept is not None:
         raise LaneUsageError("pass either --rerun or --accept, not both")
     if args.slots is not None and not args.rerun:
@@ -631,7 +645,11 @@ def _run_smoke(args: Any, store: state.Store) -> int:
         pm = postmerge.PostMergeRecord.accept_smoke(store, args.id, reason=args.accept)
         saved_reason = postmerge.post_merge(pm.record).get("reason")
         shown_reason = saved_reason if isinstance(saved_reason, str) else args.accept
-        print(f"Lane {args.id}: post-merge smoke accepted ({shown_reason}); run {store.prog} done {args.id} to finish")
+        if as_json:
+            print(json.dumps({"v": 1, "lane": args.id, "status": "accepted", "reason": shown_reason}))
+        else:
+            print(f"Lane {args.id}: post-merge smoke accepted ({shown_reason}); "
+                  f"run {store.prog} done {args.id} to finish")
         return 0
     if args.rerun:
         record = store.load(args.id)
@@ -643,13 +661,35 @@ def _run_smoke(args: Any, store: state.Store) -> int:
         if phase in postmerge.SMOKE_OK_PHASES:
             shown = "green" if phase is postmerge.PostMergePhase.CLEARED else (live_status or "green")
             raise LaneError(f"smoke --rerun refused: lane {args.id}'s post-merge smoke is already {shown}")
-        if postmerge.red_receipt(record, store) is not None:
-            return land.recheck(args, store)
-        return _rerun_unrecorded_smoke(store, record, args.slots)
+        with state.quiet_stdout() if as_json else contextlib.nullcontext():
+            if postmerge.red_receipt(record, store) is not None:
+                code = land.recheck(args, store)
+            else:
+                code = _rerun_unrecorded_smoke(store, record, args.slots)
+        if as_json:
+            latest = state.read_json(store.record_path(args.id)) or record
+            pm_after = postmerge.PostMergeRecord.load(store, latest)
+            print(json.dumps({
+                "v": 1,
+                "lane": args.id,
+                "status": pm_after.raw_status or ("green" if code == 0 else "red"),
+                "phase": pm_after.phase.value,
+                "exit_code": code,
+            }))
+        return code
     record = store.load(args.id)
     pm = postmerge.PostMergeRecord.load(store, record)
     shown = pm.raw_status or "not run"
     post = postmerge.post_merge(record)
+    if as_json:
+        print(json.dumps({
+            "v": 1,
+            "lane": args.id,
+            "status": shown,
+            "phase": pm.phase.value,
+            "cleared_by": pm.cleared_by,
+        }))
+        return 0
     extra = ""
     if pm.phase is postmerge.PostMergePhase.RUNNING and isinstance(post.get("pid"), int):
         extra = f" (pid {post['pid']})"
@@ -683,6 +723,7 @@ def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     loaded_cfg: config.Config | None = None
     chosen_command: str | None = None
+    store: state.Store | None = None
     try:
         loaded_cfg, cfg_err = resolve_cli_config(argv, os.getcwd())
         args = parse(argv, loaded_cfg or config.DEFAULT)
@@ -709,5 +750,28 @@ def main(argv: list[str] | None = None) -> int:
         target = command_parser(parser(loaded_cfg or config.DEFAULT), chosen_command or "")
         target.usage_error(str(error))
     except LaneError as error:
-        print(f"lane: {error}", file=sys.stderr)
+        prog = loaded_cfg.command if loaded_cfg is not None else config.DEFAULT.command
+        print(f"{prog}: {error}", file=sys.stderr)
         return error.code
+    except Exception as error:
+        prog = loaded_cfg.command if loaded_cfg is not None else config.DEFAULT.command
+        tb = traceback.format_exc()
+        summary = f"{type(error).__name__}: {error}" if str(error) else type(error).__name__
+        print(f"{prog}: internal error: {summary}", file=sys.stderr)
+        with contextlib.suppress(Exception):
+            cfg = loaded_cfg or config.DEFAULT
+            journal.ledger(
+                f"internal-error {chosen_command or '-'}: {summary}",
+                kind="cli.internal_error",
+                level="error",
+                details={"command": chosen_command, "error_type": type(error).__name__,
+                         "error": str(error), "traceback": tb},
+                store=store,
+                project=cfg,
+            )
+            where = store.directory if store is not None else state.Store(cfg).directory
+            where.mkdir(parents=True, exist_ok=True)
+            with open(where / "ledger.log", "a", encoding="utf-8") as handle:
+                for line in tb.rstrip().splitlines():
+                    handle.write(f"  {line}\n")
+        return 1

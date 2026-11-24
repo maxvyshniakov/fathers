@@ -10,8 +10,10 @@ remote lacks is refused, and --drop-local resets it after keeping them on backup
 from __future__ import annotations
 
 from collections.abc import Callable
+import contextlib
 from dataclasses import dataclass, field
 import datetime
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -863,4 +865,30 @@ def promote(args: Any, store: state.Store) -> int:
         deploy=args.deploy,
         store=store,
     )
-    return promote_sha(run)
+    as_json = getattr(args, "json", False) is True
+    with state.quiet_stdout() if as_json else contextlib.nullcontext():
+        code = promote_sha(run)
+    if as_json:
+        rec = run.record or {}
+        raw_steps = rec.get("steps")
+        steps_map = cast(dict[str, Any], raw_steps) if isinstance(raw_steps, dict) else {}
+        step_statuses = {
+            name: cast(dict[str, Any], entry).get("status")
+            for name, entry in steps_map.items()
+            if isinstance(entry, dict)
+        }
+        print(json.dumps({
+            "v": 1,
+            "sha": run.sha,
+            "branches": list(run.branches),
+            "remote": run.remote,
+            "ship": run.ship,
+            "no_push": run.no_push,
+            "pushed": run.pushed,
+            "install": run.install,
+            "deploy": run.deploy,
+            "status": rec.get("status", "completed" if code == 0 else "failed"),
+            "steps": step_statuses,
+            "exit_code": code,
+        }))
+    return code

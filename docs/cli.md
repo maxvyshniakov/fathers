@@ -115,6 +115,6 @@ class CLIConvention(cliconvention.conformance(TOOL, expected=EXPECTED)):
 | Tool | Conformance ticket | Failing cases (2026-11-16) |
 | --- | --- | --- |
 | Slotfather | fathers#124 | 49: most rules |
-| Lanefather | fathers#130 | 24: argparse's error format |
+| Lanefather | fathers#130 | 0 (fathers#175, fathers#130) |
 | Spawnfather | fathers#153 | 17: argparse's error format, no `--version` |
 | Godfather | fathers#154 | 0 (lane gf-settings: one reason line and the help pointer) |

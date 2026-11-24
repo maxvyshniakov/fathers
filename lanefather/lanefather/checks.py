@@ -10,7 +10,9 @@ there (#639).
 """
 from __future__ import annotations
 
+import contextlib
 from dataclasses import dataclass
+import json
 import os
 from pathlib import Path
 from typing import Any, cast
@@ -352,12 +354,32 @@ def record(store: state.Store, prepared: Prepared, selection: Selected, executed
 
 
 def check(args: Any, store: state.Store) -> int:
-    prepared = prepare(store, args.id, agent=getattr(args, "agent", None))
-    selection = select(store, prepared, rerun=bool(args.rerun), slots_override=args.slots)
-    if selection is None:
-        return 0
-    executed = run(store, prepared, selection)
-    return record(store, prepared, selection, executed)
+    as_json = getattr(args, "json", False) is True
+    with state.quiet_stdout() if as_json else contextlib.nullcontext():
+        prepared = prepare(store, args.id, agent=getattr(args, "agent", None))
+        selection = select(store, prepared, rerun=bool(args.rerun), slots_override=args.slots)
+        if selection is None:
+            code, reused = 0, True
+        else:
+            executed = run(store, prepared, selection)
+            code, reused = record(store, prepared, selection, executed), False
+    if as_json:
+        receipt_data = receipts.read(store, args.id, record=prepared.record) or {}
+        status = str(receipt_data.get("status") or ("green" if code == 0 else "red"))
+        raw_status = str(receipt_data.get("raw_status") or status)
+        print(json.dumps({
+            "v": 1,
+            "lane": args.id,
+            "status": status,
+            "raw_status": raw_status,
+            "tree": prepared.tree,
+            "head": prepared.head,
+            "reused": reused,
+            "suites": list(receipt_data.get("suites") or []),
+            "receipt": str(prepared.receipt_path),
+            "exit_code": code,
+        }))
+    return code
 
 
 def _execute_lane_run(

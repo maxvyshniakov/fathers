@@ -239,7 +239,7 @@ class ToolContractTests(unittest.TestCase):
             with self.assertRaises(adapter.ReadOnly):
                 client.set(changed, "120")
 
-    READ_ONLY = {"lanefather": 4, "spawnfather": 5}  # what each tool exits with for a read-only row (fathers#118)
+    READ_ONLY = {"lanefather": 5, "spawnfather": 5}  # what each tool exits with for a read-only row (fathers#118, #130)
 
     def test_lanefather(self) -> None:
         self.check_tool("lanefather", "rerun.wait", "600", ("LANEFATHER_RERUN_WAIT", "rerun.wait"))

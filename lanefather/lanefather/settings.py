@@ -7,7 +7,7 @@ Godfather's Settings section reads and writes them through.
   lanefather settings set KEY VALUE [--revision R] [--json]     save; refused when R no longer matches
   lanefather settings reset (KEY | --all) [--revision R] [--json]
 
-Exit codes: 0 done, 2 invalid, 3 conflict (a stale --revision: the reply is the current settings), 4 read-only.
+Exit codes: 0 done, 2 invalid, 3 conflict (a stale --revision: the reply is the current settings), 5 read-only.
 
 The knobs, each below the environment, which wins and makes its row read-only:
   review.start               auto | manual: whether land starts the review in the background (LANEFATHER_REVIEW_START)
@@ -36,7 +36,7 @@ from . import config, events, registry, state
 from .errors import LaneError
 
 VERSION = 1
-CONFLICT, INVALID, READ_ONLY = 3, 2, 4
+CONFLICT, INVALID, READ_ONLY = 3, 2, 5
 DEFAULT_RERUN_WAIT = 3300  # checks.DEFAULT_RERUN_WAIT reads it
 MAX_WAIT = 86400
 MIN_DISK = "host.min_disk_gb"  # host.disk_floor reads it

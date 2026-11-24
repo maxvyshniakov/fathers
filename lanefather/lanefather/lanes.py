@@ -8,6 +8,7 @@ lane's prompt, ending with the rule snippets whose path globs overlap the lane's
 from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
+import contextlib
 import datetime
 import json
 import os
@@ -627,12 +628,33 @@ def _inherit_partial_scope(store: state.Store, parents: Sequence[str],
     return tuple(updated), inherited
 
 
+def _start_reply(record: Record, *, activated: bool) -> dict[str, Any]:
+    return {
+        "v": 1,
+        "lane": record["id"],
+        "status": record["status"],
+        "ticket": record["ticket"],
+        "branch": record["branch"],
+        "base": record["base"],
+        "base_sha": record["base_sha"],
+        "worktree": record.get("worktree"),
+        "claims": list(record["claims"]),
+        "after": list(record["after"]),
+        "activated": activated,
+    }
+
+
 def start(args: Any, store: state.Store) -> int:
+    as_json = getattr(args, "json", False) is True
     existing = state.read_json(store.record_path(args.id))
     if existing and (not lifecycle.finished(existing) or lifecycle.parked(existing)):
         if args.create and lifecycle.planned(existing):
-            activate_planned(store, args.id, base=args.base, branch=args.branch,
-                             force_reason=args.force_reason, agent=getattr(args, "agent", None), args=args)
+            with state.quiet_stdout() if as_json else contextlib.nullcontext():
+                updated = activate_planned(store, args.id, base=args.base, branch=args.branch,
+                                           force_reason=args.force_reason, agent=getattr(args, "agent", None),
+                                           args=args)
+            if as_json:
+                print(json.dumps(_start_reply(updated, activated=True)))
             return 0
         raise existing_lane_error(store.prog, args.id, existing)
     raw_issues = cast(list[tuple[str, bool]], getattr(args, "issues", None) or [])
@@ -657,11 +679,15 @@ def start(args: Any, store: state.Store) -> int:
         review_gate=getattr(args, "gate", None),
         review_reason=getattr(args, "review_reason", None),
     )
-    register(store, record, rules, args.force_reason, args.create, agent=getattr(args, "agent", None))
+    with state.quiet_stdout() if as_json else contextlib.nullcontext():
+        register(store, record, rules, args.force_reason, args.create, agent=getattr(args, "agent", None))
     if inherited_partial:
         refs = ", ".join(issue.ref for issue in inherited_partial)
-        print(f"lane: inherited partial scope from {', '.join(parents)} for {refs} (merge will say Refs)",
+        print(f"{store.prog}: inherited partial scope from {', '.join(parents)} for {refs} (merge will say Refs)",
               file=sys.stderr)
+    if as_json:
+        saved = state.read_json(store.record_path(args.id)) or record
+        print(json.dumps(_start_reply(saved, activated=False)))
     return 0
 
 
@@ -996,7 +1022,8 @@ def list_lanes(args: Any, store: state.Store) -> int:
     stale = [r["id"] for r in decision.occupying if admission.gone(r)]
     pending = list(review_record.ReviewRecord.unmarked(store, mine))
     if args.json:
-        print(json.dumps({"lanes": [dict(view.for_list(r), project=state.project_name(_common_dir(r)),
+        print(json.dumps({"v": 1,
+                          "lanes": [dict(view.for_list(r), project=state.project_name(_common_dir(r)),
                                          gone=is_gone) for r, view, is_gone in views],
                           "active": len(decision.occupying), "cap": cap, "cap_source": source,
                           "global": {"active": len(decision.everywhere), "cap": ceiling[0] if ceiling else None,

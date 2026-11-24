@@ -14,6 +14,7 @@ given (`store.project`), never on a module-wide current project.
 """
 from __future__ import annotations
 
+import contextlib
 from dataclasses import dataclass
 import fcntl
 import json
@@ -73,17 +74,36 @@ def ticket_commented(record: Record, project: config.Config) -> str | None:
 
 
 def done(args: Any, store: state.Store) -> int:
+    as_json = getattr(args, "json", False) is True
     if args.finished:
         if args.id or args.force_reason:
             raise LaneError("done --finished takes no lane id and no --force-reason: it runs done, with every "
                             "refusal, on each finished lane of the registered projects")
-        finish_finished(args.dry_run, skip_auto_off=False)
+        with state.quiet_stdout() if as_json else contextlib.nullcontext():
+            freed, finished, failed = finish_finished(args.dry_run, skip_auto_off=False)
+        if as_json:
+            print(json.dumps({
+                "v": 1,
+                "finished": finished,
+                "freed_bytes": freed,
+                "dry_run": bool(args.dry_run),
+                "refused": failed,
+            }))
         return 0
     if args.dry_run:
         raise LaneError("--dry-run goes with --finished: done --finished --dry-run lists the lanes it would finish")
     if not args.id:
         raise LaneError("done needs a lane id, or --finished for every finished lane")
-    finish(args.id, args.force_reason, store)
+    with state.quiet_stdout() if as_json else contextlib.nullcontext():
+        freed = finish(args.id, args.force_reason, store)
+    if as_json:
+        latest = state.read_json(store.record_path(args.id)) or {}
+        print(json.dumps({
+            "v": 1,
+            "lane": args.id,
+            "status": latest.get("status", "done"),
+            "freed_bytes": freed,
+        }))
     return 0
 
 

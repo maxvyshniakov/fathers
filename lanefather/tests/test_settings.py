@@ -71,7 +71,7 @@ class SettingsScratchTests(_SettingsHelpers, ScratchCase):
         row = self.rows(self.settings())["slots.priority.check"]
         self.assertEqual((row["value"], row["source"], row["writable"]), ("interactive", "env LANEFATHER_PRIORITY",
                                                                           False))
-        self.assertIn("LANEFATHER_PRIORITY", self.settings("set", "slots.priority.check", "normal", code=4)["error"])
+        self.assertIn("LANEFATHER_PRIORITY", self.settings("set", "slots.priority.check", "normal", code=5)["error"])
 
     def test_validation_follows_the_flags_and_environment_rules(self) -> None:
         del self.env["LANEFATHER_REVIEW_START"]
@@ -124,7 +124,7 @@ class SettingsScratchTests(_SettingsHelpers, ScratchCase):
         self.assertEqual(json.loads(self.file().read_text())["settings"], {"review.timeout": 600, "rerun.wait": 600})
         self.file().write_text(json.dumps({"v": 2, "settings": {}}))
         self.assertFalse(self.settings()["writable"])
-        self.assertIn("version 2", self.settings("set", "rerun.wait", "60", code=4)["error"])
+        self.assertIn("version 2", self.settings("set", "rerun.wait", "60", code=5)["error"])
         self.assertEqual(json.loads(self.file().read_text())["v"], 2)
 
     def test_an_environment_value_is_typed_and_an_unreadable_project_leaves_the_settings_readable(self) -> None:
@@ -224,7 +224,7 @@ class SettingsTests(_SettingsHelpers, LaneCase):
         row = self.rows(self.settings(cwd=self.integration))["host.min_disk_gb"]
         self.assertEqual((row["value"], row["source"], row["writable"], row["effective"]),
                          (70, "env LANEFATHER_MIN_DISK_GB", False, 70))
-        reply = self.settings("set", "host.min_disk_gb", "80", code=4)
+        reply = self.settings("set", "host.min_disk_gb", "80", code=5)
         self.assertIn("LANEFATHER_MIN_DISK_GB", reply["error"])
         self.env["LANEFATHER_DISK_FREE_GB"] = "60"
         self.assertIn("under the floor of 70 GB (10^9; LANEFATHER_MIN_DISK_GB)", self.start("a", "lib/**", ok=False))

@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-import sys
 from typing import Any
 
 from fathers_common.changelog import (
@@ -20,6 +19,8 @@ from fathers_common.changelog import (
 from fathers_common.changelog import (
     version_key as _version_key,
 )
+
+from .errors import LaneUsageError
 
 PACKAGE = Path(__file__).resolve().parent
 
@@ -59,8 +60,7 @@ def report(since: str | None = None, changelog_file: str | Path | None = None,
 
 def command(args: Any) -> int:
     if args.since is not None and not valid_version(args.since):
-        print(f"lanefather: --since takes a version like 0.1.0, not {args.since!r}", file=sys.stderr)
-        return 2
+        raise LaneUsageError(f"--since takes a version like 0.1.0, not {args.since!r}")
     answer = report(args.since)
     if args.json:
         print(json.dumps(answer, sort_keys=True))
