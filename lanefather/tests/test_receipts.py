@@ -604,14 +604,21 @@ class ReceiptReadersTableTests(LaneCase):
         live_pid = os.getpid()
         dead_pid = 999_999_999
 
+        recovery_hint = "recover historical evidence with lanefather review rv --recover before rerunning"
         cases: list[tuple[str, dict[str, Any] | None, dict[str, Any]]] = [
             (
                 "absent",
                 None,
                 {
                     "list_tail": "no review: run lanefather review rv",
-                    "show_review": {"status": "not started", "findings": 0, "unresolved": 0},
-                    "status_review": {"status": "not started", "open": 0, "findings": 0},
+                    "show_review": {
+                        "status": "not started", "findings": 0, "unresolved": 0,
+                        "recovery_hint": recovery_hint,
+                    },
+                    "status_review": {
+                        "status": "not started", "open": 0, "findings": 0,
+                        "recovery_hint": recovery_hint,
+                    },
                     "gate_held": True,
                 },
             ),
@@ -634,8 +641,14 @@ class ReceiptReadersTableTests(LaneCase):
                     # Resolved in fathers#60: show and status both report 'stopped' on a dead review,
                     # while list/review_state report 'review died'.
                     "list_tail": f"review died (pid {dead_pid}, /tmp/rv.log): rerun lanefather review rv",
-                    "show_review": {"status": "stopped", "findings": 0, "unresolved": 0},
-                    "status_review": {"status": "stopped", "open": 0, "findings": 0},
+                    "show_review": {
+                        "status": "stopped", "findings": 0, "unresolved": 0,
+                        "recovery_hint": recovery_hint,
+                    },
+                    "status_review": {
+                        "status": "stopped", "open": 0, "findings": 0,
+                        "recovery_hint": recovery_hint,
+                    },
                     "gate_held": True,
                 },
             ),
@@ -644,8 +657,14 @@ class ReceiptReadersTableTests(LaneCase):
                 {"version": 1, "label": "rv", "status": "failed", "error": "timeout"},
                 {
                     "list_tail": "review failed: timeout; rerun lanefather review rv",
-                    "show_review": {"status": "failed", "findings": 0, "unresolved": 0},
-                    "status_review": {"status": "failed", "open": 0, "findings": 0},
+                    "show_review": {
+                        "status": "failed", "findings": 0, "unresolved": 0,
+                        "recovery_hint": recovery_hint,
+                    },
+                    "status_review": {
+                        "status": "failed", "open": 0, "findings": 0,
+                        "recovery_hint": recovery_hint,
+                    },
                     "gate_held": True,
                 },
             ),
