@@ -589,6 +589,14 @@ completes one ticket and names nothing else writes no `scope`, so its record is 
 `scope` warns and reads as `ticket` alone. An older Lanefather reads only `ticket`: a multi-ticket lane it lands
 says `Fixes` for the primary ticket only, which is why the primary is a ticket the lane completes.
 
+`lane_created` on check (`.receipt.json`), first (`.first.json`), post-merge (`.post-merge.json`), recheck
+(`.recheck.json`) and review (`.review.json`) receipts is another such key (fathers#54): copied from the lane
+record's `created` timestamp so a reused lane id after `done` never inherits an earlier incarnation's receipts,
+review or smoke. Readers treat a receipt whose `lane_created` does not match the current lane record's `created`
+as absent. A pre-upgrade receipt written without `lane_created` still matches when its own timestamp (`started`,
+else `finished`) is at or after the record's `created` (or when it carries no timestamp), so live lanes across
+an upgrade keep reading their receipts while newly reused lane ids ignore older unstamped receipts.
+
 ## Checks
 
 ```sh

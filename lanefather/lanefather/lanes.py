@@ -8,6 +8,7 @@ lane's prompt, ending with the rule snippets whose path globs overlap the lane's
 from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
+import datetime
 import json
 import os
 from pathlib import Path
@@ -191,6 +192,14 @@ def register_admitted(store: state.Store, record: Record, decision: admission.De
                       force_reason: str | None, create: bool, *, agent: str | None = None) -> None:
     """Under the state lock, once admitted: save the record and log the start."""
     lane_id, lane_claims, after = record["id"], record["claims"], record["after"]
+    prev_record = state.read_json(store.record_path(lane_id))
+    prev_created = state.lane_created_of(prev_record)
+    if prev_created is not None and isinstance(record.get("created"), str) and record["created"] <= prev_created:
+        try:
+            bumped = journal.parse_time(prev_created) + datetime.timedelta(seconds=1)
+            record["created"] = bumped.strftime(journal.LEDGER_TIME)
+        except ValueError:
+            pass
     cap, source, info = decision.cap, decision.source, decision.machine
     parent = fix_parent(store, record)
     if parent is not None:

@@ -686,12 +686,13 @@ class ReceiptReadersTableTests(LaneCase):
             ),
         ]
 
+        rv_created = self.record("rv")["created"]
         for name, fixture, expected in cases:
             with self.subTest(review=name):
                 if fixture is None:
                     review_file.unlink(missing_ok=True)
                 else:
-                    state.write_json(review_file, fixture)
+                    state.write_json(review_file, {**fixture, "lane_created": rv_created})
 
                 listed = json.loads(self.lane("list", "--json"))["lanes"][0]
                 self.assertEqual(listed["receipt"], f"green, post-merge green, {expected['list_tail']}")
@@ -704,6 +705,150 @@ class ReceiptReadersTableTests(LaneCase):
 
                 gate = json.loads(self.lane("findings", sha, "--json", ok=None))
                 self.assertEqual(gate["held"], expected["gate_held"])
+
+
+class ReusedLaneIdIsolationTests(unittest.TestCase):
+    """fathers#54: lane receipts are stamped with `lane_created` and mismatched receipts are treated as absent."""
+
+    def setUp(self) -> None:
+        self.tmp = pathlib.Path(tempfile.mkdtemp(prefix="lanefather-reused-id-"))
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        from lanefather import config, state
+
+        self.store = state.Store(config.Config(), directory=self.tmp / "state")
+
+    def test_receipt_matches_lane_strict_types_and_legacy_compat(self) -> None:
+        from lanefather import state
+
+        t1 = "2026-11-24T01:00:00Z"
+        t2 = "2026-11-24T02:00:00Z"
+        self.assertTrue(state.receipt_matches_lane({"lane_created": t1}, t1))
+        self.assertFalse(state.receipt_matches_lane({"lane_created": t1}, t2))
+        self.assertTrue(state.receipt_matches_lane({"status": "green"}, t2))
+        self.assertTrue(state.receipt_matches_lane({"lane_created": None}, t2))
+        self.assertTrue(state.receipt_matches_lane({"started": t2, "finished": t2}, t2))
+        self.assertTrue(state.receipt_matches_lane({"finished": t2}, t1))
+        self.assertFalse(state.receipt_matches_lane({"started": t1, "finished": t1}, t2))
+        self.assertFalse(state.receipt_matches_lane({"finished": t1}, t2))
+        self.assertFalse(state.receipt_matches_lane({"started": 123}, t2))
+        self.assertFalse(state.receipt_matches_lane({"finished": True}, t2))
+        self.assertTrue(state.receipt_matches_lane({"lane_created": t1}, None))
+        self.assertFalse(state.receipt_matches_lane(None, t1))
+        for bad in (123, True, False, ["t"], {"t": 1}, ""):
+            self.assertFalse(state.receipt_matches_lane({"lane_created": bad}, t1), f"bad={bad!r}")
+        self.assertIsNone(state.lane_created_of(None))
+        self.assertIsNone(state.lane_created_of({}))
+        self.assertIsNone(state.lane_created_of({"created": ""}))
+        self.assertIsNone(state.lane_created_of({"created": 123}))
+        self.assertEqual(state.lane_created_of({"created": t1}), t1)
+
+    def test_readers_ignore_older_generation_receipts_and_keep_legacy_compat(self) -> None:
+        from lanefather import postmerge, receipts, review_record, state
+
+        t1 = "2026-11-24T01:00:00Z"
+        t2 = "2026-11-24T02:00:00Z"
+        rec_gen1 = {"id": "a", "status": "done", "created": t1, "common_dir": "/repo/.git",
+                    "landed": {"merge": "m1"}}
+        rec_gen2 = {"id": "a", "status": "landed", "created": t2, "common_dir": "/repo/.git",
+                    "landed": {"merge": "m2"}}
+        self.store.save(rec_gen2)
+
+        # Write gen-1 receipts of every lane kind.
+        gen1_check = {
+            "version": 1, "lane": "a", "lane_created": t1, "status": "green", "tree": "tree1",
+            "results": [{"suite": "unit", "status": "passed", "checks": ["c1"]}],
+        }
+        receipts.write(self.store, "a", gen1_check, "receipt")
+        receipts.write(self.store, "a", {"head": "h1", "tree": "tree1", "failed_checks": ["c1"],
+                                         "lane_created": t1}, "first")
+        state.write_json(
+            self.store.receipt_path("a", "post-merge"),
+            {"version": 1, "lane": "a", "lane_created": t1, "merge": "m2", "status": "red",
+             "results": [{"suite": "smoke", "status": "failed", "checks": ["s1"]}]},
+        )
+        state.write_json(
+            self.store.receipt_path("a", "recheck"),
+            {"version": 1, "lane": "a", "lane_created": t1, "merge": "m2", "status": "green"},
+        )
+        state.write_json(
+            self.store.receipt_path("a", "review"),
+            {
+                "version": 1, "label": "a", "kind": "lane", "lane": "a", "lane_created": t1,
+                "status": "finished", "reviewer": "sol",
+                "findings": [{"n": 1, "severity": "P1", "title": "old", "file": "a.py", "line": 1, "mark": None}],
+            },
+        )
+
+        # Gen 1 sees its own receipts; gen 2 treats every gen-1 receipt as absent.
+        for kind in ("receipt", "first", "post-merge", "recheck", "review"):
+            self.assertIsNotNone(receipts.read(self.store, "a", kind, record=rec_gen1), kind)
+            self.assertIsNone(receipts.read(self.store, "a", kind, record=rec_gen2), kind)
+
+        self.assertIsInstance(receipts.check_verdict(rec_gen2, gen1_check, "tree1"), receipts.NoReceipt)
+        self.assertIsInstance(receipts.check_verdict(rec_gen1, gen1_check, "tree1"), receipts.Green)
+
+        # ensure_first ignores gen-1 `previous` and writes a fresh first receipt for gen 2.
+        first = receipts.ensure_first(self.store, rec_gen2, gen1_check, "h2", "tree2", ["c2"])
+        self.assertEqual(first, {"head": "h2", "tree": "tree2", "failed_checks": ["c2"], "lane_created": t2})
+
+        # lane_ran and postmerge.red_receipt ignore gen-1 receipts.
+        self.assertEqual(receipts.lane_ran(self.store, "a", record=rec_gen2), (set(), set(), set()))
+        self.assertEqual(receipts.lane_ran(self.store, "a", record=rec_gen1)[0], {"c1", "s1"})
+        self.assertIsNone(postmerge.red_receipt(rec_gen2, self.store))
+
+        # ReviewRecord readers ignore gen-1 review for gen 2.
+        rev_gen2 = review_record.ReviewRecord.load(self.store, "a", record=rec_gen2)
+        self.assertIsInstance(rev_gen2.verdict, review_record.Absent)
+        self.assertEqual(list(review_record.ReviewRecord.unmarked(self.store, [rec_gen2])), [])
+        with self.assertRaises(Exception) as ctx:
+            review_record.ReviewRecord.fix_parent(self.store, "a", "/repo/.git", "--fix-of a")
+        self.assertIn("no finished review with unmarked findings", str(ctx.exception))
+
+        # Legacy unstamped receipts (pre-upgrade):
+        # (a) A live lane across the upgrade (created <= receipt started/finished) keeps reading them.
+        live_legacy_check = {
+            "version": 1, "lane": "a", "status": "green", "tree": "tree2",
+            "started": t2, "finished": t2,
+        }
+        receipts.write(self.store, "a", live_legacy_check, "receipt")
+        self.assertEqual(receipts.read(self.store, "a", "receipt", record=rec_gen2), live_legacy_check)
+        self.assertIsInstance(receipts.check_verdict(rec_gen2, live_legacy_check, "tree2"), receipts.Green)
+        state.write_json(
+            self.store.receipt_path("a", "review"),
+            {"version": 1, "label": "a", "kind": "lane", "lane": "a", "status": "finished",
+             "reviewer": "sol", "started": t2, "finished": t2, "findings": []},
+        )
+        legacy_rev = review_record.ReviewRecord.load(self.store, "a", record=rec_gen2)
+        self.assertIsInstance(legacy_rev.verdict, review_record.Complete)
+
+        # (b) A reused lane id (gen2.created > gen1 unstamped receipt timestamp) ignores pre-upgrade receipts.
+        old_unstamped_check = {
+            "version": 1, "lane": "a", "status": "green", "tree": "tree1",
+            "started": t1, "finished": t1,
+        }
+        receipts.write(self.store, "a", old_unstamped_check, "receipt")
+        state.write_json(
+            self.store.receipt_path("a", "post-merge"),
+            {"version": 1, "lane": "a", "merge": "m2", "status": "red", "finished": t1},
+        )
+        state.write_json(
+            self.store.receipt_path("a", "review"),
+            {
+                "version": 1, "label": "a", "kind": "lane", "lane": "a", "status": "finished",
+                "reviewer": "sol", "started": t1, "finished": t1,
+                "findings": [{"n": 1, "severity": "P1", "title": "old", "file": "a.py", "line": 1, "mark": None}],
+            },
+        )
+        self.assertIsNone(receipts.read(self.store, "a", "receipt", record=rec_gen2))
+        self.assertIsInstance(receipts.check_verdict(rec_gen2, old_unstamped_check, "tree1"), receipts.NoReceipt)
+        self.assertIsNone(postmerge.red_receipt(rec_gen2, self.store))
+        self.assertIsInstance(
+            review_record.ReviewRecord.load(self.store, "a", record=rec_gen2).verdict,
+            review_record.Absent,
+        )
+        with self.assertRaises(Exception) as ctx2:
+            review_record.ReviewRecord.fix_parent(self.store, "a", "/repo/.git", "--fix-of a")
+        self.assertIn("no finished review with unmarked findings", str(ctx2.exception))
 
 
 if __name__ == "__main__":

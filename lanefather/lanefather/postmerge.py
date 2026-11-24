@@ -340,7 +340,7 @@ def _check_not_stale(record: Record, merge_sha: str, *, action: str) -> None:
 
 def red_receipt(record: Record, store: state.Store) -> Receipt | None:
     """The lane's red post-merge receipt, when it is the smoke of the merge the lane landed as."""
-    receipt = receipts.read(store, record["id"], "post-merge")
+    receipt = receipts.read(store, record["id"], "post-merge", record=record)
     merge = landed(record).get("merge")
     if not receipt or not receipts.is_red(receipt) or not merge or receipt.get("merge") != merge:
         return None
@@ -422,7 +422,7 @@ def _crashed_green_recheck(
     """Return `(path, receipt, cleared_by)` when `<id>.recheck.json` is a valid green recheck of `red`."""
     lane_id = str(record["id"])
     recheck_path = receipts.path(store, lane_id, "recheck")
-    recheck_rec = receipts.read(store, lane_id, "recheck")
+    recheck_rec = receipts.read(store, lane_id, "recheck", record=record)
     if not recheck_rec or not receipts.is_green(recheck_rec):
         return None
     merge = str(red["merge"])
@@ -507,7 +507,7 @@ def candidates(record: Record, store: state.Store, integration: str, red: Receip
         if other["id"] == record["id"] or integration_of(other) != integration:
             continue
         path = receipts.path(store, other["id"], "post-merge")
-        smoke: Receipt = receipts.read(store, other["id"], "post-merge") or {}
+        smoke: Receipt = receipts.read(store, other["id"], "post-merge", record=other) or {}
         sha = str(smoke.get("merge") or "")
         if (
             not receipts.is_green(smoke)
@@ -645,7 +645,13 @@ class PostMergeRecord:
             latest = store.load(lane_id)
             _check_not_stale(latest, merge_sha, action="record post-merge smoke")
             target_phase = apply_post_merge_event(lane_id, persisted_phase(latest), event)
-            receipt_data: Receipt = {**payload, "merge": merge_sha, "status": status}
+            lane_created = state.lane_created_of(latest)
+            receipt_data: Receipt = {
+                **payload,
+                **({"lane_created": lane_created} if lane_created else {}),
+                "merge": merge_sha,
+                "status": status,
+            }
             target = _write_receipt(store, lane_id, "post-merge", receipt_data)
             updated = lifecycle.transition(
                 store,
@@ -688,8 +694,10 @@ class PostMergeRecord:
             red_path = red_receipt_path or str(
                 payload.get("red_receipt") or receipts.path(store, lane_id, "post-merge")
             )
+            lane_created = state.lane_created_of(latest)
             receipt_data: Receipt = {
                 **payload,
+                **({"lane_created": lane_created} if lane_created else {}),
                 "kind": "recheck",
                 "merge": merge_sha,
                 "sha": tip,

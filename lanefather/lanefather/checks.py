@@ -69,7 +69,8 @@ def fix_parent(store: state.Store, record: Record) -> dict[str, Any] | None:
     parent = state.hand_over_parent(record)
     if parent is None:
         return None
-    receipt = receipts.read(store, parent)
+    parent_record = state.read_json(store.record_path(parent))
+    receipt = receipts.read(store, parent, record=parent_record)
     if not receipt or receipt.get("selection") is None or receipt.get("check_results") is None:
         return None
     return dict(receipt, lane=parent)
@@ -154,7 +155,7 @@ def prepare(store: state.Store, lane_id: str, *, agent: str | None = None) -> Pr
                         "tree\n" + dirty(worktree))
     head, tree = git(worktree, "rev-parse", "HEAD"), git(worktree, "rev-parse", "HEAD^{tree}")
     path = receipts.path(store, lane_id)
-    previous = receipts.read(store, lane_id)
+    previous = receipts.read(store, lane_id, record=record)
     return Prepared(record=record, worktree=worktree, head=head, tree=tree, receipt_path=path,
                     previous=previous, agent_info=agent_info)
 
@@ -280,9 +281,12 @@ def record(store: state.Store, prepared: Prepared, selection: Selected, executed
     changed_tests = receipts.changed_red_tests(lane_plan, first)
     info = host.host(store.project)
     agent_kind = prepared.agent_info["kind"] if prepared.agent_info else None
+    lane_created = state.lane_created_of(rec)
     receipts.write(
         store, lane_id,
-        {"version": 1, "lane": lane_id, "ticket": rec["ticket"], "branch": rec["branch"],
+        {"version": 1, "lane": lane_id,
+          **({"lane_created": lane_created} if lane_created else {}),
+          "ticket": rec["ticket"], "branch": rec["branch"],
           "head": head, "tree": tree, "base": selection.base, "suites": suites,
           "reasons": lane_plan["reasons"], "checks": selected, "selection": lane_plan["selection"],
           "check_results": check_results, "unowned": lane_plan.get("unowned", []),

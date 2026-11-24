@@ -60,7 +60,7 @@ def touched_lines(failed: list[tuple[str, str]], integration: str, merge: str,
     landed = [r for r in sorted(store.lanes(), key=lambda r: r.get("landed", {}).get("at", ""), reverse=True)
               if r.get("landed", {}).get("integration") == integration
               and git_ok(integration, "merge-base", "--is-ancestor", r["landed"]["merge"], merge)]
-    ran = {r["id"]: receipts.lane_ran(store, r["id"]) for r in landed}
+    ran = {r["id"]: receipts.lane_ran(store, r["id"], record=r) for r in landed}
 
     def covers(lane_id: str, item: str, suite: str) -> bool:
         lane_checks, suites, whole = ran[lane_id]
@@ -217,7 +217,7 @@ def recheck(args: Any, store: state.Store) -> int:
         merge_sha,
         integration,
         current_branch(integration) or integration,
-        receipts.read(store, args.id),
+        receipts.read(store, args.id, record=record),
         status,
         f"recheck on {tip[:10]}: {what}",
         keep_override=lifecycle.kept(record),
@@ -304,7 +304,7 @@ def merge(
         main = main_checkout(record["common_dir"])
         tip = git(main, "rev-parse", "--verify", record["branch"] + "^{commit}")
         tree = git(main, "rev-parse", tip + "^{tree}")
-        receipt = receipts.read(store, lane_id)
+        receipt = receipts.read(store, lane_id, record=record)
         if not into and not record.get("integration"):
             raise LaneError(f"no worktree has {record['base']} checked out; give --into <integration worktree>")
         integration = os.path.realpath(into or record["integration"])
@@ -329,8 +329,8 @@ def merge(
         if dirty(integration) or os.path.exists(git(integration, "rev-parse", "--git-path", "MERGE_HEAD")):
             raise LaneError(f"land refused: {integration} has uncommitted changes or a merge in progress")
         if onto in store.project.promoted:
-            reviewed, words = review_record.ReviewRecord.load(store, lane_id).summary(prog=prog)
-            if not reviewed and not review.review_exemption(record):
+            reviewed, words = review_record.ReviewRecord.load(store, lane_id, record=record).summary(prog=prog)
+            if not reviewed and not review.review_exemption(record, store):
                 if not force_reason:
                     raise LaneError(f"land refused: {integration} is on {onto}, which promote would not hold for "
                                     f"this lane's review ({words}); run {prog} review {lane_id} and mark its "

@@ -79,9 +79,9 @@ def _agent_family(kind: str, model: str) -> str | None:
 def implementer_family(store: state.Store, lane_id: str) -> str | None:
     """The implementer's model family: that of the agent whose `check` wrote the lane's receipt (its recorded model
     first, then a single-family harness), else of the lane's latest agent that tells; None unknown."""
-    check_data = receipts.read(store, lane_id) or {}
-    checker = str(check_data.get("agent") or "")
     record = state.read_json(store.record_path(lane_id)) or {}
+    check_data = receipts.read(store, lane_id, record=record) or {}
+    checker = str(check_data.get("agent") or "")
     raw_agents: list[Any] = record.get("agents") or []
     agents = [cast(dict[str, Any], e) for e in reversed(raw_agents) if isinstance(e, dict)]
     if checker:
@@ -497,10 +497,21 @@ def spawn_review(
     return rev
 
 
+def _lane_review_fields(record: Record, **extra: Any) -> dict[str, Any]:
+    created = state.lane_created_of(record)
+    return {
+        "kind": "lane",
+        "lane": record["id"],
+        "ticket": record["ticket"],
+        **({"lane_created": created} if created else {}),
+        **extra,
+    }
+
+
 def start_lane_review(store: state.Store, record: Record) -> str:
     """At land: an exempt receipt, or the review in the background. The line land prints."""
     lane_id = record["id"]
-    rev = review_record.ReviewRecord.load(store, lane_id)
+    rev = review_record.ReviewRecord.load(store, lane_id, record=record)
     verdict = rev.verdict
     if isinstance(
         verdict,
@@ -535,7 +546,7 @@ def start_lane_review(store: state.Store, record: Record) -> str:
             store,
             lane_id,
             exempt,
-            fields={"kind": "lane", "lane": lane_id, "ticket": record["ticket"]},
+            fields=_lane_review_fields(record),
         )
         journal.ledger(
             f"review {lane_id} exempt: {exempt}",
@@ -550,7 +561,7 @@ def start_lane_review(store: state.Store, record: Record) -> str:
     started = spawn_review(
         store,
         lane_id,
-        {"kind": "lane", "lane": lane_id, "ticket": record["ticket"]},
+        _lane_review_fields(record),
         [lane_id],
         main_checkout(record["common_dir"]),
     )
@@ -560,7 +571,7 @@ def start_lane_review(store: state.Store, record: Record) -> str:
 
 def review_lane(args: Any, store: state.Store) -> int:
     record = store.load(args.id)
-    existing = review_record.ReviewRecord.load(store, args.id)
+    existing = review_record.ReviewRecord.load(store, args.id, record=record)
     verdict = existing.verdict
     # The background run land started finds its own pid in the receipt.
     elsewhere = isinstance(verdict, review_record.Running) and verdict.pid != os.getpid()
@@ -588,8 +599,11 @@ def review_lane(args: Any, store: state.Store) -> int:
     completed = perform_review(
         store,
         args.id,
-        {"kind": "lane", "lane": args.id, "ticket": record["ticket"],
-         "scope": [scope.receipt_entry(entry) for entry in resolved], "scope_complete": scope.complete(resolved)},
+        _lane_review_fields(
+            record,
+            scope=[scope.receipt_entry(entry) for entry in resolved],
+            scope_complete=scope.complete(resolved),
+        ),
         main_checkout(record["common_dir"]),
         base,
         tip,
@@ -613,7 +627,8 @@ def review_lane(args: Any, store: state.Store) -> int:
 
 def compare(args: Any, store: state.Store) -> int:
     """`review <id> --compare`: who found what and what held up, one block per reviewer with its marks."""
-    rev = review_record.ReviewRecord.load(store, args.id)
+    record = state.read_json(store.record_path(args.id)) if state.ID.match(args.id) else None
+    rev = review_record.ReviewRecord.load(store, args.id, record=record)
     if not rev.has_finished_receipt or rev.raw is None:
         raise LaneError(f"lane {args.id} has no finished review to compare ({rev.summary()[1]})")
     raw = rev.raw
@@ -827,7 +842,7 @@ def hand_over(args: Any, store: state.Store) -> int:
     )
     for line in held:
         print(f"lane: {line}")
-    review_record.ReviewRecord.attach_fix_lane(store, args.id, fix_id)
+    review_record.ReviewRecord.attach_fix_lane(store, args.id, fix_id, record=record)
     journal.ledger(
         f"review-hand-over {args.id} to {fix_id} worktree={fix['worktree']}",
         kind="review.handed_over",

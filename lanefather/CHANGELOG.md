@@ -306,6 +306,13 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
   existing scope and claims; duplicate `start` refusals on planned or active lanes now point at `start <id> --create`,
   `land <id>`, or `drop <id>` instead of `done`. Repeating `--after A --after B` now keeps every named dependency
   instead of only the last flag (fathers#241).
+- Reusing a lane id after `done` no longer inherits the previous incarnation's check receipt, first receipt, review,
+  post-merge smoke or recheck receipt (fathers#54): every lane receipt is stamped with `lane_created` from the lane
+  record's `created` timestamp, and readers (`list`, `show`, `status`, `check`, `land` including promoted-branch
+  fix-parent exemption checks, `review`, `done`, the review gate, and `start --fix-of` / `review --fix-lane` parent
+  lookups) treat a `lane_created` mismatch as absent. Pre-upgrade unstamped receipts still match live lanes whose
+  `created` is at or before the receipt's `started`/`finished` timestamp, while reused lane ids ignore older
+  unstamped receipts.
 - A land forced past other lanes' unmarked review findings with `--force-reason` prints each finding it overrides
   (`lane: overridden: <finding>`, worded as the refusal) before merging; before, they reached only the override
   record and the ledger (review of fathers#172).
