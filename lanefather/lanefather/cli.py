@@ -95,7 +95,8 @@ COMMANDS: dict[str, Command] = {
     "review": Command("a lane's review, its marks and its fix lane",
                       "<id> [--mark N fixed:<merge>|rejected:<reason>] [--fix-lane] [--compare] "
                       "[--record FILE --reviewer ALIAS] [--reviewer ALIAS|both] [--audit] | "
-                      "--overall <sha> [--since <base>] [--lanes ID,ID] [--record FILE --reviewer ALIAS]",
+                      "--overall <sha> [--since <base>] [--lanes ID,ID] [--paths GLOB... | --areas FILE] "
+                      "[--record FILE --reviewer ALIAS]",
                       "fix-login --mark 1 fixed:fix-login-review-fixes"),
     "findings": Command("whether a review holds a SHA, for a publish", "<sha> [--since REF] [--json]",
                         "HEAD --json"),
@@ -357,6 +358,11 @@ def parser(project: config.Config = config.DEFAULT) -> Parser:
     p.add_argument("--since", metavar="BASE", help="with --overall: the base, origin/main for promote --ship")
     p.add_argument("--lanes", action="append", metavar="ID,ID",
                    help="with --overall: landed lane ids covered by this batch review (satisfies each in review gate)")
+    p.add_argument("--paths", nargs="+", action="extend", metavar="GLOB",
+                   help="with --overall: restrict the review diff to paths matching these globs (repeatable)")
+    p.add_argument("--areas", metavar="FILE",
+                   help="with --overall: TOML or JSON file of named path groups; each area is reviewed separately "
+                        "and its findings become one ticket with an area label")
     p.add_argument("--force-reason", help="review again although the lane has a review, or register the fix lane "
                                           "over the lane cap; logged")
     p.set_defaults(run=review.review)

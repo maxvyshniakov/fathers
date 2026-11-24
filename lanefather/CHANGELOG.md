@@ -8,6 +8,14 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
 
 ### Added
 
+- Area-split and path-filtered overall reviews (fathers#155):
+  - `lanefather review --overall <sha> --since <base> --paths GLOB...` (repeatable) restricts the diff and file list
+    shown to the reviewer to paths matching the given globs, skips cleanly when no changed files match, and stores
+    its receipt under a distinct `paths-<sha>-<digest>` label recording `paths`.
+  - `lanefather review --overall <sha> --since <base> --areas FILE` reads named path groups from a TOML (`[areas]`
+    table or top-level) or JSON file, reviews each area with matching diff changes separately under `ship-<sha>-<area>`
+    (skipping empty areas), records `area` and `paths` on each receipt, and files one GitHub issue per area with
+    findings labelled `area:<name>`. Both flags work with `--reviewer ALIAS|both`.
 - Fix lane kind and atomic hand-over transaction (fathers#45 Part (b)):
   - Lane records now carry `kind: "lane" | "fix"` (`lifecycle.kind_of` defaults legacy records without `kind` to
     `"fix"` when `review_fix_of` is set, else `"lane"`), while preserving `review_fix_of` / `review_fix_of_all`
