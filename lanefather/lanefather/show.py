@@ -5,7 +5,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
-from typing import Any
+from typing import Any, cast
 
 from . import admission, config, receipts, state
 from .errors import LaneError
@@ -72,6 +72,11 @@ def show(
         print(f"Lane {result['id']} · {result['status']}")
         for key in ('project', 'ticket', 'branch', 'base', 'checks', 'review', 'claims', 'after', 'worktree'):
             print(f'{key}: {result[key]}')
+        review_block: Any = result.get('review')
+        if isinstance(review_block, dict):
+            hint = cast(dict[str, Any], review_block).get('recovery_hint')
+            if isinstance(hint, str) and hint:
+                print(f'review recovery: {hint}')
         if result['gone']:
             print(f'gone: {admission.GONE}; {cfg.command} drop {result["id"]} frees it')
     return 0

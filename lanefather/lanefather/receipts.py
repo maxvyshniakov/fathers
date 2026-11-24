@@ -608,6 +608,11 @@ class LaneView:
     review_tip: str | None = None
     review_pre_land_current: bool = True
     review_has_delta: bool = False
+    review_recovered: bool = False
+    review_recovered_complete: bool | None = None
+    review_recovered_sources: tuple[str, ...] = ()
+    review_missing_facts: tuple[str, ...] = ()
+    review_recovery_hint: str | None = None
 
     def _check_status_word(self, *, default: str) -> str:
         if isinstance(self.check, NoReceipt):
@@ -632,8 +637,12 @@ class LaneView:
             return "stopped"
         if isinstance(self.review, review_record.Exempt):
             return "exempt"
+        if isinstance(self.review, review_record.PartialEvidence):
+            return "recovered (partial)"
         if isinstance(self.review, review_record.Stale):
             return "stale"
+        if isinstance(self.review, review_record.Complete) and self.review.recovered:
+            return "recovered"
         if isinstance(self.review, (review_record.PartialPanel, review_record.Unmarked, review_record.Complete)):
             return "finished"
         return self.review.raw_status or "not started"
@@ -701,6 +710,15 @@ class LaneView:
             review_block["reviewed_tip"] = self.review.reviewed_tip
             review_block["landed_tip"] = self.review.landed_tip
             review_block.setdefault("summary", self.review_words)
+        if self.review_recovered:
+            review_block["recovered"] = True
+            review_block["evidence_source"] = "historical"
+            review_block["complete"] = bool(self.review_recovered_complete)
+            review_block["sources"] = list(self.review_recovered_sources)
+            review_block["missing_facts"] = list(self.review_missing_facts)
+            review_block["summary"] = self.review_words
+        if self.review_recovery_hint:
+            review_block["recovery_hint"] = self.review_recovery_hint
         return {
             "version": 1,
             "id": self.id,
@@ -737,6 +755,15 @@ class LaneView:
             review_block["reviewed_tip"] = self.review.reviewed_tip
             review_block["landed_tip"] = self.review.landed_tip
             review_block.setdefault("summary", self.review_words)
+        if self.review_recovered:
+            review_block["recovered"] = True
+            review_block["evidence_source"] = "historical"
+            review_block["complete"] = bool(self.review_recovered_complete)
+            review_block["sources"] = list(self.review_recovered_sources)
+            review_block["missing_facts"] = list(self.review_missing_facts)
+            review_block["summary"] = self.review_words
+        if self.review_recovery_hint:
+            review_block["recovery_hint"] = self.review_recovery_hint
         return {
             "id": self.id,
             "status": self.status,
@@ -802,10 +829,33 @@ def lane_view(
 
     rev = review_record.ReviewRecord.load(store, lane_id, record=record)
     review_v = rev.verdict
-    _, words = rev.summary(prog=prog or store.project.command)
+    cmd_prog = prog or store.project.command
+    _, words = rev.summary(prog=cmd_prog)
     findings = rev.findings
     open_count = len(rev.open_findings)
     pre_land_current = not isinstance(review_v, review_record.Stale)
+    rev_raw = rev.raw or {}
+    rev_recovered = rev.is_recovered
+    rev_recovered_complete = isinstance(review_v, review_record.Complete) if rev_recovered else None
+    raw_rec_sources: Any = rev_raw.get("sources")
+    rev_recovered_sources = (
+        tuple(str(s) for s in cast(list[Any], raw_rec_sources) if isinstance(s, str) and s)
+        if rev_recovered and isinstance(raw_rec_sources, list)
+        else ()
+    )
+    raw_missing_facts: Any = rev_raw.get("missing_facts")
+    rev_missing_facts = (
+        tuple(str(m) for m in cast(list[Any], raw_missing_facts) if isinstance(m, str) and m)
+        if rev_recovered and isinstance(raw_missing_facts, list)
+        else ()
+    )
+    rev_recovery_hint = (
+        f"recover historical evidence with {cmd_prog} review {lane_id} --recover before rerunning"
+        if bool(record.get("landed"))
+        and not lifecycle.finished(record)
+        and isinstance(review_v, (review_record.Absent, review_record.Died, review_record.Failed))
+        else None
+    )
 
     raw_post = record.get("post_merge")
     post_dict = cast(dict[str, Any], raw_post) if isinstance(raw_post, dict) else None
@@ -870,4 +920,9 @@ def lane_view(
         review_tip=rev.reviewed_tip or None,
         review_pre_land_current=pre_land_current,
         review_has_delta=rev.matching_delta(record) is not None,
+        review_recovered=rev_recovered,
+        review_recovered_complete=rev_recovered_complete,
+        review_recovered_sources=rev_recovered_sources,
+        review_missing_facts=rev_missing_facts,
+        review_recovery_hint=rev_recovery_hint,
     )

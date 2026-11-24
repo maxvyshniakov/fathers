@@ -250,13 +250,19 @@ def decide_completion(
     )
     if not isinstance(review_verdict, allowed_verdicts):
         _, words = review_record.review_words(lane_id, review_verdict, prog=prog)
-        refusal = (
-            words
-            if isinstance(review_verdict, review_record.Absent)
-            else f"its {words}"
-            if isinstance(review_verdict, review_record.Stale)
-            else f"its {words}: mark each finding with {review_record.mark_help(lane_id, prog)}"
-        )
+        if isinstance(review_verdict, review_record.Absent):
+            refusal = f"{words} (or recover historical evidence: {prog} review {lane_id} --recover)"
+        elif isinstance(review_verdict, (review_record.Died, review_record.Failed)):
+            refusal = f"its {words} (or recover historical evidence: {prog} review {lane_id} --recover)"
+        elif isinstance(review_verdict, review_record.PartialEvidence):
+            refusal = (
+                f"its {words}: recover complete evidence with {prog} review {lane_id} --recover --source <url> "
+                f"or run {prog} review {lane_id}"
+            )
+        elif isinstance(review_verdict, review_record.Stale):
+            refusal = f"its {words}"
+        else:
+            refusal = f"its {words}: mark each finding with {review_record.mark_help(lane_id, prog)}"
         if mode is CompletionMode.AUTO_AFTER_SMOKE:
             return CompletionDecision(
                 action=CompletionAction.HOLD_REVIEW,

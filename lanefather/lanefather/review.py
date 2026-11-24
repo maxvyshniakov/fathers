@@ -37,6 +37,7 @@ from . import (
     receipts,
     review_class,
     review_record,
+    review_recover,
     reviewer,
     scope,
     settings,
@@ -435,6 +436,78 @@ def _delta_review_lines(
     return [head, *_format_finding_lines(delta_findings)]
 
 
+def _recovered_review_lines(
+    label: str,
+    raw: dict[str, Any],
+    verdict: review_record.ReviewVerdict,
+    *,
+    prog: str,
+) -> list[str]:
+    is_partial = isinstance(verdict, review_record.PartialEvidence)
+    state_word = "partial — does not satisfy review gate" if is_partial else "complete"
+    lines = [f"Recovered historical review evidence of {label} ({state_word})"]
+    recovered_by = raw.get("recovered_by")
+    recovered_at = raw.get("recovered_at")
+    if recovered_by or recovered_at:
+        lines.append(f"  recovered by: {recovered_by or '-'} at {recovered_at or '-'}")
+    raw_sources: Any = raw.get("sources")
+    if isinstance(raw_sources, list) and raw_sources:
+        lines.append("  sources: " + ", ".join(str(s) for s in cast(list[Any], raw_sources)))
+    raw_unavail: Any = raw.get("unavailable_sources")
+    if isinstance(raw_unavail, list) and raw_unavail:
+        for item in cast(list[Any], raw_unavail):
+            if isinstance(item, dict):
+                entry = cast(dict[str, Any], item)
+                lines.append(f"  unavailable source: {entry.get('url')} ({entry.get('error')})")
+    raw_rscope: Any = raw.get("reviewed_scope")
+    if isinstance(raw_rscope, dict):
+        rs = cast(dict[str, Any], raw_rscope)
+        lines.append(
+            f"  reviewed scope: {str(rs.get('base', ''))[:10]}..{str(rs.get('tip', ''))[:10]} "
+            f"({'verified' if rs.get('verified') else 'unverified'})"
+        )
+    raw_lscope: Any = raw.get("landed_scope")
+    if isinstance(raw_lscope, dict):
+        ls = cast(dict[str, Any], raw_lscope)
+        parts = [f"{k}={str(v)[:10]}" for k, v in ls.items() if isinstance(v, str) and v]
+        if parts:
+            lines.append("  landed scope: " + ", ".join(parts))
+    raw_disps: Any = raw.get("dispositions")
+    if isinstance(raw_disps, list) and raw_disps:
+        lines.append("  dispositions:")
+        for item in cast(list[Any], raw_disps):
+            if not isinstance(item, dict):
+                continue
+            d = cast(dict[str, Any], item)
+            sev = d.get("severity") if isinstance(d.get("severity"), str) else "?"
+            kind = str(d.get("kind") or "unmarked")
+            if kind == "fixed":
+                commit = str(d.get("commit") or d.get("raw_commit") or "")[:10]
+                anc = "in target history" if d.get("in_target_history") else "NOT in target history"
+                ver = "verified" if d.get("verified") else "unverified"
+                detail = f"fixed: {commit} ({anc}, {ver})"
+            elif kind == "rejected":
+                ver = "verified" if d.get("verified") else "unverified"
+                detail = f"rejected: {d.get('reason') or '-'} ({ver})"
+            else:
+                detail = "unmarked (unverified)"
+            lines.append(f"    {d.get('n', '?')}. {sev} {d.get('title', '')}  [{detail}]")
+    raw_missing: Any = raw.get("missing_facts")
+    if isinstance(raw_missing, list) and raw_missing:
+        lines.append("  missing facts (not fabricated): " + ", ".join(str(m) for m in cast(list[Any], raw_missing)))
+    raw_preserved: Any = raw.get("preserved_artifacts")
+    if isinstance(raw_preserved, list) and raw_preserved:
+        lines.append(f"  preserved artifacts: {len(cast(list[Any], raw_preserved))} prior review receipt(s) kept")
+    if is_partial:
+        for reason in verdict.reasons:
+            lines.append(f"  incomplete: {reason}")
+        lines.append(
+            f"  Recover complete evidence with {prog} review {label} --recover --source <url>, "
+            f"or run a fresh review with {prog} review {label} --force-reason <why>"
+        )
+    return lines
+
+
 def review_lines(
     rev: review_record.ReviewRecord,
     *,
@@ -445,6 +518,8 @@ def review_lines(
     raw = rev.raw or {}
     label = str(raw.get("label") or rev.label)
     verdict = rev.verdict
+    if rev.is_recovered:
+        return _recovered_review_lines(label, raw, verdict, prog=cmd_prog)
     if isinstance(verdict, review_record.Exempt):
         return [f"Review of {label}: exempt ({verdict.reason})"]
     if isinstance(verdict, review_record.Running):
@@ -453,9 +528,16 @@ def review_lines(
         if raw.get("kind") == "overall" or label.startswith(("ship-", "batch-")):
             sha = raw.get("sha") or raw.get("tip")
             target = f"--overall {sha[:10]}" if isinstance(sha, str) and sha else f"--overall {label}"
-        else:
-            target = label
-        return [f"Review of {label}: died (pid {verdict.pid}, log {verdict.log}): rerun {cmd_prog} review {target}"]
+            return [f"Review of {label}: died (pid {verdict.pid}, log {verdict.log}): rerun {cmd_prog} review {target}"]
+        hint = (
+            f" (or recover historical evidence: {cmd_prog} review {label} --recover)"
+            if record is not None and lifecycle.landed(record)
+            else ""
+        )
+        return [
+            f"Review of {label}: died (pid {verdict.pid}, log {verdict.log}): "
+            f"rerun {cmd_prog} review {label}{hint}"
+        ]
     left = raw.get("codex_left")
     raw_forced: Any = raw.get("forced")
     forced = cast(dict[str, Any], raw_forced) if isinstance(raw_forced, dict) else {}
@@ -1323,12 +1405,25 @@ def review_lane(args: Any, store: state.Store) -> int:
     elsewhere = isinstance(verdict, review_record.Running) and verdict.pid != os.getpid()
     already_finished = isinstance(verdict, (review_record.Unmarked, review_record.Complete, review_record.Stale))
     incomplete_panel = isinstance(verdict, review_record.PartialPanel)
-    has_existing = already_finished or incomplete_panel or isinstance(verdict, review_record.Exempt) or elsewhere
+    partial_evidence = isinstance(verdict, review_record.PartialEvidence)
+    has_existing = (
+        already_finished
+        or incomplete_panel
+        or partial_evidence
+        or isinstance(verdict, review_record.Exempt)
+        or elsewhere
+    )
     if has_existing and not args.force_reason:
         print("\n".join(review_lines(existing, record=record, prog=store.prog)))
-        if incomplete_panel:
+        if incomplete_panel or partial_evidence:
             print(f"Lane {args.id}: {existing.summary()[1]}")
             return 1
+        if isinstance(verdict, review_record.Complete) and verdict.recovered:
+            print(
+                f"Lane {args.id} has recovered historical review evidence "
+                "(--force-reason runs a fresh review, logged)"
+            )
+            return 0
         if already_finished:
             print(f"Lane {args.id} is already reviewed: one review per lane (--force-reason reviews again, logged)")
         return 0
@@ -1897,29 +1992,64 @@ def overall_review(args: Any, store: state.Store) -> int:
     return 0 if finished_ok and not (completed.raw or {}).get("issue_error") else 1
 
 
+def recover_lane_review(args: Any, store: state.Store) -> int:
+    """`lanefather review <id> --recover [--source URL...] [--target REF] [--reviewed-range BASE..TIP]`
+    (fathers#179)."""
+    record = store.load(args.id)
+    raw_sources: Any = getattr(args, "source", None) or ()
+    sources = [str(u) for u in cast(Sequence[Any], raw_sources) if isinstance(u, str) and u.strip()]
+    completed, is_complete = review_recover.recover_lane(
+        store,
+        record,
+        sources=sources,
+        target=getattr(args, "target", None),
+        reviewed_range=getattr(args, "reviewed_range", None),
+        force_reason=getattr(args, "force_reason", None),
+    )
+    print("\n".join(review_lines(completed, record=record, prog=store.prog)))
+    if is_complete and completed.allows_promote:
+        done.settle_lane(store, args.id, mode=postmerge.CompletionMode.AUTO_AFTER_REVIEW)
+        return 0
+    return 1
+
+
 def review(args: Any, store: state.Store) -> int:
     record_file = getattr(args, "record", None)
     is_audit = bool(getattr(args, "audit", False))
+    is_recover = bool(getattr(args, "recover", False))
+    recover_sources = getattr(args, "source", None)
+    recover_target = getattr(args, "target", None)
+    recover_range = getattr(args, "reviewed_range", None)
     reviewer_flag = getattr(args, "reviewer", None)
     has_lanes = bool(getattr(args, "lanes", None))
+    if (recover_sources or recover_target or recover_range) and not is_recover:
+        raise LaneError("--source, --target and --reviewed-range go with --recover")
     if has_lanes and not args.overall:
         raise LaneError("--lanes goes with --overall <sha>")
     if args.overall:
         if args.id:
             raise LaneError("--overall does not take a lane id")
-        if getattr(args, "compare", False) or args.fix_lane or is_audit:
-            raise LaneError("--overall does not combine with --compare, --fix-lane or --audit")
+        if getattr(args, "compare", False) or args.fix_lane or is_audit or is_recover:
+            raise LaneError("--overall does not combine with --compare, --fix-lane, --audit or --recover")
         if record_file and args.mark:
             raise LaneError("--record does not combine with --mark")
         return overall_review(args, store)
     if not args.id:
         raise LaneError("give a lane id, or --overall <sha> --since <base>")
+    if is_recover and (
+        args.mark or getattr(args, "compare", False) or args.fix_lane or record_file or is_audit or reviewer_flag
+    ):
+        raise LaneError(
+            "--recover does not combine with --mark, --compare, --fix-lane, --record, --audit or --reviewer"
+        )
     if is_audit and (args.mark or getattr(args, "compare", False) or args.fix_lane):
         raise LaneError("--audit does not combine with --mark, --compare or --fix-lane")
     if record_file and (args.mark or getattr(args, "compare", False) or args.fix_lane):
         raise LaneError("--record does not combine with --mark, --compare or --fix-lane")
     if reviewer_flag and not record_file and (args.mark or getattr(args, "compare", False) or args.fix_lane):
         raise LaneError("--reviewer chooses who reviews; it does not combine with --mark, --compare or --fix-lane")
+    if is_recover:
+        return recover_lane_review(args, store)
     if is_audit:
         return audit_lane(args, store)
     if record_file:

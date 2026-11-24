@@ -49,6 +49,7 @@ class ReviewEvent(StrEnum):
     FAIL = "fail"
     EXEMPT = "exempt"
     RECORD = "record"
+    RECOVER = "recover"
     MARK = "mark"
     PRE_LAND_FIX = "pre_land_fix"
     TICKET = "ticket"
@@ -69,6 +70,9 @@ REVIEW_TRANSITIONS: dict[tuple[ReceiptPhase, ReviewEvent], ReceiptPhase] = {
     (ReceiptPhase.ABSENT, ReviewEvent.RECORD): ReceiptPhase.FINISHED,
     (ReceiptPhase.DIED, ReviewEvent.RECORD): ReceiptPhase.FINISHED,
     (ReceiptPhase.FAILED, ReviewEvent.RECORD): ReceiptPhase.FINISHED,
+    (ReceiptPhase.ABSENT, ReviewEvent.RECOVER): ReceiptPhase.FINISHED,
+    (ReceiptPhase.DIED, ReviewEvent.RECOVER): ReceiptPhase.FINISHED,
+    (ReceiptPhase.FAILED, ReviewEvent.RECOVER): ReceiptPhase.FINISHED,
     (ReceiptPhase.FINISHED, ReviewEvent.MARK): ReceiptPhase.FINISHED,
     (ReceiptPhase.FINISHED, ReviewEvent.PRE_LAND_FIX): ReceiptPhase.FINISHED,
     (ReceiptPhase.FINISHED, ReviewEvent.TICKET): ReceiptPhase.FINISHED,
@@ -154,6 +158,18 @@ class Complete:
     findings: tuple[dict[str, Any], ...] = ()
     reviewer: Any = None
     missing_members: tuple[str, ...] = ()
+    recovered: bool = False
+    sources: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class PartialEvidence:
+    """Historical review evidence was recovered, but is incomplete or unverified and cannot satisfy the gate."""
+
+    reasons: tuple[str, ...] = ()
+    findings: tuple[dict[str, Any], ...] = ()
+    unmarked: tuple[dict[str, Any], ...] = ()
+    sources: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -170,7 +186,9 @@ class Stale:
     is_active: bool = False
 
 
-ReviewVerdict = Absent | Running | Died | Failed | PartialPanel | Exempt | Unmarked | Complete | Stale
+ReviewVerdict = (
+    Absent | Running | Died | Failed | PartialPanel | PartialEvidence | Exempt | Unmarked | Complete | Stale
+)
 
 
 # ---------------------------------------------------------------------------
@@ -790,6 +808,67 @@ def derive_verdict(
     missing = tuple(missing_members(raw))
     reviewer = raw.get("reviewer")
 
+    if raw.get("recovered") is True or raw.get("evidence_source") == "historical":
+        raw_sources: Any = raw.get("sources")
+        sources = (
+            tuple(str(s) for s in cast(list[Any], raw_sources) if isinstance(s, str) and s)
+            if isinstance(raw_sources, list)
+            else ()
+        )
+        raw_reasons: Any = raw.get("incomplete_reasons")
+        reasons = [
+            str(r) for r in cast(list[Any], raw_reasons) if isinstance(r, str) and r
+        ] if isinstance(raw_reasons, list) else []
+        if raw.get("complete") is not True and not reasons:
+            reasons.append("recovered historical evidence is marked incomplete")
+        if record is not None:
+            raw_landed: Any = record.get("landed")
+            landed_info = cast(dict[str, Any], raw_landed) if isinstance(raw_landed, dict) else {}
+            rec_merge = landed_info.get("merge")
+            rec_tip = landed_info.get("tip")
+            raw_lscope: Any = raw.get("landed_scope")
+            lscope = cast(dict[str, Any], raw_lscope) if isinstance(raw_lscope, dict) else {}
+            if isinstance(rec_merge, str) and rec_merge:
+                saved_merge = lscope.get("merge")
+                if isinstance(saved_merge, str) and saved_merge and saved_merge != rec_merge:
+                    reasons.append(
+                        f"scope mismatch: recovered evidence covers merge {saved_merge[:10]}, "
+                        f"not lane merge {rec_merge[:10]}"
+                    )
+            if isinstance(rec_tip, str) and rec_tip:
+                saved_tip = lscope.get("tip")
+                if isinstance(saved_tip, str) and saved_tip and saved_tip != rec_tip:
+                    reasons.append(
+                        f"scope mismatch: recovered evidence covers tip {saved_tip[:10]}, "
+                        f"not lane tip {rec_tip[:10]}"
+                    )
+        raw_disps: Any = raw.get("dispositions")
+        if isinstance(raw_disps, list):
+            for item in cast(list[Any], raw_disps):
+                if isinstance(item, dict) and cast(dict[str, Any], item).get("verified") is not True:
+                    n = cast(dict[str, Any], item).get("n", "?")
+                    msg = f"disposition #{n} is unverified"
+                    if msg not in reasons and not any(f"#{n}" in r for r in reasons):
+                        reasons.append(msg)
+        if unmarked:
+            msg = f"{len(unmarked)} recovered finding(s) have no verified disposition"
+            if msg not in reasons and not reasons:
+                reasons.append(msg)
+        if reasons or raw.get("complete") is not True or unmarked:
+            return PartialEvidence(
+                reasons=tuple(dict.fromkeys(reasons)) or ("incomplete historical evidence",),
+                findings=findings,
+                unmarked=unmarked,
+                sources=sources,
+            )
+        return Complete(
+            findings=findings,
+            reviewer=reviewer,
+            missing_members=(),
+            recovered=True,
+            sources=sources,
+        )
+
     # Under panel_required=True, an incomplete primary panel is never masked by Stale or delta eligibility.
     if missing and panel_required:
         return PartialPanel(
@@ -902,11 +981,18 @@ def review_words(label: str, verdict: ReviewVerdict, *, prog: str = "lanefather"
         if verdict.is_active:
             return False, f"review stale ({span}): run {prog} review {label} --force-reason <why>"
         return False, f"review stale ({span}): run {prog} review {label}"
+    if isinstance(verdict, PartialEvidence):
+        detail = "; ".join(verdict.reasons) if verdict.reasons else "incomplete"
+        return False, f"recovered historical evidence (partial): {detail}"
     if isinstance(verdict, Unmarked):
         return False, (
             f"{len(verdict.unmarked)} of {len(verdict.findings)} review findings unmarked "
             f"({', '.join('#' + str(f['n']) for f in verdict.unmarked)})"
         )
+    if verdict.recovered:
+        if verdict.findings:
+            return True, f"recovered historical evidence ({len(verdict.findings)} dispositions, all verified)"
+        return True, "recovered historical evidence (verified)"
     return True, f"reviewed by {verdict.reviewer}: {len(verdict.findings)} findings, all marked"
 
 
@@ -1097,6 +1183,16 @@ class ReviewRecord:
             return ""
         tree = self.raw.get("tree")
         return tree if isinstance(tree, str) else ""
+
+    @property
+    def is_recovered(self) -> bool:
+        return self.raw is not None and (
+            self.raw.get("recovered") is True or self.raw.get("evidence_source") == "historical"
+        )
+
+    @property
+    def is_partial_evidence(self) -> bool:
+        return isinstance(self.verdict, PartialEvidence)
 
     @property
     def allows_promote(self) -> bool:
@@ -1402,7 +1498,24 @@ class ReviewRecord:
                 and matches_run_owner(existing, owner_pid, owner_start)
             ):
                 target = ReceiptPhase.RUNNING
-            elif force and event is ReviewEvent.RECORD:
+            elif (force and event is ReviewEvent.RECORD) or (
+                event is ReviewEvent.RECOVER
+                and phase is ReceiptPhase.FINISHED
+                and (
+                    force
+                    or (
+                        existing is not None
+                        and (
+                            existing.get("recovered") is True
+                            or existing.get("evidence_source") == "historical"
+                            or isinstance(
+                                derive_verdict(existing, panel_required=store.project.review_panel_required),
+                                PartialPanel,
+                            )
+                        )
+                    )
+                )
+            ):
                 target = ReceiptPhase.FINISHED
             elif (phase, event) in REVIEW_TRANSITIONS:
                 target = REVIEW_TRANSITIONS[(phase, event)]
@@ -1699,6 +1812,45 @@ class ReviewRecord:
             _build,
             force=force or merge_panel,
             lane_created=lane_created,
+        )
+
+    @classmethod
+    def recover(
+        cls,
+        store: state.Store,
+        label: str,
+        payload: dict[str, Any],
+        *,
+        force: bool = False,
+        lane_created: str | None = None,
+        record: Record | None = None,
+    ) -> ReviewRecord:
+        """Persist recovered historical review evidence via the single locked `_transition` writer (fathers#179)."""
+        resolved_created = lane_created or (
+            str(payload["lane_created"])
+            if isinstance(payload.get("lane_created"), str) and payload.get("lane_created")
+            else None
+        )
+
+        def _build(_existing: Receipt | None) -> Receipt:
+            saved: Receipt = {
+                "version": 1,
+                "label": label,
+                **payload,
+                "status": ReceiptPhase.FINISHED.value,
+                "recovered": True,
+                "evidence_source": "historical",
+            }
+            return saved
+
+        return cls._transition(
+            store,
+            label,
+            ReviewEvent.RECOVER,
+            _build,
+            force=force,
+            lane_created=resolved_created,
+            record=record,
         )
 
     @classmethod

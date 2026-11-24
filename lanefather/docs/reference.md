@@ -16,7 +16,8 @@ lanefather adopt <id> <worktree> <branch> register the worktree an agent created
 lanefather check <id>                     the checks the plan selects for the lane's diff -> receipt
 lanefather wait <id> --for registered|landed|done [--timeout S] [--json]   block until the lane is there
 lanefather land <id> [--into WORKTREE] [--keep] [--partial [--remaining TEXT]]
-lanefather review <id> [--mark N fixed:<merge>|rejected:<reason>] [--fix-lane] [--record FILE --reviewer ALIAS] [--audit]
+lanefather review <id> [--mark N fixed:<merge>|rejected:<reason>] [--fix-lane] [--record FILE --reviewer ALIAS]
+                 [--recover [--source URL...] [--target REF] [--reviewed-range BASE..TIP]] [--audit]
 lanefather review --overall <sha> [--since <base>] [--lanes ID,ID] [--record FILE --reviewer ALIAS] [--mark N ...]
 lanefather done <id>
 lanefather done --finished [--dry-run]    done on every finished lane of the registered projects
@@ -205,6 +206,30 @@ review verdict is `Stale(reviewed_tip, landed_tip)`:
 - A parent lane with a `Stale` review is not eligible for `--fix-of` or `review --fix-lane` (nor exempt via
   `review_exemption`) until the delta review covers its post-review commits; clean integration merges after the review
   preserve eligibility.
+
+### Recovering historical review evidence
+
+When a landed lane lacks a local review receipt (for example after lost local state or a machine migration),
+`lanefather review <id> --recover [--source URL...] [--target REF] [--reviewed-range BASE..TIP]` recovers historical
+review dispositions from GitHub issue comments without rerunning a duplicate review (fathers#179):
+
+- Repeatable `--source URL` names specific GitHub issue/PR comment URLs; when omitted, Lanefather discovers review
+  comments on the lane's linked tickets via `gh`.
+- Each named `fixed: <sha>` commit is verified against the target ref's git ancestry (`--target REF`, defaulting to the
+  lane's integration branch, `base`, `HEAD`, or `landed.merge`), and checked against `landed.previous` and any
+  `--reviewed-range` / comment range so evidence from an older lane with a reused ID cannot satisfy a newer lane.
+- The recovered receipt records `recovered: true`, `evidence_source: "historical"`, `complete`, `sources`,
+  `reviewed_scope`, `landed_scope`, `dispositions` (with `in_target_history` and `verified` booleans), `missing_facts`
+  (explicitly listing unverifiable metadata such as `model`, `reviewer`, `severity`, `tree`, or `reviewed_scope` —
+  never fabricating them), `recovered_by`, and `recovered_at`.
+- Any prior interrupted or partial duplicate review receipt is preserved under `preserved_artifacts` instead of being
+  destroyed, a complete executed review is refused without overwriting, and repeated `--recover` calls are idempotent.
+- Partial evidence (unavailable source, fix commit missing from target history, scope mismatch, or unmarked
+  dispositions) is recorded as `complete: false` (`recovered (partial)` in `list`, `show`, and `status`) and never
+  satisfies `review_gate`, `promote`, or `done`. Complete recovered evidence satisfies the gate while remaining visibly
+  distinguished from an executed review, and `done` cleanup preserves the provenance receipt.
+- `show`, `status`, `review_gate`, and `done` surface `lanefather review <id> --recover` for landed lanes without an
+  executed review before recommending a fresh duplicate review.
 
 ### Review run lifecycle and process identity
 

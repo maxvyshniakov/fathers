@@ -70,6 +70,7 @@ KINDS: dict[str, str] = {
     "review.pre_land_fix": "review --fix-lane opened one pre-land fix round on an active candidate",
     "review.ticket_filed": "the overall review filed its ticket (warn when filing failed)",
     "review.audit_alert": "a post-hoc audit of a none/evidence lane found a P0/P1 finding (warn)",
+    "review.recovered": "historical review evidence was recovered from external sources (warn when partial)",
     "gate.finished": "the batch gate finished (error when red)",
     "perf.finished": "the perf suite finished (error when red)",
     "promote.step": "an install or deploy step finished (error on a non-zero exit)",
