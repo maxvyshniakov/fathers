@@ -53,6 +53,51 @@ class LoadWaitTests(unittest.TestCase):
         self.assertIsNone(self.wait(flat(17.9), 4), "every slot held: 5.9 unleased")
         self.assertEqual("CPU load 18.0 is at or above 18 (1.5 x 12 cores)", self.wait(flat(18), 4))
 
+    def test_measured_unleased_cpu_caps_loadavg_inflation_without_disabling_peak_gate(self) -> None:
+        # Linux loadavg counts leased runnable/I/O-wait threads: 8 cores, 6 slots, 4 held, load 11.5 -> 6.17 unleased,
+        # or load 11.5 with 1 held -> 10.17 unleased >= 8, while real unleased ps CPU is only 0.08 cores.
+        holders = [{"count": 1, "label": "h0", "state": "held", "since": SINCE, "granted": SINCE}]
+        called = 0
+
+        def quiet_unleased() -> float:
+            nonlocal called
+            called += 1
+            return 0.08
+
+        # Below peak (1.5 * 8 = 12), loadavg-only would falsely blame unleased (10.17 >= 8); measured 0.08 clears it.
+        adm = sf_schedule.Admission([], holders, 6, M, settings=DEFAULTS,
+                                    host=sf_schedule.Host(averages=flat(11.5), cores=8, unleased_cpu=quiet_unleased))
+        self.assertIsNone(adm.dashboard_room().load_block)
+        self.assertEqual(1, called, "unleased_cpu is memoized on Host and called once")
+
+        # Above peak (18.1 >= 12), LOAD_PEAK still holds, without falsely blaming unleased.
+        adm_peak = sf_schedule.Admission([], holders, 6, M, settings=DEFAULTS,
+                                         host=sf_schedule.Host(averages=flat(18.1), cores=8, unleased_cpu=0.08))
+        self.assertEqual("CPU load 18.1 is at or above 12 (1.5 x 8 cores)", adm_peak.dashboard_room().load_block)
+
+        # Real unleased CPU above the gate still reports unleased load.
+        adm_real = sf_schedule.Admission([], holders, 6, M, settings=DEFAULTS,
+                                         host=sf_schedule.Host(averages=flat(11.5), cores=8, unleased_cpu=9.0))
+        self.assertEqual("CPU load 11.5: 9.0 unleased is at or above 8 cores", adm_real.dashboard_room().load_block)
+
+        # query.size() caps unleased_load by unleased_cpu when provided.
+        sized = sf_query.size(6, 8, 6, flat(18.1), 4, unleased_cpu=0.08)
+        self.assertEqual(0.08, sized["unleased_load"])
+        self.assertEqual(12.77, sf_query.size(6, 8, 6, flat(18.1), 4)["unleased_load"])
+
+        # Below the unleased gate, the lazy reader is never invoked.
+        never_called = 0
+
+        def fail_if_called() -> float:
+            nonlocal never_called
+            never_called += 1
+            return 0.0
+
+        adm_calm = sf_schedule.Admission([], holders, 6, M, settings=DEFAULTS,
+                                         host=sf_schedule.Host(averages=flat(2.0), cores=8, unleased_cpu=fail_if_called))
+        self.assertIsNone(adm_calm.dashboard_room().load_block)
+        self.assertEqual(0, never_called)
+
     def test_a_burst_does_not_count(self) -> None:
         self.assertIsNone(self.wait((40.0, 6.0, 3.0), 0), "min(load1, load5)")
         self.assertIsNotNone(self.wait((13.0, 40.0, 3.0), 0))

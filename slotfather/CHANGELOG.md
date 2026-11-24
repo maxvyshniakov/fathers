@@ -236,6 +236,11 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 
 ### Fixed
 
+- Unleased CPU load estimation (`query.size()`, `advise`, dashboard `advice.unleased_load`, and the CPU load admission
+  gate) now caps the load-average residual (`min(load1, load5) - held * cores / slots`) by measured unleased process
+  CPU from `ps` (read lazily when needed, or reused from the dashboard's process table), so Linux `loadavg` inflation
+  from leased processes' runnable or I/O-wait threads is no longer misattributed as high unleased load or false
+  unleased load-gate blocks while the peak total-load gate (`1.5 x cores`) still applies.
 - Slotfather and Spawnfather now share one table of Claude Code and Codex agent-session patterns
   (`fathers_common.agents`), so `slotfather procs --json`, `slotfather sweep` and outside-leases attribution
   recognize the same agent sessions as Spawnfather, including vendor-bundled Codex and interpreter-launched

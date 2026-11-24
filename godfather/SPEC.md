@@ -104,10 +104,11 @@ full pages one key away.
     - Under 83 columns DETAILS has the full-width band and MACHINE the bottom row alone, and EVENTS is not shown, as
       in Slotfather's one-column layout. Too short for the bottom row (under 27 rows with six queue rows), QUEUE and
       DETAILS only.
-    - From fathers#203 (2026-11-22), while Slotfather's unleased load is at least half the cores, MACHINE's chart
-      gives its place, rows and axis line to the top unleased processes: name, pid, cpu and memory, the busiest
-      first, read with `ps` (at most every 5 s, only while the load is high) less the running leases' processes and
-      their descendants. A lower load or a failed `ps` keeps the chart.
+    - From fathers#203 (2026-11-22), while Slotfather's unleased load is at least half the cores and the listed
+      unleased processes use at least one core of CPU in total, MACHINE's chart gives its place, rows and axis line
+      to the top unleased processes: name, pid, cpu and memory, the busiest first, read with `ps` (at most every
+      5 s, only while the load is high) less the running leases' processes and their descendants. A lower load, a
+      sub-core unleased CPU total, or a failed `ps` keeps the chart.
 13. SLOTS keeps a clean bottom border (no tool summary strip). When Lanefather or Spawnfather is present, the
     footer's key hints lead with `1 2 3 pages` (only the keys of present tools), with the active page's digit
     underlined; pressing or clicking a digit switches directly to that page.

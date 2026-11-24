@@ -229,6 +229,9 @@ Versions and release rules: [README.md](README.md#versions).
 
 ### Fixed
 
+- `MACHINE` no longer replaces the slots-held histogram with `top unleased` when the listed unleased processes use less
+  than one core of CPU in total (`100%`), preventing Linux `loadavg` inflation from hiding the chart behind idle
+  processes (even against an older Slotfather).
 - In Settings, editing a typed number after pressing Enter or Tab while `settings check` is still running no longer
   saves the newly typed text automatically when the check answers, and pressing Tab while a typed value's check is in
   flight now advances to the next setting once it saves; resetting a setting (`d`) or a section (`D` twice) now waits

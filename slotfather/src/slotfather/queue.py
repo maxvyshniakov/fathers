@@ -223,10 +223,28 @@ def _ram_mb() -> float | None:
     return None if ram_gib is None else ram_gib * 1024.0
 
 
+def unleased_cpu_reader(held: list[_schedule.Entry]) -> Callable[[], float | None]:
+    """Lazy reader of CPU cores used outside `held` leases via ps, or None when unavailable or under LOADAVG seam."""
+    def read() -> float | None:
+        if _config.setting("LOADAVG"):
+            return None
+        try:
+            own, children = _process.cpu_table()
+        except _process.PsError:
+            return None
+        if not own:
+            return None
+        roots: list[object] = [e.get("pid") for e in held]
+        leased = set(_lineage.tree(children, roots, own.__contains__))
+        return sum(cpu for pid, (cpu, _, _) in own.items() if pid not in leased) / 100.0
+    return read
+
+
 def live_host(
     *,
     averages: tuple[float, float, float] | None = None,
     cores: int | None = None,
+    unleased_cpu: float | None | Callable[[], float | None] = None,
 ) -> _schedule.Host:
     """Host resource readers wired lazily to platform/config, with optional pre-sampled overrides."""
     return _schedule.Host(
@@ -234,6 +252,7 @@ def live_host(
         ram_mb=_ram_mb,
         averages=_platform.load_averages if averages is None else averages,
         cores=_config.cores if cores is None else cores,
+        unleased_cpu=unleased_cpu,
     )
 
 
@@ -262,7 +281,7 @@ def admission(
         if shared_settings is None
         else shared_settings,
         window=_config.overtake_window(),
-        host=live_host() if host is None else host,
+        host=live_host(unleased_cpu=unleased_cpu_reader(held)) if host is None else host,
         estimate=estimator(directory) if estimate is None else estimate,
         p90=estimator(directory, p90=True),
         memory_estimate=memory_estimator(directory),

@@ -116,8 +116,11 @@ class DrawTests(unittest.TestCase):
         self.assertIn("812", lines[header + 1])
 
     def test_the_chart_stays_at_a_low_load_without_the_list_or_with_none(self) -> None:
+        quiet = [(155653, 4.0, 28_672, "godfather"), (6459, 3.0, 521_216, "node-MainThread"),
+                 (7112, 1.0, 396_288, "antigravity"), (166836, 0.0, 24_576, "slotfather")]
         for name, found in (("low load", model(2.0, unleased_top=self.TOP)), ("no list", model()),
-                            ("empty list", model(unleased_top=[]))):
+                            ("empty list", model(unleased_top=[])),
+                            ("sub-core unleased cpu", model(12.8, unleased_top=quiet))):
             with self.subTest(name):
                 text = drawn(found)
                 self.assertIn("slots held", text)

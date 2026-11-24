@@ -660,15 +660,18 @@ class Host:
         ram_mb: float | None | Callable[[], float | None] = None,
         averages: LoadAverages | None | Callable[[], LoadAverages | None] = None,
         cores: int | Callable[[], int] = 0,
+        unleased_cpu: float | None | Callable[[], float | None] = None,
     ) -> None:
         self._memory_src = memory
         self._ram_mb_src = ram_mb
         self._averages_src = averages
         self._cores_src = cores
+        self._unleased_cpu_src = unleased_cpu
         self._memory: MemoryState | _Unset = _UNSET
         self._ram_mb: float | None | _Unset = _UNSET
         self._averages: LoadAverages | None | _Unset = _UNSET
         self._cores: int | _Unset = _UNSET
+        self._unleased_cpu: float | None | _Unset = _UNSET
 
     @property
     def memory(self) -> tuple[str, str | None]:
@@ -697,6 +700,13 @@ class Host:
             src = self._cores_src
             self._cores = src() if callable(src) else src
         return self._cores
+
+    @property
+    def unleased_cpu(self) -> float | None:
+        if isinstance(self._unleased_cpu, _Unset):
+            src = self._unleased_cpu_src
+            self._unleased_cpu = src() if callable(src) else src
+        return self._unleased_cpu
 
 
 class GateBlock(NamedTuple):
@@ -819,11 +829,14 @@ def _group_cap_wait(entry: Entry, active_groups: dict[str, int], group_caps: dic
 
 
 def _load_wait(averages: tuple[float, float, float] | None, cores: int, slots: int, held: int,
-               settings: dict[str, Any]) -> str | None:
+               settings: dict[str, Any],
+               unleased_cpu: float | None | Callable[[], float | None] = None) -> str | None:
     """Why sustained CPU load holds back grants beside running leases (fathers#184), or None. With `load_gate` G
     (an order setting; 0 disables) and `held` slots of `slots` held on `cores` cores, under load `averages` (1, 5
     and 15 minutes; None: unknown, no gate): the load is min(load1, load5), so a short burst does not count; the
-    unleased load is that less the held slots' share of the cores, as `advise` counts it (query.size()). It holds
+    unleased load is that less the held slots' share of the cores, as `advise` counts it (query.size()), capped by
+    measured unleased process CPU (`unleased_cpu`, in cores, read lazily only when the loadavg estimate crosses the
+    gate) so runnable/I/O-wait threads of leased processes on Linux are not misattributed as unleased load. It holds
     at an unleased load of G x cores, or at a load of LOAD_PEAK x G x cores, whatever the leases themselves run.
     _gate() applies it beside running leases only: an idle machine always starts its first request."""
     gate = float(settings.get("load_gate", _config.ORDER_DEFAULTS["load_gate"]))
@@ -833,6 +846,10 @@ def _load_wait(averages: tuple[float, float, float] | None, cores: int, slots: i
         return None
     load = min(averages[0], averages[1])
     unleased = max(0.0, load - min(max(0, held), slots) * cores / slots)
+    if unleased >= gate * cores:
+        measured = unleased_cpu() if callable(unleased_cpu) else unleased_cpu
+        if measured is not None and math.isfinite(measured) and measured >= 0:
+            unleased = min(unleased, measured)
     if unleased >= gate * cores:
         return f"CPU load {load:.1f}: {unleased:.1f} unleased is at or above {gate * cores:g} cores"
     if load >= LOAD_PEAK * gate * cores:
@@ -952,7 +969,9 @@ def _gate(
         if block is None and used and load_gate > 0:
             if not load_ready:
                 load_ready = True
-                load_why = _load_wait(host.averages, host.cores, slots, initial_used, settings)
+                load_why = _load_wait(
+                    host.averages, host.cores, slots, initial_used, settings, lambda: host.unleased_cpu
+                )
             if load_why is not None:
                 block = GateBlock("load", load_why)
         if block is None:
@@ -1430,7 +1449,14 @@ class Admission:
             load_gate = float(self._settings.get("load_gate", _config.ORDER_DEFAULTS["load_gate"]))
             if (
                 load_gate > 0
-                and _load_wait(self._host.averages, self._host.cores, self._slots, self._used, self._settings)
+                and _load_wait(
+                    self._host.averages,
+                    self._host.cores,
+                    self._slots,
+                    self._used,
+                    self._settings,
+                    lambda: self._host.unleased_cpu,
+                )
                 is not None
             ):
                 return 0
@@ -1480,7 +1506,12 @@ class Admission:
         if memory_kind == "warning" and float(self._settings.get("warning_admits", 1)) >= 1:
             memory_block = WARNING_WAIT
         load_block = _load_wait(
-            self._host.averages, self._host.cores, self._slots, min(self._used, self._slots), self._settings
+            self._host.averages,
+            self._host.cores,
+            self._slots,
+            min(self._used, self._slots),
+            self._settings,
+            lambda: self._host.unleased_cpu,
         )
         share = float(self._settings.get("memory_share", _config.ORDER_DEFAULTS["memory_share"]))
         budget_mb = float(self._settings.get("memory_budget_mb", _config.ORDER_DEFAULTS["memory_budget_mb"]))
@@ -1514,7 +1545,12 @@ class Admission:
         memory_level, memory_short = self._host.memory
         load_block = (
             _load_wait(
-                self._host.averages, self._host.cores, self._slots, min(self._used, self._slots), self._settings
+                self._host.averages,
+                self._host.cores,
+                self._slots,
+                min(self._used, self._slots),
+                self._settings,
+                lambda: self._host.unleased_cpu,
             )
             if self._used
             else None

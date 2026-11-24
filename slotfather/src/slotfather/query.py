@@ -547,13 +547,17 @@ def available(directory: Path | None = None, label: str = "", command: str = "")
 
 
 def size(maximum: int, cores: int, total: int, averages: tuple[float, float, float], held: int,
-         waiting: bool = False, exclusive: bool = False) -> dict[str, Any]:
+         waiting: bool = False, exclusive: bool = False, unleased_cpu: float | None = None) -> dict[str, Any]:
     """A job count for work that runs beside `held` leased slots (or after them, when `exclusive`) under load
-    `averages` (1, 5 and 15 minutes) that include processes taking no lease. The module docstring has the formula."""
+    `averages` (1, 5 and 15 minutes) that include processes taking no lease. When `unleased_cpu` (measured CPU cores
+    used outside leases) is given, `unleased_load` is capped by it so leased runnable/I/O-wait threads on Linux are
+    not misattributed as unleased load. The module docstring has the formula."""
     per_slot = cores / total
     load1, load5, load15 = averages
     load = min(load1, load5)
     unleased = max(0.0, load - held * per_slot)
+    if unleased_cpu is not None and math.isfinite(unleased_cpu) and unleased_cpu >= 0:
+        unleased = min(unleased, unleased_cpu)
     busy = unleased + (0.0 if exclusive else held * per_slot)
     capacity = max(0, math.floor((cores - busy) / per_slot + 0.5))
     free = total if exclusive else 0 if waiting else max(0, total - held)
@@ -579,11 +583,15 @@ def advise(maximum: int | None = None, exclusive: bool = False, cores_now: int |
     waiters = [e for e in live if _entry.is_waiting(e)]
     machine = cores_now or _config.cores()
     averages = averages or _platform.loads()
-    host = _queue.live_host(averages=averages, cores=machine)
+    host = _queue.live_host(averages=averages, cores=machine, unleased_cpu=_queue.unleased_cpu_reader(holders))
     adm = _queue.admission(found_look.directory, waiters, holders, slots, other,
                            settings=found_look.settings, estimate=found_look.estimate, host=host)
     block = adm.advise_block(label, command)
-    found = size(maximum or slots, machine, slots, averages, min(held, slots), block.waiting, exclusive)
+    capped_held = min(held, slots)
+    load_unleased = min(averages[0], averages[1]) - capped_held * (machine / slots)
+    measured_unleased = host.unleased_cpu if load_unleased >= 1.0 else None
+    found = size(maximum or slots, machine, slots, averages, capped_held, block.waiting, exclusive,
+                 unleased_cpu=measured_unleased)
     found["run_estimate"] = block.run_estimate
     ram_gib = basis["memory_gib"]
     if ram_gib is None:

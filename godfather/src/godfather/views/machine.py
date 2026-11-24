@@ -233,6 +233,7 @@ def draw_machine(canvas: Canvas, rect: Rect, model: Model) -> None:
 
 # fathers#203: while the load outside leases is high, the chart's place names the processes behind it
 UNLEASED_SHARE = 0.5  # unleased load at or over this share of the cores is high
+UNLEASED_CPU_MIN = 100.0  # ps CPU percent (1 core) below which the chart stays even if loadavg looks high
 UNLEASED_TOP = 5  # the most processes Godfather keeps for the list
 UNLEASED_TITLE = "top unleased"
 UNLEASED_NAME_MIN = 6  # a process name's least cells before the list drops its pid column
@@ -280,9 +281,15 @@ def unleased_top(table: Sequence[PsRow], holders: Sequence[Mapping[str, Any]],
 
 
 def unleased_rows(model: Model) -> list[TreeRow]:
-    """The top unleased processes MACHINE lists now: the model's, only while unleased load is high; none without
-    them (an older Godfather's model, a failed `ps`, a fake that gives none), so the chart stays."""
-    return list(model.get("unleased_top") or []) if unleased_high(model) else []
+    """The top unleased processes MACHINE lists now: the model's, only while unleased load is high and the listed
+    processes actually use at least UNLEASED_CPU_MIN percent CPU (one core); none without them (an older Godfather's
+    model, a failed `ps`, a fake that gives none, or Linux loadavg inflation from leased I/O-wait), so the chart stays."""
+    if not unleased_high(model):
+        return []
+    rows = list(model.get("unleased_top") or [])
+    if sum(row[1] for row in rows) < UNLEASED_CPU_MIN:
+        return []
+    return rows
 
 
 def memory_text(rss_kb: float) -> str:

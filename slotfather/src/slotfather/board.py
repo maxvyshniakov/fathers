@@ -428,9 +428,27 @@ def dashboard_model(
     own, children = process_usage()
     settings = look.settings or _settings.order_settings(directory)  # the look's (fathers#36)
     default_mem_mb = float(settings.get("memory_default_mb", _config.ORDER_DEFAULTS["memory_default_mb"]))
+    # An `-n all` lease holds the whole capacity, also one grown under it (#7).
+    held, live_waiters = _entry.split(live)
+    active_entries = [*held, *(e for _, e, _ in legacy)]
+    detached: dict[int, set[int]] = {}
+    context = _process.helper_snapshot() if _platform.macos() and active_entries else None
+    if context is not None and active_entries:
+        detached = _process.detached_browser_helpers(
+            context.parents, context.commands, [e.get("pid") for e in active_entries],
+            uids=context.uids, starts=context.starts,
+            lease_since=[_process.lease_started_epoch(e) for e in active_entries],
+        )
+    unleased_cpu: float | None = None
+    if own and not _config.setting("LOADAVG"):
+        leased_roots: list[object] = [e.get("pid") for e in active_entries]
+        for extras in detached.values():
+            leased_roots.extend(extras)
+        leased_pids = set(_lineage.tree(children, leased_roots, own.__contains__))
+        unleased_cpu = sum(cpu for pid, (cpu, _, _) in own.items() if pid not in leased_pids) / 100.0
     machine, averages = _config.cores(), _platform.loads()
     adm = admission if admission is not None else look.admission(
-        host=_queue.live_host(averages=averages, cores=machine)
+        host=_queue.live_host(averages=averages, cores=machine, unleased_cpu=unleased_cpu)
     )
 
     def est_memory_of(entry: dict[str, Any]) -> tuple[float, str]:
@@ -480,17 +498,6 @@ def dashboard_model(
     expected: dict[int, dict[str, Any]] = {}
     with contextlib.suppress(Exception):
         expected = adm.forecast()
-    # An `-n all` lease holds the whole capacity, also one grown under it (#7).
-    held, live_waiters = _entry.split(live)
-    active_entries = [*held, *(e for _, e, _ in legacy)]
-    detached: dict[int, set[int]] = {}
-    context = _process.helper_snapshot() if _platform.macos() and active_entries else None
-    if context is not None and active_entries:
-        detached = _process.detached_browser_helpers(
-            context.parents, context.commands, [e.get("pid") for e in active_entries],
-            uids=context.uids, starts=context.starts,
-            lease_since=[_process.lease_started_epoch(e) for e in active_entries],
-        )
     holders = [item(e, "held", _entry.holds(e, slots), extra=detached.get(index, ()))
                for index, e in enumerate(held)]
     holders += [item(e, "legacy", count, str(path.parent.parent), extra=detached.get(len(held) + index, ()))
@@ -514,7 +521,8 @@ def dashboard_model(
     return {"directory": str(directory), "slots": slots, "saved": saved, "basis": look.basis, "cores": machine,
             "averages": averages, "draining": _query.draining(used, slots),
             "advice": cast(dict[str, Any], cast(Any, _query).size(slots, machine, slots, averages, min(used, slots),
-                                                                  bool(waiters) and room.admission == 0)),
+                                                                  bool(waiters) and room.admission == 0,
+                                                                  unleased_cpu=unleased_cpu)),
             "holders": holders, "waiters": waiters, "used": used, "free": free, "memory_block": room.memory_block,
             "load_block": room.load_block, "memory_budget_block": room.memory_budget_block,
             "memory_budget_mb": memory_budget_mb, "memory_expected_mb": memory_expected_mb,
