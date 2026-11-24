@@ -175,6 +175,24 @@ def load_promote_record(store: state.Store, sha: str) -> dict[str, Any] | None:
                     raise LaneError(f"promote record {path} is invalid or damaged; restore or remove the file")
                 clean[key] = list(value)
         steps[step_name] = clean
+    raw_exempt = raw.get("exempt_lanes")
+    exempt_lanes: list[dict[str, Any]] = []
+    if raw_exempt is not None:
+        if not isinstance(raw_exempt, list):
+            raise LaneError(f"promote record {path} is invalid or damaged; restore or remove the file")
+        for raw_item in cast(list[Any], raw_exempt):
+            if not isinstance(raw_item, dict):
+                raise LaneError(f"promote record {path} is invalid or damaged; restore or remove the file")
+            item = cast(dict[str, Any], raw_item)
+            if not all(isinstance(item.get(k), str) for k in ("lane", "ticket", "review_class", "reason", "merge")):
+                raise LaneError(f"promote record {path} is invalid or damaged; restore or remove the file")
+            exempt_lanes.append({
+                "lane": item["lane"],
+                "ticket": item["ticket"],
+                "review_class": item["review_class"],
+                "reason": item["reason"],
+                "merge": item["merge"],
+            })
     return {
         "version": version,
         "sha": rec_sha,
@@ -191,6 +209,7 @@ def load_promote_record(store: state.Store, sha: str) -> dict[str, Any] | None:
         "updated": updated,
         "finished": finished,
         "steps": steps,
+        "exempt_lanes": exempt_lanes,
     }
 
 
@@ -477,6 +496,9 @@ def step_review_gate(run: PromoteRun) -> None:
     prog = run.store.prog
     report = review_gate.gate_report(run.store, run.cwd, run.common, run.sha)
     run.exempt_lanes = list(report.get("exempt_lanes") or [])
+    if run.record is not None:
+        run.record["exempt_lanes"] = list(run.exempt_lanes)
+        _save_promote_record(run)
     for entry in run.exempt_lanes:
         print(
             f"lane: review class {entry['review_class']}: lane {entry['lane']} "
@@ -705,6 +727,8 @@ def promote_sha(run: PromoteRun) -> int:
                 run.ship_base = promote_record["ship_base"]
             if promote_record.get("pushed"):
                 run.pushed = True
+            if promote_record.get("exempt_lanes"):
+                run.exempt_lanes = list(promote_record["exempt_lanes"])
             recorded_steps: dict[str, dict[str, Any]] = promote_record["steps"]
             start_index = len(steps)
             for index, (name, _) in enumerate(steps):
@@ -741,6 +765,7 @@ def promote_sha(run: PromoteRun) -> int:
                 "updated": now,
                 "finished": None,
                 "steps": {},
+                "exempt_lanes": [],
             }
             start_index = 0
         run.record = promote_record

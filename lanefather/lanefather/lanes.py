@@ -334,11 +334,57 @@ def check_activation_options(prog: str, lane_id: str, record: Record, args: Any)
                 "omit --scratch to keep them"
             )
     given_review = getattr(args, "review", None)
-    if given_review is not None and given_review != review_class.declared_class(record):
+    stored_review = review_class.declared_class(record)
+    if given_review is not None and stored_review is not None and given_review != stored_review:
         raise LaneError(
             f"start {lane_id} --create: --review ({given_review}) differs from planned lane's review class "
-            f"({review_class.declared_class(record) or 'unspecified'})"
+            f"({stored_review})"
         )
+    stored_dec, stored_gate = review_class.evidence_of(record)
+    given_dec = getattr(args, "review_decision", None)
+    if isinstance(given_dec, str) and given_dec.strip() and stored_dec is not None and given_dec.strip() != stored_dec:
+        raise LaneError(
+            f"start {lane_id} --create: --review-decision differs from planned lane's decision; "
+            f"update it with {prog} scope {lane_id}"
+        )
+    given_gate = getattr(args, "gate", None)
+    if (
+        isinstance(given_gate, str)
+        and given_gate.strip()
+        and stored_gate is not None
+        and given_gate.strip() != stored_gate
+    ):
+        raise LaneError(
+            f"start {lane_id} --create: --gate ({given_gate.strip()}) differs from planned lane's gate "
+            f"({stored_gate}); update it with {prog} scope {lane_id}"
+        )
+
+
+def _apply_activation_review_opts(
+    rec: Record,
+    new_review: Any,
+    new_dec: Any,
+    new_gate: Any,
+    new_reason: Any,
+) -> bool:
+    changed = False
+    if isinstance(new_review, str) and new_review in review_class.CLASS_RANK and "review_class" not in rec:
+        rec["review_class"] = new_review
+        changed = True
+    raw_ev: Any = rec.get("review_evidence")
+    ev = dict(cast(dict[str, Any], raw_ev)) if isinstance(raw_ev, dict) else {}
+    if isinstance(new_dec, str) and new_dec.strip() and "decision" not in ev:
+        ev["decision"] = new_dec.strip()
+        changed = True
+    if isinstance(new_gate, str) and new_gate.strip() and "gate" not in ev:
+        ev["gate"] = new_gate.strip()
+        changed = True
+    if ev and ev != raw_ev:
+        rec["review_evidence"] = ev
+    if isinstance(new_reason, str) and new_reason.strip() and "review_reason" not in rec:
+        rec["review_reason"] = new_reason.strip()
+        changed = True
+    return changed
 
 
 def activate_planned(store: state.Store, lane_id: str, *, base: str | None = None,
@@ -443,6 +489,18 @@ def activate_planned(store: state.Store, lane_id: str, *, base: str | None = Non
                         "base_sha": base_sha,
                     },
                 )
+                if args is not None:
+                    new_review = getattr(args, "review", None)
+                    new_dec = getattr(args, "review_decision", None)
+                    new_gate = getattr(args, "gate", None)
+                    new_reason = getattr(args, "review_reason", None)
+                    if any(v is not None for v in (new_review, new_dec, new_gate, new_reason)):
+                        updated = store.update(
+                            lane_id,
+                            lambda rec, r=new_review, d=new_dec, g=new_gate, w=new_reason: (
+                                _apply_activation_review_opts(rec, r, d, g, w)
+                            ),
+                        )
                 break
         repaired = done.repair_disk(decision.machine["disk_free_gb"], decision.floor)
     assert updated is not None
@@ -630,6 +688,14 @@ def scope_command(args: Any, store: state.Store) -> int:
     if both:
         raise LaneError(f"cannot pass both --mark-partial and --mark-complete for {scope.display_ticket(both[0])}")
     marks = [(n, True) for n in partial_marks] + [(n, False) for n in complete_marks]
+    add_gate = getattr(args, "add_gate", None)
+    add_review_decision = getattr(args, "add_review_decision", None)
+    gate_val = add_gate.strip() if isinstance(add_gate, str) and add_gate.strip() else None
+    dec_val = (
+        add_review_decision.strip()
+        if isinstance(add_review_decision, str) and add_review_decision.strip()
+        else None
+    )
     if additions or marks:
         before, after, record = change_scope(store, args.id, marks, additions)
         if after != before:
@@ -640,6 +706,24 @@ def scope_command(args: Any, store: state.Store) -> int:
                            store=store)
     else:
         record = store.load(args.id)
+    if gate_val is not None or dec_val is not None:
+        def _update_evidence(rec: Record) -> bool:
+            if not lifecycle.occupying(rec):
+                raise LaneError(f"scope refused: lane {args.id} is {rec['status']}; its merge already landed")
+            raw_ev: Any = rec.get("review_evidence")
+            ev = dict(cast(dict[str, Any], raw_ev)) if isinstance(raw_ev, dict) else {}
+            changed = False
+            if gate_val is not None and ev.get("gate") != gate_val:
+                ev["gate"] = gate_val
+                changed = True
+            if dec_val is not None and ev.get("decision") != dec_val:
+                ev["decision"] = dec_val
+                changed = True
+            if changed:
+                rec["review_evidence"] = ev
+            return changed
+
+        record = store.update(args.id, _update_evidence)
     if args.json:
         print(json.dumps({"v": 1, "lane": record["id"], "ticket": record["ticket"],
                           "scope": [scope.to_json(item) for item in scope.of(record)]}, indent=2))

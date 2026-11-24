@@ -289,7 +289,7 @@ def mark_counts(findings: Sequence[dict[str, Any]]) -> dict[str, int]:
     ]
     return {
         "findings": len(findings),
-        **{s.lower(): sum(1 for f in findings if f.get("severity") == s) for s in SEVERITIES},
+        **{s.lower(): sum(1 for f in findings if f.get("severity") == s) for s in ("P0", *SEVERITIES)},
         "fixed": kinds.count("fixed"),
         "rejected": kinds.count("rejected"),
         "unmarked": kinds.count(None),
@@ -845,14 +845,75 @@ class ReviewRecord:
         payload: dict[str, Any],
         *,
         force: bool = False,
+        merge_panel: bool = False,
         finished: str | None = None,
     ) -> ReviewRecord:
-        """Record a finished review performed outside lanefather (`review --record`, fathers#252)."""
+        """Record a finished review performed outside lanefather (`review --record`, fathers#252).
+
+        When `merge_panel=True` and an existing finished receipt exists from a different reviewer, combines both into
+        a multi-reviewer panel receipt (for `double` review class).
+        """
         raw_created = payload.get("lane_created")
         lane_created = raw_created if isinstance(raw_created, str) and raw_created else None
 
-        def _build(_existing: Receipt | None) -> Receipt:
-            merged: Receipt = {
+        def _panel_entry_from(data: dict[str, Any], numbers: list[int]) -> dict[str, Any]:
+            rev_name = data.get("reviewer") if isinstance(data.get("reviewer"), str) else "external"
+            return {
+                "member": rev_name,
+                "reviewer": rev_name,
+                "model": data.get("model"),
+                "effort": data.get("effort"),
+                "provider": data.get("provider"),
+                "cli": data.get("cli"),
+                "options": data.get("options"),
+                "seconds": data.get("seconds", 0.0),
+                "status": "finished",
+                "output": data.get("output"),
+                "numbers": numbers,
+            }
+
+        def _build(existing: Receipt | None) -> Receipt:
+            if merge_panel and existing is not None and existing.get("status") == ReceiptPhase.FINISHED.value:
+                prior_findings = [dict(f) for f in extract_findings(existing)]
+                raw_panel: Any = existing.get("panel")
+                if isinstance(raw_panel, list) and raw_panel:
+                    panel = [dict(cast(dict[str, Any], e)) for e in cast(list[Any], raw_panel) if isinstance(e, dict)]
+                else:
+                    prior_nums = [int(f["n"]) for f in prior_findings if isinstance(f.get("n"), int)]
+                    prior_rev = existing.get("reviewer") if isinstance(existing.get("reviewer"), str) else "external"
+                    for f in prior_findings:
+                        f.setdefault("reviewer", prior_rev)
+                    panel = [_panel_entry_from(existing, prior_nums)]
+                new_rev = payload.get("reviewer") if isinstance(payload.get("reviewer"), str) else "external"
+                raw_new_findings: Any = payload.get("findings")
+                new_items = (
+                    [dict(cast(dict[str, Any], f)) for f in cast(list[Any], raw_new_findings) if isinstance(f, dict)]
+                    if isinstance(raw_new_findings, list)
+                    else []
+                )
+                new_nums: list[int] = []
+                next_n = max((int(f["n"]) for f in prior_findings if isinstance(f.get("n"), int)), default=0) + 1
+                for item in new_items:
+                    item["n"] = next_n
+                    item["reviewer"] = new_rev
+                    new_nums.append(next_n)
+                    prior_findings.append(item)
+                    next_n += 1
+                panel.append(_panel_entry_from(payload, new_nums))
+                reviewers = [str(e.get("reviewer")) for e in panel if isinstance(e.get("reviewer"), str)]
+                models = [str(e.get("model")) for e in panel if isinstance(e.get("model"), str)]
+                merged: Receipt = {
+                    **existing,
+                    "reviewer": "+".join(dict.fromkeys(reviewers)),
+                    "model": ", ".join(dict.fromkeys(models)),
+                    "findings": prior_findings,
+                    "panel": panel,
+                    "status": ReceiptPhase.FINISHED.value,
+                    "recorded": True,
+                    "finished": finished or journal.now(),
+                }
+                return merged
+            merged = {
                 "version": 1,
                 "label": label,
                 **payload,
@@ -869,7 +930,7 @@ class ReviewRecord:
             label,
             ReviewEvent.RECORD,
             _build,
-            force=force,
+            force=force or merge_panel,
             lane_created=lane_created,
         )
 

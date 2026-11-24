@@ -31,6 +31,7 @@ import tomllib
 from typing import Any, cast
 
 from .config import Config
+from .errors import LaneError
 from .gitops import git
 
 WEEK_MINUTES = 10080
@@ -1142,41 +1143,87 @@ def _review_prompt(cfg: Config, request: Request, diff: str | None) -> str:
 
 
 
-def _parse_findings(text: str) -> list[dict[str, Any]]:
-    """The findings of the last json block that has them. An answer without one is a single finding to read, so
-    an unreadable review never passes as clean."""
-    blocks = list(reversed(re.findall(r"```json[ \t]*\n(.*?)```", text, re.S)))
+def _extract_json_block(text: str) -> tuple[str | None, bool]:
+    """Return `(raw_json, had_json_source)`: the last fenced ` ```json ` block, else the whole trimmed body if it
+    starts with `{`. Never falls back past a malformed JSON block."""
+    fenced = re.findall(r"```json[ \t]*\n(.*?)```", text, re.S)
+    if fenced:
+        return fenced[-1], True
     stripped = text.strip()
-    if not blocks and stripped.startswith("{") and stripped.endswith("}"):
-        blocks = [stripped]
-    for block in blocks:
+    if stripped.startswith("{"):
+        return stripped, True
+    return None, False
+
+
+def parse_report_metadata(text: str) -> tuple[str | None, str | None]:
+    """Extract optional `tip` and `tree` strings from a report's JSON block if present and valid."""
+    block, has_json = _extract_json_block(text)
+    if not has_json or block is None:
+        return None, None
+    try:
+        data: Any = json.loads(block)
+    except ValueError:
+        return None, None
+    if not isinstance(data, dict):
+        return None, None
+    table = cast(dict[str, Any], data)
+    raw_tip = table.get("tip")
+    raw_tree = table.get("tree")
+    tip = raw_tip.strip() if isinstance(raw_tip, str) and raw_tip.strip() else None
+    tree = raw_tree.strip() if isinstance(raw_tree, str) and raw_tree.strip() else None
+    return tip, tree
+
+
+def _parse_findings(text: str, *, strict: bool = False) -> list[dict[str, Any]]:
+    """The findings of the last json block (or raw JSON body). Fails closed on malformed JSON or wrong-typed
+    `findings`; when `strict=True` (used by `--record`), raises `LaneError` instead of returning an unreadable
+    placeholder finding."""
+    block, has_json = _extract_json_block(text)
+    if has_json:
+        assert block is not None
         try:
             data: Any = json.loads(block)
-        except ValueError:
-            continue
-        items: Any = cast(dict[str, Any], data).get("findings") if isinstance(data, dict) else None
-        if isinstance(items, list) and not all(isinstance(i, dict) for i in items):  # pyright: ignore[reportUnknownVariableType]
+        except ValueError as error:
+            if strict:
+                raise LaneError(f"report JSON block is invalid: {error}") from None
             return _unreadable_answer(text)
-        if isinstance(items, list):
-            found: list[dict[str, Any]] = []
-            for item in cast(list[Any], items):
-                entry = cast(dict[str, Any], item)
-                severity = str(entry.get("severity", "")).upper()
-                category = str(entry.get("category") or "").strip().lower()
-                package = entry.get("package") if category == "package-misuse" else None
-                line = entry.get("line")
-                found.append({"n": len(found) + 1, "severity": severity if severity in ("P0", *SEVERITIES) else "P2",
-                              "category": category if category in CATEGORIES else None,
-                              # An npm name is at most 214 characters.
-                              "package": (package.strip()[:214] if isinstance(package, str) and package.strip()
-                                          else None),
-                              "file": entry.get("file") if isinstance(entry.get("file"), str) else None,
-                              "line": line if isinstance(line, int) and not isinstance(line, bool) else None,
-                              "title": str(entry.get("title") or "").strip()[:300],
-                              "detail": str(entry.get("detail") or "").strip()[:4000], "mark": None})
-            return found
-    if re.search(r"\bno findings\b", text, re.I) and len(text) < 400:
+        if not isinstance(data, dict) or "findings" not in data:
+            if strict:
+                raise LaneError("report JSON block must be an object with a 'findings' list")
+            return _unreadable_answer(text)
+        items: Any = cast(dict[str, Any], data).get("findings")
+        if not isinstance(items, list) or not all(isinstance(i, dict) for i in items):  # pyright: ignore[reportUnknownVariableType]
+            if strict:
+                raise LaneError("report JSON 'findings' must be a list of objects")
+            return _unreadable_answer(text)
+        found: list[dict[str, Any]] = []
+        for item in cast(list[Any], items):
+            entry = cast(dict[str, Any], item)
+            raw_sev = entry.get("severity")
+            severity = raw_sev.strip().upper() if isinstance(raw_sev, str) else ""
+            raw_cat = entry.get("category")
+            category = raw_cat.strip().lower() if isinstance(raw_cat, str) else ""
+            package = entry.get("package") if category == "package-misuse" else None
+            line = entry.get("line")
+            raw_title = entry.get("title")
+            raw_detail = entry.get("detail")
+            found.append({
+                "n": len(found) + 1,
+                "severity": severity if severity in ("P0", *SEVERITIES) else "P2",
+                "category": category if category in CATEGORIES else None,
+                # An npm name is at most 214 characters.
+                "package": (package.strip()[:214] if isinstance(package, str) and package.strip() else None),
+                "file": entry.get("file") if isinstance(entry.get("file"), str) else None,
+                "line": line if isinstance(line, int) and not isinstance(line, bool) else None,
+                "title": raw_title.strip()[:300] if isinstance(raw_title, str) else "",
+                "detail": raw_detail.strip()[:4000] if isinstance(raw_detail, str) else "",
+                "mark": None,
+            })
+        return found
+    if not strict and re.search(r"\bno findings\b", text, re.I) and len(text) < 400:
         return []
+    if strict:
+        raise LaneError("report has no readable JSON findings block")
     return _unreadable_answer(text)
 
 

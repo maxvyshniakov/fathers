@@ -342,12 +342,21 @@ def merge(
         if pre_land_problem:
             problems.append(pre_land_problem)
         int_head = git(integration, "rev-parse", "HEAD")
-        diff_base = git(main, "merge-base", int_head, tip, check=False) or int_head
-        lane_stats = review_class.diff_stats(main, diff_base, tip)
+        if repair and git_ok(integration, "merge-base", "--is-ancestor", tip, int_head):
+            repaired_merge = _find_merge_commit(integration, tip)
+            if repaired_merge:
+                lane_stats = review_class.diff_stats(integration, repaired_merge[1], repaired_merge[0])
+            else:
+                diff_base = git(main, "merge-base", int_head, tip, check=False) or int_head
+                lane_stats = review_class.diff_stats(main, diff_base, tip)
+        else:
+            diff_base = git(main, "merge-base", int_head, tip, check=False) or int_head
+            lane_stats = review_class.diff_stats(main, diff_base, tip)
         is_fix_lane = bool(list(review.valid_fix_parents(record, store)))
-        problems.extend(
-            review_class.land_problems(record, lane_stats, store.project, root=main, is_fix_lane=is_fix_lane)
+        class_problems = review_class.land_problems(
+            record, lane_stats, store.project, root=main, is_fix_lane=is_fix_lane, receipt=receipt,
         )
+        problems.extend(class_problems)
         if problems and not force_reason:
             raise LaneError("land refused: " + "; ".join(problems))
         if problems:
@@ -359,7 +368,11 @@ def merge(
             if pre_land_problem is not None:
                 reviewed = False
                 words = pre_land_problem
-            if not reviewed and not review.review_exemption(record, store):
+            eff_cls_onto, _ = review_class.effective_class(
+                record, lane_stats, store.project, root=main, is_fix_lane=is_fix_lane, receipt=receipt,
+            )
+            class_exempt = eff_cls_onto in ("none", "evidence") and not class_problems
+            if not reviewed and not class_exempt and not review.review_exemption(record, store):
                 if not force_reason:
                     raise LaneError(f"land refused: {integration} is on {onto}, which promote would not hold for "
                                     f"this lane's review ({words}); run {prog} review {lane_id} and mark its "
@@ -444,6 +457,7 @@ def post_merge(store: state.Store, landed: Landed, slots: int | None) -> Smoke:
                 eff_cls, eff_why = review_class.effective_class(
                     record, merged_stats, store.project, root=checkout,
                     is_fix_lane=bool(list(review.valid_fix_parents(record, store))),
+                    receipt=receipt,
                 )
                 record = store.update(
                     lane_id,
@@ -477,6 +491,7 @@ def post_merge(store: state.Store, landed: Landed, slots: int | None) -> Smoke:
                 eff_cls, eff_why = review_class.effective_class(
                     record, merged_stats, store.project, root=checkout,
                     is_fix_lane=bool(list(review.valid_fix_parents(record, store))),
+                    receipt=receipt,
                 )
                 record = store.update(
                     lane_id,

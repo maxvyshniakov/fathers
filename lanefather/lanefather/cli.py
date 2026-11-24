@@ -275,6 +275,10 @@ def parser(project: config.Config = config.DEFAULT) -> Parser:
                    help="add a spec file, relative to the repository (repeatable)")
     p.add_argument("--mark-partial", action="append", metavar="N", help="mark one of its tickets partial")
     p.add_argument("--mark-complete", action="append", metavar="N", help="mark one of its tickets complete")
+    p.add_argument("--add-gate", metavar="NAME",
+                   help="set or update the guarding check/test name for --review evidence")
+    p.add_argument("--add-review-decision", metavar="TEXT",
+                   help="set or update the inline owner decision quote+date for --review evidence")
     p.add_argument("--json", action="store_true", help="the version-1 scope: lane, ticket and scope")
     p.set_defaults(run=lanes.scope_command)
     p = add(root, commands, "check", "In the lane's worktree, on a clean committed tree: the checks the tree's plan "
