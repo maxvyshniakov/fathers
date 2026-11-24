@@ -833,7 +833,7 @@ def _override_stats(
     def _batch_row(key: str) -> dict[str, Any]:
         return batch_buckets.setdefault(
             key,
-            {"overrides": [], "lane_overrides": 0, "promote_overrides": 0, "fix_lanes": []},
+            {"entries": [], "lane_overrides": 0, "promote_overrides": 0, "fix_lanes": []},
         )
 
     for item in override_entries:
@@ -843,14 +843,14 @@ def _override_stats(
             promote_entries.append(item)
             batch_key = _as_str(item.get("commit")) or "unpromoted"
             bucket = _batch_row(batch_key)
-            bucket["overrides"].append(item)
+            bucket["entries"].append(item)
             bucket["promote_overrides"] += 1
         else:
             lane_count += 1
             lane_id = _as_str(item.get("lane"))
             batch_key = lane_batches.get(lane_id, "unpromoted") if lane_id is not None else "unpromoted"
             bucket = _batch_row(batch_key)
-            bucket["overrides"].append(item)
+            bucket["entries"].append(item)
             bucket["lane_overrides"] += 1
 
     fix_rows: list[dict[str, Any]] = []
@@ -876,7 +876,7 @@ def _override_stats(
     batches: list[dict[str, Any]] = []
     for batch_key in sorted(batch_buckets, key=lambda k: (k == "unpromoted", k)):
         bucket = batch_buckets[batch_key]
-        b_overrides = cast(list[dict[str, Any]], bucket["overrides"])
+        b_overrides = cast(list[dict[str, Any]], bucket["entries"])
         batches.append({
             "batch": batch_key,
             "overrides": len(b_overrides),
