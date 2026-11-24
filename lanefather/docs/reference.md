@@ -91,6 +91,12 @@ prerequisite's `flaky-under-load` classification (with both logs) visible so a r
 solo rerun says so. If a prerequisite's rerun fails too, or another prerequisite of a blocked check stayed red, the
 blocked check stays `dependency-blocked` and the receipt stays red.
 
+`land` requires a current green check receipt for the lane's tip tree under the current toolchain and platform
+(`results.env_hash`, fathers#59). If the tree changed, the toolchain or platform changed, or the toolchain resolver
+refused, `land` refuses and asks to rerun `check` (`--force-reason` overrides and is logged; `land --repair` skips the
+toolchain check for a merge that already landed). Read-only commands (`list`, `show`, `status`) check tree currency
+only and never execute project toolchain resolvers.
+
 `review <id> --fix-lane` starts the fix lane from the branch the lane landed on, which holds its merge, and refuses
 when no branch does; the landed lane keeps its own registration. The fix lane takes over the landed lane's scope
 with every ticket partial, so its merge says `Refs #N` and closes none of them a second time (fathers#64).
@@ -739,9 +745,11 @@ lane through `lanefather show ID --state-dir DIR --json`.
 
 The version-1 summary contains project and repository identity, ticket number
 and URL, lane status, branch, base, worktree, claims, dependencies, receipt
-status and review status/finding counts. `checks.tree_match` is true/false when the
+status and review status/finding counts. Read-only views (`list`, `show`,
+`status`) evaluate tree currency only via `receipts.check_verdict` and never
+spawn project toolchain resolvers. `checks.tree_match` is true/false when the
 branch tree can be compared with the receipt, otherwise null. `checks.current`
-is false for a proven tree mismatch and null (unknown) for a match: current
+is false for a proven tree mismatch (or `StaleToolchain` when checked) and null (unknown) for a match: current
 toolchain resolution and other verification conditions cannot be certified
 without executing project code. A green saved status is not a currentness claim.
 The version-1 nullable field remains compatible with receivers that omit a

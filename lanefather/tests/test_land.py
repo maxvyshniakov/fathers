@@ -614,14 +614,16 @@ class SmokeNarrowingTests(LaneCase):
         self.assertEqual(narrowing["reason"], "what the integration brought in selects the full gate")
 
     def test_a_changed_rust_toolchain_leaves_the_whole_smoke(self):
-        # #571: a receipt certifies only the Rust it ran with.
+        # #571, fathers#59: a receipt certifies only the Rust it ran with; land refuses until overridden.
         self.commit(self.integration, {"rust-toolchain.toml": '[toolchain]\nchannel = "1.98.1"\n',
                                        "tools/rust-toolchain.py": RUST_STUB}, "pin Rust")
         worktree = self.created("a", "lib/**")
         self.commit(worktree, {"lib/api.txt": "foo\nbaz\n"})
         self.lane("check", "a")
         self.env["FIXTURE_RUST"] = "1.99.0"
-        self.lane("land", "a")
+        refused = self.lane("land", "a", ok=False)
+        self.assertIn("the receipt is stale: the Rust toolchain changed since the lane check", refused)
+        self.lane("land", "a", "--force-reason", "toolchain changed on purpose")
         self.assertEqual(self.verify_runs()[-1], "checks structure-check,lib-check")
         self.assertEqual(self.post("a")["narrowing"]["reason"], "the toolchain changed since the lane check")
 
@@ -755,11 +757,40 @@ class SmokeNarrowingTests(LaneCase):
         self.commit(worktree, {"lib/api.txt": "foo\nbaz\n"})
         self.lane("check", "a")
         self.env["FIXTURE_RUST"] = "1.99.0"
-        output = self.lane("land", "a")
+        refused = self.lane("land", "a", ok=False)
+        self.assertIn("the receipt is stale: the Rust toolchain changed since the lane check", refused)
+        output = self.lane("land", "a", "--force-reason", "toolchain changed on purpose")
         self.assertEqual(self.git(self.integration, "rev-parse", "HEAD^{tree}"), self.receipt("a")["tree"])
         self.assertEqual(self.smoke_bootstraps(log), 1)
         self.assertIn("(the toolchain changed since the lane check); queue: slotfather status", output)
         self.assertEqual(self.verify_runs()[-1], "checks structure-check,lib-check")
+
+    def test_toolchain_resolver_refusal_reports_refusal_at_land(self):
+        self.commit(self.integration, {"rust-toolchain.toml": '[toolchain]\nchannel = "1.98.1"\n',
+                                       "tools/rust-toolchain.py": RUST_STUB}, "pin Rust")
+        worktree = self.created("a", "lib/**")
+        self.commit(worktree, {"lib/api.txt": "foo\nbaz\n"})
+        self.lane("check", "a")
+        self.env["FIXTURE_RUST"] = "missing"
+        refused = self.lane("land", "a", ok=False)
+        self.assertIn("the Rust toolchain could not be resolved", refused)
+        self.assertIn("PATH serves none", refused)
+        self.assertNotIn("changed since the lane check", refused)
+        self.lane("land", "a", "--force-reason", "resolver offline on purpose", "--keep")
+        self.assertEqual(self.record("a")["status"], "landed")
+
+    def test_land_repair_skips_toolchain_check_after_merge(self):
+        self.commit(self.integration, {"rust-toolchain.toml": '[toolchain]\nchannel = "1.98.1"\n',
+                                       "tools/rust-toolchain.py": RUST_STUB}, "pin Rust")
+        worktree = self.created("a", "lib/**")
+        self.commit(worktree, {"lib/api.txt": "foo\nrepaired\n"})
+        self.lane("check", "a")
+        # Simulate a merge already committed in integration before the toolchain changed.
+        self.git(self.integration, "merge", "--no-ff", "-m", "Merge lane/a", "lane/a")
+        self.env["FIXTURE_RUST"] = "1.99.0"
+        output = self.lane("land", "a", "--repair", "--keep")
+        self.assertIn("post-merge green", output)
+        self.assertEqual(self.record("a")["status"], "landed")
 
     def test_an_exact_tree_receipt_on_another_base_stands_only_for_paths_its_plan_covered(self):
         # Review of fathers#198: with another base, the merged diff could select checks the smoke does not name; the
