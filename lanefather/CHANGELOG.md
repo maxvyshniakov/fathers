@@ -239,6 +239,15 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
 
 ### Changed
 
+- `lanefather land` post-merge `plan` mode now reuses passing whole-suite results from the lane's green check receipt
+  instead of re-running every suite when the merge tree equals the lane's verified tree or when the diff between the
+  lane tree and merge tree touches no input of a suite (fathers#249). When all planned suites are reused, post-merge
+  settles as `skip` (`green`, `jobs=0`) without invoking the verifier and records provenance in `narrowing`
+  (`dropped_suites`, `reused_suites`) and `lane_verified_suites` in the ledger. Reuse fails closed on missing, red,
+  stale, stopped, or malformed receipts, full or unowned delta plans, delta plans that omit changed paths, and suites
+  not passed as whole suites; in per-check post-merge narrowing, checks whose `depends_on`/`requires` rows point to a
+  check selected by the delta or re-running also re-run transitively.
+
 - `lanefather check` now runs dependency-blocked checks in the same invocation once their failed prerequisites pass
   their own rerun (`flaky-under-load`), instead of leaving those checks unresolved and the receipt red (fathers#240).
   Chained dependencies unblock transitively while sharing the `LANEFATHER_RERUNS` rerun budget across waves, and the

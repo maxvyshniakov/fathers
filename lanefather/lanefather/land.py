@@ -17,7 +17,7 @@ from dataclasses import dataclass
 import os
 import subprocess
 import sys
-from typing import Any
+from typing import Any, cast
 
 from . import (
     config,
@@ -431,25 +431,32 @@ def post_merge(store: state.Store, landed: Landed, slots: int | None) -> Smoke:
                 inspector, receipt, record["landed"], merge_tree, previous, toolchain, record.get("worktree")
             )
             if exact_verified is not None and exact_narrowing is not None:
-                merged_paths = [p for p in git(
-                    checkout, "-c", "core.quotePath=false", "diff", "--no-renames", "--name-only",
-                    previous, merge_sha, "--",
-                ).splitlines() if p]
+                merged_paths = plan.diff_paths(checkout, previous, merge_sha) or []
                 docs_only = review.documentation_only(merged_paths, store.project)
                 record = store.update(lane_id, lambda rec: rec["landed"].update(docs_only=docs_only))
                 print(
                     f"lane: {review.start_lane_review(store, record, force_fresh=landed.pre_land_overridden)}",
                     flush=True,
                 )
+                raw_exact_dropped: Any = exact_narrowing.get("dropped_suites")
+                exact_dropped_suites: list[Any] = (
+                    cast(list[Any], raw_exact_dropped) if isinstance(raw_exact_dropped, list) else []
+                )
+                is_whole_suite_skip = "dropped_suites" in exact_narrowing and not exact_verified
+                verified_desc = (
+                    f"{len(exact_dropped_suites)} suite{'s' if len(exact_dropped_suites) != 1 else ''}"
+                    if is_whole_suite_skip
+                    else f"{len(exact_verified)} checks"
+                )
                 print(f"lane: post-merge smoke skipped: exact merge tree {merge_tree[:10]} already verified by lane "
-                      f"receipt ({len(exact_verified)} checks); no plan bootstrap needed", flush=True)
+                      f"receipt ({verified_desc}); no plan bootstrap needed", flush=True)
                 kind = "skip"
-                rows: list[dict[str, Any]] | None = []
+                rows: list[dict[str, Any]] | None = None if is_whole_suite_skip else []
                 lane_verified, narrowing = exact_verified, exact_narrowing
                 tree_verified: dict[str, dict[str, Any]] = {}
                 skips: dict[str, str] = {}
                 suites: list[str] = []
-                selected: dict[str, list[str]] | None = {}
+                selected: dict[str, list[str]] | None = None if is_whole_suite_skip else {}
                 decision, results, check_results, triaged, stamp, status = run_smoke(
                     store, record, checkout, suites, selected, f"post-merge-{lane_id}", slots, toolchain
                 )
@@ -465,17 +472,27 @@ def post_merge(store: state.Store, landed: Landed, slots: int | None) -> Smoke:
                     flush=True,
                 )
                 kind, rows = inspector.post_merge_selection(merged_plan)
-                kind, rows, narrowing, lane_verified = plan.narrow_smoke(
-                    inspector, receipt, record["landed"], merge_tree, kind, rows, record.get("worktree"),
-                    toolchain=toolchain,
-                )
-                kind, rows, tree_verified, skips = smoke_reuse(
-                    store, kind, rows, merge_tree, toolchain, merged_plan,
-                    git(checkout, "rev-parse", previous + "^{tree}"),
-                )
+                if rows is None and kind == "plan":
+                    kind, suites, narrowing = plan.narrow_suites(
+                        inspector, receipt, record["landed"], merge_tree, kind, list(merged_plan["selected"]),
+                        record.get("worktree"), toolchain=toolchain,
+                    )
+                    lane_verified = {}
+                    tree_verified = {}
+                    skips = {}
+                    selected = None
+                else:
+                    kind, rows, narrowing, lane_verified = plan.narrow_smoke(
+                        inspector, receipt, record["landed"], merge_tree, kind, rows, record.get("worktree"),
+                        toolchain=toolchain,
+                    )
+                    kind, rows, tree_verified, skips = smoke_reuse(
+                        store, kind, rows, merge_tree, toolchain, merged_plan,
+                        git(checkout, "rev-parse", previous + "^{tree}"),
+                    )
+                    suites, selected = ((merged_plan["selected"], None) if rows is None
+                                        else (plan.suites_of(rows), plan.by_suite(rows)))
                 reasons = merged_plan["reasons"]
-                suites, selected = ((merged_plan["selected"], None) if rows is None
-                                    else (plan.suites_of(rows), plan.by_suite(rows)))
                 left = (f"{len(rows)} check{'s' if len(rows) != 1 else ''} to run" if rows
                         else f"suites {', '.join(suites)} to run" if rows is None and suites else "nothing to run")
                 print(f"lane: post-merge plan for {lane_id} prepared ({kind}): {left}", flush=True)
@@ -509,34 +526,47 @@ def post_merge(store: state.Store, landed: Landed, slots: int | None) -> Smoke:
                         reused=[*lane_verified, *tree_verified],
                         origins={**verify.origins(lane_verified, str(receipts.path(store, lane_id))),
                                  **verify.origins(tree_verified, "")}, phase="post-merge")
-    verified = len(lane_verified)
+    raw_dropped_suites: Any = narrowing.get("dropped_suites")
+    dropped_suites: list[Any] = cast(list[Any], raw_dropped_suites) if isinstance(raw_dropped_suites, list) else []
+    is_whole_suite_narrowed = "dropped_suites" in narrowing and not lane_verified
+    verified_checks = len(lane_verified)
+    verified_suites = len(dropped_suites)
+    verified = verified_suites if is_whole_suite_narrowed else verified_checks
+    verified_tag = (
+        f"lane_verified_suites={verified_suites} "
+        if is_whole_suite_narrowed
+        else f"lane_verified={verified_checks} "
+    )
     journal.ledger(f"post-merge {lane_id} {status} {kind} jobs={jobs} suites={','.join(suites) or '-'} "
-                   + (f"lane_verified={verified} " if narrowing.get("narrowed") else "")
+                   + (verified_tag if narrowing.get("narrowed") else "")
                    + (f"not_rerun={len(tree_verified)} " if tree_verified else "")
                    + (f"gate_only={len(skips) - len(tree_verified)} " if len(skips) > len(tree_verified) else "")
                    + f"{host_fields(info)} merge={merge_sha}",
                    kind="lane.post_merge", level="info" if status == "green" else "error", lane=record,
                    details={"status": status, "scope": kind, "jobs": jobs, "suites": suites,
-                            "lane_verified": verified, "skipped": skips, "merge": merge_sha, "receipt": str(post)},
+                            "lane_verified": verified_checks,
+                            **({"lane_verified_suites": verified_suites} if is_whole_suite_narrowed else {}),
+                            "skipped": skips, "merge": merge_sha, "receipt": str(post)},
                    store=store)
     ids = [c for s in suites for c in selected[s]] if selected is not None else None
     what = (", ".join(ids) if ids is not None and len(ids) <= 8 else f"{len(ids)} checks" if ids is not None
             else ", ".join(suites)) or "no suites affected"
-    prefix = {"smoke": "smoke: ", "narrowed": "narrowed smoke: "}.get(kind, "")
+    prefix = {"smoke": "smoke: ", "narrowed": "narrowed plan: " if rows is None else "narrowed smoke: "}.get(kind, "")
     if kind == "skip" and skips:
         what = "skipped: " + "; ".join(f"{c}: {why}" for c, why in skips.items())
         if narrowing.get("narrowed"):
             what += f"; the lane's green receipt stands for {verified}"
-    elif kind == "skip" and merge_tree == narrowing["receipt_tree"]:
+    elif kind == "skip" and merge_tree == narrowing.get("receipt_tree"):
         what = f"skipped: the lane's green receipt verified the merge tree {merge_tree[:10]}"
     elif kind == "skip":
         brought = ", ".join(narrowing["integration_paths"][:3]) + (", ..." if len(narrowing["integration_paths"]) > 3
                                                                     else "")
-        what = (f"skipped: what the integration brought in ({brought}) selects no smoke check; the lane's green "
+        target_word = "planned suite" if rows is None else "smoke check"
+        what = (f"skipped: what the integration brought in ({brought}) selects no {target_word}; the lane's green "
                 f"receipt stands for {verified}")
-    elif narrowing.get("narrowed"):
+    elif narrowing.get("narrowed") and verified:
         what += f"; the lane's receipt stands for {verified} more"
-    elif narrowing.get("reason") and rows:
+    elif narrowing.get("reason") and (rows or suites):
         what += f"; whole, since {narrowing['reason']}"
     if skips and kind != "skip":
         what += f"; {len(skips)} not run again ({', '.join(f'{c}: {why}' for c, why in skips.items())})"

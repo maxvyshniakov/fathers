@@ -129,10 +129,10 @@ def newest_gate(store: state.Store) -> dict[str, Any] | None:
 
 def status_of(receipt: Receipt | None, default: str | None = None) -> str | None:
     """The string `status` field of `receipt`, or `default` when absent."""
-    if not receipt:
+    if not isinstance(receipt, dict):
         return default
     raw = receipt.get("status")
-    return str(raw) if isinstance(raw, str) else (str(raw) if raw is not None else default)
+    return raw if isinstance(raw, str) else default
 
 
 def tree_of(receipt: Receipt | None) -> str | None:
@@ -498,8 +498,12 @@ def smoke_basis(
     toolchain_name: str = "toolchain",
     platform: str | None = None,
     project: config.Config = config.DEFAULT,
+    require_checks: bool = True,
 ) -> str | None:
-    """Why `receipt` cannot stand for part of its merge's smoke (#640), or `None` when it can."""
+    """Why `receipt` cannot stand for part of its merge's smoke (#640, fathers#249), or `None` when it can."""
+    raw_landed_tree: Any = landed.get("tree") if isinstance(cast(Any, landed), dict) else None
+    if not isinstance(raw_landed_tree, str) or not raw_landed_tree:
+        return "the landed record has no tree"
     effective_record: Record | None = (
         {**record, "worktree": worktree}
         if worktree is not None and record is not None
@@ -507,7 +511,7 @@ def smoke_basis(
         if worktree is not None
         else record
     )
-    verdict = check_verdict(effective_record, receipt, str(landed["tree"]), toolchain,
+    verdict = check_verdict(effective_record, receipt, raw_landed_tree, toolchain,
                             platform=platform, project=project)
     if isinstance(verdict, NoReceipt) or receipt is None:
         return "the lane has no receipt"
@@ -516,10 +520,15 @@ def smoke_basis(
     if isinstance(verdict, StaleTree):
         return (
             f"the lane's receipt covers tree {str(verdict.receipt_tree)[:10]}, not the landed tree "
-            f"{str(landed['tree'])[:10]}"
+            f"{raw_landed_tree[:10]}"
         )
-    if receipt.get("checks") is None or receipt.get("check_results") is None:
-        return "the lane's receipt has no per-check results"
+    if receipt.get("stopped"):
+        return "the lane's receipt stopped early"
+    if require_checks:
+        if not isinstance(receipt.get("checks"), dict) or not isinstance(receipt.get("check_results"), dict):
+            return "the lane's receipt has no per-check results"
+    elif not isinstance(receipt.get("results"), list):
+        return "the lane's receipt has no suite results"
     if isinstance(verdict, StaleToolchain):
         if verdict.toolchain_changed:
             return f"the {toolchain_name} changed since the lane check"
