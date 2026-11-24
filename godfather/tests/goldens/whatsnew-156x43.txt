@@ -1,43 +1,43 @@
- Godfather
-╭─ SLOTS ───────────────────────────────╭─ WHAT'S NEW ──────────────── All · Godfather · Slotfather · Spawnfather ─╮───────────────────────────────────────╮
-│                                       │                                                                          │                                       │
-│  🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅  🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅  🮅🮅🮅🮅🮅🮅🮅│  Godfather · unreleased · installed 9f600e1                             ┃│-build-once                           ┃│
-│  lane-644-bui…  lane-465-sta…  desktop│                                                                         ┃│· 1 slot                              ┃│
-╰───────────────────────────────────────│  ADDED                                                                   │                                      ┃│
-┏━ QUEUE ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━│                                                                          │                                      ┃│
-┃                                       │  • Settings contract tests and fake tool updated for Lanefather's move   │                                      ┃│
-▌  ▶️    lane-644-build-once            │    from exit 4 to exit 5 on read-only settings (fathers#130);            │░░ 0.9 of 2 cores                     ┃│
-┃  ▶️    lane-465-state-definitions-revi│    SettingsClient continues to accept both 4 and 5 for compatibility     │ · waited 19m34s · running 35m10s     ┃│
-┃  ▶️    desktop                        │    with older Lanefather releases.                                       │ 1 processes                          ┃│
-┃                                       │                                                                          │                                      ┃│
-┃  ⏸️    prof51                         │  • EVENTS formats Spawnfather's entry.gone event (gone, with log line    │ight/.claude/worktrees/agent-afa3816b ┃│
-┃  ⏸️    lane-555-host-rename-names     │    count when present; fathers#245).                                     │2                                     ┃│
-┃                                       │                                                                          │ight/.claude/worktrees/agent-afa3816b ┃│
-┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━│  • LANE DETAILS lists everything a lane owns through Spawnfather         │2/verify.sh --checks desktop-tests    ┃│
-╭─ SLOTS LOG ─────── label ─────────────│    (fathers#171): its worktree, scratch and build folders, wherever      │oing --jobs 1                         ┃│
-│                                       │    they are, first, then what its agents started inside its worktree.    │ight                                  ┃│
-│  11:59:35  ▫       agent-ae72d94beb6f0│    On SPAWNS their lane column names the lane and SPAWN DETAILS links    │                                      ┃│
-│  11:58:33  ▫       agent-a1c75285bdf2c│    it. A lane is matched by its project and its id, so a lane of the     │d-once                                ┃│
-│  11:57:15  ▫       agent-a1c75285bdf2c│    same id in another project never takes another's spawns.              │ht                                    ┃│
-│  11:55:44  ▪▪      desktop            │                                                                          │                                      ┃│
-│  11:55:31  ▫       desktop            │  • MACHINE says in red when sustained CPU load or the expected-peak      │-build-once                           ┃│
-│  11:55:26  ▫       agent-a1c75285bdf2c│    memory budget closes admission (fathers#206): CPU load high and       │e/queue-347                           ┃│
-│  11:55:00  ▫       desktop            │    memory budget full in its border, beside memory short, from           │ess                                   ┃│
-│  11:54:02  ▫       agent-a1c75285bdf2c│    Slotfather's load_block and memory_budget_block, and a waiting        │ted                                   ┃│
-│  11:52:53  ▫       agent-a1c75285bdf2c│    request's details list the reason under blocked. An older             │rification_plan.py, tools/verify.py,  ┃│
-│  11:52:30  ▫       desktop            │    Slotfather sends neither and MACHINE reads as before.                 │main-module.sh, tools/test-build-     ┃│
-│  11:51:40  ▫       post-merge-456-rena│                                                                          │odule.py, tools/app-build.py,         ┃│
-│  11:51:24  ▫       agent-a1c75285bdf2c│  • MACHINE names what drives a high load outside leases (fathers#203):   │st-app-build.py, tools/cargo-test.py, ┃│
-│  11:49:34  ▫▫      data-grid          │    while Slotfather's unleased load is at least half the cores, the      │elopment.md, tools/test-cargo-build-  ┃│
-│  11:48:30  ▫       agent-ae72d94beb6f0│    chart's place lists the top unleased processes, top unleased with     │, tools/test-heavy.py,                ┃│
-│  11:47:21  ▫       agent-a0f998f4c57cd│    each one's name, pid, cpu (yellow over one core) and memory, the      │rgo_build_cache.py                     │
-│  11:47:17  ▫       agent-a0f998f4c57cd│    busiest first. Running leases' processes and their descendants are    │                                       │
-│  11:47:13  ▫       agent-a0f998f4c57cd│    left out; a waiting request's are not, as Slotfather's unleased       │───────────────────────────────────────╯
-│  11:47:10  ▫       agent-a0f998f4c57cd│    load counts them. Godfather reads the machine's process table with    │nleased 0.4 · queue ahead · 2 waiting ─╮
-│  11:47:07  ▫       agent-a0f998f4c57cd│    ps only while the load is high, at most every 5 s, off the screen's   │          slots held  avg 4.4/6        │
-│  11:47:04  ▫       agent-a0f998f4c57cd│    thread; at a lower load, or when ps fails, the slots-held chart is    │░ 9.3/12  ▂▂▂▂▂       ▂▄▂▂▂▄▄▂▂  ▂ ▂   │
-│  11:46:08  ▫       post-merge-491-elec│    shown as before.                                                      │░ normal  █████▇▄▇▄▄▄▇█████████▇▇█▇█▇  │
-│  11:45:53  ▫       agent-a1c75285bdf2c│                                                                          │░ 4.4/6G  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  │
+╭─ SLOTS ───────────────────────────────────────────────────── 12 cores · 6 slots (manual) ─╮ ╭─ LEASE DETAILS ────────────────────────────────────────────╮
+│                                       ╭─ WHAT'S NEW ──────────────── All · Godfather · Slotfather · Spawnfather ─╮                                       │
+│  🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅  🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅  🮅🮅🮅🮅🮅🮅🮅│                                                                          │-build-once                            │
+│  lane-644-bui…  lane-465-sta…  desktop│  Godfather · unreleased · installed 9f600e1                             ┃│· 1 slot                               │
+╰───────────────────────────────────────│                                                                         ┃│                                       │
+┏━ QUEUE ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━│  ADDED                                                                   │                                       │
+┃                                       │                                                                          │                                       │
+▌  ▶️    lane-644-build-once            │  • Settings contract tests and fake tool updated for Lanefather's move   │░░ 0.9 of 2 cores                      │
+┃  ▶️    lane-465-state-definitions-revi│    from exit 4 to exit 5 on read-only settings (fathers#130);            │ · waited 19m34s · running 35m10s      │
+┃  ▶️    desktop                        │    SettingsClient continues to accept both 4 and 5 for compatibility     │ 1 processes                           │
+┃                                       │    with older Lanefather releases.                                       │                                       │
+┃  ⏸️    prof51                         │                                                                          │ight/.claude/worktrees/agent-afa3816b  │
+┃  ⏸️    lane-555-host-rename-names     │  • EVENTS formats Spawnfather's entry.gone event (gone, with log line    │2                                      │
+┃                                       │    count when present; fathers#245).                                     │ight/.claude/worktrees/agent-afa3816b  │
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━│                                                                          │2/verify.sh --checks desktop-tests     │
+╭─ SLOTS LOG ─────── label ─────────────│  • LANE DETAILS lists everything a lane owns through Spawnfather         │oing --jobs 1                          │
+│                                       │    (fathers#171): its worktree, scratch and build folders, wherever      │ight                                   │
+│  11:59:35  ▫       agent-ae72d94beb6f0│    they are, first, then what its agents started inside its worktree.    │                                       │
+│  11:58:33  ▫       agent-a1c75285bdf2c│    On SPAWNS their lane column names the lane and SPAWN DETAILS links    │d-once                                 │
+│  11:57:15  ▫       agent-a1c75285bdf2c│    it. A lane is matched by its project and its id, so a lane of the     │ht                                     │
+│  11:55:44  ▪▪      desktop            │    same id in another project never takes another's spawns.              │                                       │
+│  11:55:31  ▫       desktop            │                                                                          │-build-once                            │
+│  11:55:26  ▫       agent-a1c75285bdf2c│  • MACHINE says in red when sustained CPU load or the expected-peak      │e/queue-347                            │
+│  11:55:00  ▫       desktop            │    memory budget closes admission (fathers#206): CPU load high and       │ess                                    │
+│  11:54:02  ▫       agent-a1c75285bdf2c│    memory budget full in its border, beside memory short, from           │ted                                    │
+│  11:52:53  ▫       agent-a1c75285bdf2c│    Slotfather's load_block and memory_budget_block, and a waiting        │rification_plan.py, tools/verify.py,   │
+│  11:52:30  ▫       desktop            │    request's details list the reason under blocked. An older             │main-module.sh, tools/test-build-      │
+│  11:51:40  ▫       post-merge-456-rena│    Slotfather sends neither and MACHINE reads as before.                 │odule.py, tools/app-build.py,          │
+│  11:51:24  ▫       agent-a1c75285bdf2c│                                                                          │st-app-build.py, tools/cargo-test.py,  │
+│  11:49:34  ▫▫      data-grid          │  • MACHINE names what drives a high load outside leases (fathers#203):   │elopment.md, tools/test-cargo-build-   │
+│  11:48:30  ▫       agent-ae72d94beb6f0│    while Slotfather's unleased load is at least half the cores, the      │, tools/test-heavy.py,                 │
+│  11:47:21  ▫       agent-a0f998f4c57cd│    chart's place lists the top unleased processes, top unleased with     │rgo_build_cache.py                     │
+│  11:47:17  ▫       agent-a0f998f4c57cd│    each one's name, pid, cpu (yellow over one core) and memory, the      │                                       │
+│  11:47:13  ▫       agent-a0f998f4c57cd│    busiest first. Running leases' processes and their descendants are    │                                       │
+│  11:47:10  ▫       agent-a0f998f4c57cd│    left out; a waiting request's are not, as Slotfather's unleased       │───────────────────────────────────────╯
+│  11:47:07  ▫       agent-a0f998f4c57cd│    load counts them. Godfather reads the machine's process table with    │nleased 0.4 · queue ahead · 2 waiting ─╮
+│  11:47:04  ▫       agent-a0f998f4c57cd│    ps only while the load is high, at most every 5 s, off the screen's   │          slots held  avg 4.4/6        │
+│  11:46:08  ▫       post-merge-491-elec│    thread; at a lower load, or when ps fails, the slots-held chart is    │░ 9.3/12  ▂▂▂▂▂       ▂▄▂▂▂▄▄▂▂  ▂ ▂   │
+│  11:45:53  ▫       agent-a1c75285bdf2c│    shown as before.                                                      │░ normal  █████▇▄▇▄▄▄▇█████████▇▇█▇█▇  │
+│  11:45:09  ▫       agent-a1c75285bdf2c│                                                                          │░ 4.4/6G  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  │
 │                                       │                     ←→ tool   ↑↓ scroll   esc close                   6% │          −80s                    now  │
 ╰───────────────────────────────────────╰──────────────────────────────────────────────────────────────────────────╯───────────────────────────────────────╯
- what's new?                                 ↑↓ select   tab panel   s settings   ? help   q quit                                  updated 11:59:39  ● live
+ Godfather what's new?                            ↑↓ select   tab panel   s settings   ? help   q quit                             updated 11:59:39  ● live

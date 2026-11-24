@@ -365,7 +365,7 @@ class FocusRestsOnDrawnPanelsTests(unittest.TestCase):
                 self.assertEqual((top, row), (details["y"], details["height"]), "DETAILS beside it")
                 events, queue = canvas.tables["events"], canvas.tables["requests"]
                 self.assertEqual(top, events["y"] + events["height"], "EVENTS right above")
-                self.assertEqual(height - 2 - 5 - queue["height"] - row, events["height"],
+                self.assertEqual(height - 1 - 5 - queue["height"] - row, events["height"],
                                  "EVENTS takes what QUEUE and the bottom row leave")
 
     def test_a_scrolled_thumb_flashes_and_fades_with_one_wake(self) -> None:
@@ -528,7 +528,7 @@ class WhatsNewLayoutTests(unittest.TestCase):
         view.dashboard_draw(canvas, None)
         row, start, end = canvas.version_at
         footer = "".join(cell[0] for cell in canvas.cells[row])
-        self.assertEqual("what's new?", footer[start:end])
+        self.assertEqual("Godfather what's new?", footer[start:end])
         for x in (start, end - 1):
             state, _ = view.reduce(drawn_state(canvas), view.Mouse(0, x, row, True), 0.0)
             self.assertEqual(view.Changelog(), state.ui.overlay, "a click on what's new opens it")

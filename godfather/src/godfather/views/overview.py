@@ -36,17 +36,17 @@ FOOTER_HINTS: tuple[Part, ...] = (("↑↓", "select"), ("tab", "panel"), ("s", 
 
 
 def footer_hints(focus: str, pages: str = "", actions: bool = False) -> list[Part]:
-    """The footer's hints; with EVENTS focused, ← → switch its log (fathers#152); on SPAWNS with an actionable
-    row selected, `a actions` opens its action menu; `pages` the page keys of the tools present (`1 2 3`,
-    fathers#85), none where only the overview is."""
-    found: list[Part] = [("↑↓", "select" if focus in ("requests", "events", "lanes", "spawns") else "scroll")]
+    """The footer's hints; `pages` first (`1 2 3`, fathers#85) where other tools are present; with EVENTS focused,
+    ← → switch its log (fathers#152); on SPAWNS with an actionable row selected, `a actions` opens its action menu."""
+    found: list[Part] = []
+    if pages:
+        found.append((pages, "pages"))
+    found.append(("↑↓", "select" if focus in ("requests", "events", "lanes", "spawns") else "scroll"))
     if focus == "events":
         found.append(("←→", "log"))
     if focus == "spawns" and actions:
         found.append(("a", "actions"))
     found.append(FOOTER_HINTS[1])
-    if pages:
-        found.append((pages, "pages"))
     return [*found, *FOOTER_HINTS[2:]]
 
 
@@ -76,10 +76,11 @@ WHATS_NEW = "what's new?"
 
 def draw_footer(canvas: Canvas, model: Optional[Model], error: Optional[str], message: Optional[str],
                 moment: Optional[datetime.datetime] = None, pages: str = "", message_style: str = "bad",
-                actions: Optional[bool] = None) -> None:
+                actions: Optional[bool] = None, page: str = "overview") -> None:
     """`Godfather what's new?` (fathers#102: the name in the title style; what's new? always muted like the key
     hints, unread or not, which only the overlay marks (owner, 2026-11-13); ↻ after it
-    while a newer install waits for a restart; a click opens what's new), the hints, then the refresh failure or a
+    while a newer install waits for a restart; a click opens what's new), the hints (with `pages` first and the
+    active page's key underlined), then the refresh failure or a
     notice (fathers#24: a notice never says the refresh failed, nor makes the status stale), then the last update and
     the status."""
     installed = _common.stale_install(model)
@@ -91,10 +92,11 @@ def draw_footer(canvas: Canvas, model: Optional[Model], error: Optional[str], me
         note = ("no actions", "dim")
     else:
         note = ("", "")
-    Footer(canvas).draw([(WHATS_NEW + (" ↻" if installed else ""), "dim")],
+    Footer(canvas).draw([(_version.NAME, "title"), (" " + WHATS_NEW + (" ↻" if installed else ""), "dim")],
                         footer_hints(canvas.focus, pages, bool(actions) and not message and not error),
                         ("● stale", "bad") if error else ("● live", "ok"),
-                        clock(model["updated"], moment) if model else "", note)
+                        clock(model["updated"], moment) if model else "", note,
+                        active_page=_pages.PAGE_KEYS.get(page, "1"))
 
 
 def dashboard_draw(canvas: Canvas, model: Optional[Model], selected: int = 0, overlay: Any = None,
@@ -116,9 +118,8 @@ def dashboard_draw(canvas: Canvas, model: Optional[Model], selected: int = 0, ov
     canvas.scroll = scroll if scroll is not None else {}
     if moment is None and model is not None:
         moment = cast(Optional[datetime.datetime], model.get("updated"))
-    _pages.draw_header(canvas, page, tools or {}, _version.NAME)
     draw_footer(canvas, model, error, message, moment, page_keys(tools), message_style,
-                proc_actions(page, page_row, tools))
+                proc_actions(page, page_row, tools), page)
     if notice:
         draw_notice(canvas, notice)
         model = None
@@ -216,8 +217,8 @@ def draw_overlay(canvas: Canvas, overlay: Any, model: Optional[Model], news: Any
 
 
 def dim_panels(canvas: Canvas) -> None:
-    """Every cell between the header and footer in the muted token: a stale snapshot's picture."""
-    for row in canvas.cells[_layout.HEADER_HEIGHT:canvas.height - 1]:
+    """Every cell above the footer in the muted token: a stale snapshot's picture."""
+    for row in canvas.cells[:canvas.height - 1]:
         for cell in row:
             cell[1] = "dim"
 
@@ -226,7 +227,7 @@ def draw_notice(canvas: Canvas, lines: list[str]) -> None:
     """One panel instead of the overview: the tools Godfather looked for, or why Slotfather cannot be shown."""
     width, height = canvas.width, canvas.height
     if width < _layout.NOTICE_WIDTH or height < _layout.NOTICE_HEIGHT:
-        canvas.put(_layout.HEADER_HEIGHT, 1, lines[0], "bad", max(0, width - 2))
+        canvas.put(0, 1, lines[0], "bad", max(0, width - 2))
         return
     panel = Panel(canvas, _layout.notice(width, height, len(lines))).frame("GODFATHER")
     for row, line in enumerate(lines[:panel.inner.height]):

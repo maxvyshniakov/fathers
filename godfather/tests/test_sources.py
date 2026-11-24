@@ -118,13 +118,13 @@ class FailingTests(FixtureCase):
         text = self.frame(screen)
         self.assertIn("lane-644-build-once", text, "the last good snapshot stays on screen")
         self.assertRegex(text, r"stale since \d\d:\d\d")
-        self.assertIn(f"stale since {before}", text.split("\n")[1])
+        self.assertIn(f"stale since {before}", text.split("\n")[0])
         footer = text.split("\n")[-1]
         self.assertIn("● stale", footer)
-        self.assertRegex(footer, r"refresh failed: slotfather:.*…", "the reason, cut to the footer's room")
+        self.assertRegex(footer, r"refresh failed: slot\w*…", "the reason, cut to the footer's room")
         slot_state = screen.clients["slotfather"].state()
         self.assertEqual("slotfather: queue unreadable", slot_state.problem)
-        self.assertEqual({"dim"}, {cell[1] for row in self.canvas.cells[1:-1] for cell in row if str(cell[0]).strip()},
+        self.assertEqual({"dim"}, {cell[1] for row in self.canvas.cells[:-1] for cell in row if str(cell[0]).strip()},
                          "every panel dimmed")
         self.assertEqual("stale", slot_state.state)
         context = settings_model.Context(problem=slot_state.problem, width=100, height=40)
@@ -176,7 +176,7 @@ class RediscoveryTests(FixtureCase):
         self.frame(screen, 40, 12)
         self.reply("status --json --full", {"code": 1, "stderr": "slotfather: queue unreadable"})
         self.frame(screen, 40, 12)
-        self.assertEqual({"dim"}, {cell[1] for row in self.canvas.cells[1:-1] for cell in row if str(cell[0]).strip()})
+        self.assertEqual({"dim"}, {cell[1] for row in self.canvas.cells[:-1] for cell in row if str(cell[0]).strip()})
 
     def test_a_snapshot_that_prints_nothing_says_so(self) -> None:
         with app.Screen() as screen:

@@ -1,20 +1,20 @@
- Godfather
-╭╭─ WHAT'S NEW ────────────── All · Godfather · Slotfather · Spawnfather ─╮╮
+╭─ SLOTS ──────────────────────────────────── 12 cores · 6 slots (manual) ─╮
+│╭─ WHAT'S NEW ────────────── All · Godfather · Slotfather · Spawnfather ─╮│
 ││                                                                        ││
 ││  Godfather · unreleased · installed 9f600e1                           ┃││
-││                                                                       ┃││
-╰│  ADDED                                                                 │╯
-┏│                                                                        │┓
-┃│  • Settings contract tests and fake tool updated for Lanefather's      │┃
-▌│    move from exit 4 to exit 5 on read-only settings (fathers#130);     │▐
+╰│                                                                       ┃│╯
+┏│  ADDED                                                                 │┓
+┃│                                                                        │┃
+▌│  • Settings contract tests and fake tool updated for Lanefather's      │▐
+┃│    move from exit 4 to exit 5 on read-only settings (fathers#130);     │┃
 ┃│    SettingsClient continues to accept both 4 and 5 for compatibility   │┃
 ┃│    with older Lanefather releases.                                     │┃
 ┃│                                                                        │┃
 ┃│  • EVENTS formats Spawnfather's entry.gone event (gone, with log       │┃
 ┃│    line count when present; fathers#245).                              │┃
-┃│                                                                        │┃
-┗│  • LANE DETAILS lists everything a lane owns through Spawnfather       │┛
-╭│    (fathers#171): its worktree, scratch and build folders, wherever    │╮
+┗│                                                                        │┛
+╭│  • LANE DETAILS lists everything a lane owns through Spawnfather       │╮
+││    (fathers#171): its worktree, scratch and build folders, wherever    ││
 ││    they are, first, then what its agents started inside its            ││
 ││    worktree. On SPAWNS their lane column names the lane and SPAWN      ││
 ││    DETAILS links it. A lane is matched by its project and its id, so   ││
@@ -37,4 +37,4 @@
 ││                                                                        ││
 ││                    ←→ tool   ↑↓ scroll   esc close                  6% ││
 ╰╰────────────────────────────────────────────────────────────────────────╯╯
- what's new?      ↑↓ select   ? help   q quit      updated 11:59:39  ● live
+ Godfather what's new?     ↑↓ select   ? help   q quit     11:59:39  ● live

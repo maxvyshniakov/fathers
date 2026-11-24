@@ -323,7 +323,7 @@ class Footer:
         self.canvas, self.row = canvas, canvas.height - 1
 
     def draw(self, label: list[Part], hints: list[Part], status: Part, stamp: str = "",
-             message: Part = ("", "")) -> None:
+             message: Part = ("", ""), active_page: str = "") -> None:
         canvas, y = self.canvas, self.row
         left = canvas.segments(y, 1, label, max(0, canvas.width - 2))
         if left > 1:
@@ -343,17 +343,17 @@ class Footer:
                 canvas.right(y, at - 2, tail, "dim")
         else:
             right, shown = end, []
-        after = self.hints(shown, left, right)
+        after = self.hints(shown, left, right, active_page)
         if message[0]:
             canvas.put(y, after + 2, message[0], message[1], max(0, right - after - 4))
 
-    def hints(self, hints: list[Part], start: int, end: int) -> int:
+    def hints(self, hints: list[Part], start: int, end: int, active_page: str = "") -> int:
         """The hints centred between columns start and end; the column after them."""
         if not hints:
             return start
         x = start + (end - start - hints_width(hints)) // 2
         for index, (key, action) in enumerate(hints):
-            x = self.canvas.hint(self.row, x, key, action)
+            x = self.canvas.hint(self.row, x, key, action, active=active_page if action == "pages" else "")
             if index < len(hints) - 1:
                 x += HINT_GAP
         return x

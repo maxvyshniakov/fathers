@@ -43,7 +43,7 @@ class HintClickLiveTests(LiveCase):
         screen.receive("QUEUE", since=mark)
         mark = screen.mark()
         click("tab panel", 30)
-        screen.receive("←→ log", "s settings", since=mark)  # EVENTS focused: its arrows select (fathers#152) and switch its log
+        screen.receive("←→ log", since=mark)  # EVENTS focused: its arrows select (fathers#152) and switch its log
         mark = screen.mark()
         click("s settings", 30)
         screen.receive("enter edit", since=mark)

@@ -111,12 +111,13 @@ XTERM = [(0, 0, 0), (205, 0, 0), (0, 205, 0), (205, 205, 0), (0, 0, 238), (205, 
 BUILTIN_HOLDERS: List[Colour] = [75, 79, 216, 141, 110, 186]
 BUILTIN: Dict[str, Style] = {
     "text": (None, ""), "bold": (None, "b"), "dim": (245, "d"), "frame": (245, "d"), "title": (None, "b"),
-    "key": (255, "b"),
+    "key": (255, "b"), "key-active": (255, "bu"),
     "accent": (75, ""), "cursor": (255, "b"), "status-normal": (255, ""), "ok": (114, ""), "warn": (179, ""),
     "bad": (167, ""), "legacy": (176, ""), "badge-ok": (114, "br"), "badge-warn": (179, "br"),
     "badge-bad": (167, "br"), "track": (239, "d"), "free": (239, "d")}
 TOKENS: Dict[str, Style] = {
     "text": (None, ""), "bold": (None, "b"), "dim": (8, ""), "frame": (8, ""), "title": (None, "b"), "key": (None, "b"),
+    "key-active": (None, "bu"),
     "accent": (4, ""), "cursor": (None, "b"), "status-normal": (None, ""), "ok": (2, ""), "warn": (3, ""),
     "bad": (1, ""), "legacy": (5, ""), "badge-ok": (2, "br"), "badge-warn": (3, "br"), "badge-bad": (1, "br"),
     "track": (8, ""), "free": (8, "")}

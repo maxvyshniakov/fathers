@@ -247,14 +247,13 @@ class PageTests(Case):
         state = self.keys(self.screen(), "2")
         self.assertEqual("lanes", state.ui.page)
         self.assertIn("update lanefather", self.text())
-        self.assertNotIn("(", self.text().split("\n")[0], "no badge for unsupported tool")
 
     def test_stale_is_dimmed_with_its_time(self) -> None:
         since = datetime.datetime(2026, 11, 4, 9, 0, tzinfo=datetime.UTC)
         self.tools = {"lanefather": state_module.Tool("lanefather", "stale", "timed out", decoded(), since)}
         self.keys(self.screen(), "2")
         self.assertRegex(self.text(), r"stale since \d\d:\d\d")
-        self.assertEqual({"dim"}, {cell[1] for row in self.canvas.cells[1:self.canvas.height - 1] for cell in row
+        self.assertEqual({"dim"}, {cell[1] for row in self.canvas.cells[:self.canvas.height - 1] for cell in row
                                    if str(cell[0]).strip()})
 
     def test_the_error_project_shows_and_the_rest_works(self) -> None:
@@ -264,13 +263,20 @@ class PageTests(Case):
 
 
 class LinkTests(Case):
-    def test_the_summary_counts_and_opens_the_page(self) -> None:
+    def test_pages_hint_leads_footer_underlines_active_and_clicks_open_pages(self) -> None:
         state = self.screen()
-        header = self.text().splitlines()[0]
-        self.assertIn("Godfather   1 Overview   2 Lanes (4 · 1 review · 🔥 gate red)", header)
-        state = self.click(state, *self.at("2 Lanes"))
+        footer = self.text().splitlines()[-1]
+        self.assertIn("1 2 pages   ↑↓ select", footer)
+        self.assertNotIn("2 lanes", self.text().splitlines()[4], "SLOTS keeps a clean bottom border")
+        col, row = self.at("1 2 pages")
+        self.assertEqual("key-active", self.canvas.cells[row][col][1], "overview key underlined")
+        self.assertEqual("key", self.canvas.cells[row][col + 2][1])
+        state = self.click(state, col + 2, row)
         self.assertEqual("lanes", state.ui.page)
-        state = self.click(state, *self.at("1 Overview"))
+        col, row = self.at("1 2 pages")
+        self.assertEqual("key", self.canvas.cells[row][col][1])
+        self.assertEqual("key-active", self.canvas.cells[row][col + 2][1], "lanes key underlined")
+        state = self.click(state, col, row)
         self.assertEqual("overview", state.ui.page)
 
     def test_the_lane_row_in_details_opens_the_page_on_that_lane(self) -> None:
@@ -320,7 +326,7 @@ class LiveTests(unittest.TestCase):
         env = {key: value for key, value in os.environ.items() if not key.startswith(("GODFATHER_", "SLOTFATHER_"))}
         env.update(GODFATHER_FIXTURES=str(LANES), TZ="UTC")
         screen = terminal.Terminal(self, env, 43, 156, [sys.executable, str(terminal.ENTRY), "--interval", "0.5"])
-        screen.receive("2 Lanes (4", "644-build-once · Straylight")
+        screen.receive("1 2 3 pages", "644-build-once · Straylight")
         at = screen.mark()
         screen.write("2")
         screen.receive("LANE DETAILS", "sid-kit · config not found", since=at)

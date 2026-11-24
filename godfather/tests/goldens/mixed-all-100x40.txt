@@ -1,4 +1,3 @@
- Godfather   1 Overview   2 Lanes   3 Spawns
 ╭─ SLOTS ──────────────────────────────────────────────────────────── 12 cores · 6 slots (manual) ─╮
 │                                                                                                  │
 │  🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅  🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅  🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅  🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅  ╭────────────╮  ╭────────────╮  │
@@ -22,6 +21,7 @@
 │  11:58:33  slot run         agent-a1c75285bdf2cd615 · ok 1m13s · 1 slot                          │
 │  11:58:10  lane gate        Straylight cedf8b972d · red · 19m                                    │
 │  11:57:48  lane post-merge  710-speech-paste-phase · green · narrowed                            │
+│  11:57:15  slot run         agent-a1c75285bdf2cd615 · ok 1m34s · 1 slot                          │
 │                                                                                                  │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
 ╭─ MACHINE ─────────── queue ahead · 2 waiting ─╮ ╭─ LEASE DETAILS ────────────────────────────────╮
@@ -37,4 +37,4 @@
 │  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  │ │  owner pid  10000                              │
 │  −85s   avg 4.4/6 · peak 6 · full 10%    now  │ │                                                │
 ╰─ slots held ──────────────────────────────────╯ ╰────────────────────────────────────────────────╯
- what's new?    ↑↓ select   1 2 3 pages   s settings   ? help   q quit     updated 11:59:39  ● live
+ Godfather what's new?      1 2 3 pages   ↑↓ select   ? help   q quit      updated 11:59:39  ● live

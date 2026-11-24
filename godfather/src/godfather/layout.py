@@ -37,9 +37,8 @@ class Rect(NamedTuple):
 
 WIDE = 110  # columns from which the panels sit in two columns
 SMALL_WIDTH, SMALL_HEIGHT = 50, 14  # below either, only the slots and a note
-HEADER_HEIGHT = 1  # the top header bar (title and page tabs)
 SLOTS_HEIGHT = 5
-SMALL_NOTE_ROW = HEADER_HEIGHT + 6
+SMALL_NOTE_ROW = 6
 RIGHT_MIN = 52  # the right column's least width; it takes 2/5 of the screen where that is more
 NARROW_MACHINE, NARROW_DETAILS = 44, 38  # the least width each takes side by side in one column; below both, EVENTS
 # goes and DETAILS takes the band
@@ -158,12 +157,10 @@ def overview(width: int, height: int, rows: int, machine_natural: Callable[[int]
     (the views ask for its key fields in their frame, the most any QUEUE entry has, or its least with nothing to
     show)."""
     if width < SMALL_WIDTH or height < SMALL_HEIGHT:
-        return Overview("small", {}, ("requests",), Rect(min(HEADER_HEIGHT + 2, max(HEADER_HEIGHT, height - 4)), 3, 2,
-                                                         width - 6),
+        return Overview("small", {}, ("requests",), Rect(min(2, height - 4), 3, 2, width - 6),
                         SMALL_NOTE_ROW if SMALL_NOTE_ROW < height - 1 else None)
     queue = queue_height(rows)
-    body = height - HEADER_HEIGHT - 1  # rows between the header bar and the footer
-    available = body - SLOTS_HEIGHT  # rows below SLOTS
+    available = height - 1 - SLOTS_HEIGHT  # the footer row and SLOTS
     panels: dict[str, Rect] = {}
     if width >= WIDE:
         right = max(RIGHT_MIN, width * 2 // 5)
@@ -172,16 +169,16 @@ def overview(width: int, height: int, rows: int, machine_natural: Callable[[int]
             # Short (fathers#140): EVENTS cannot have its least rows under QUEUE's, so QUEUE has its rows (less any
             # MACHINE's three-row form needs), MACHINE's compact line the rest under it, DETAILS the right column
             rows = min(queue, available - MACHINE_SHORT)
-            column(panels, ("requests", "machine"), {"requests": rows, "machine": available - rows},
-                   HEADER_HEIGHT + SLOTS_HEIGHT, 0, left)
-            panels["details"] = Rect(HEADER_HEIGHT, left + 1, body, right)
+            column(panels, ("requests", "machine"), {"requests": rows, "machine": available - rows}, SLOTS_HEIGHT, 0,
+                   left)
+            panels["details"] = Rect(0, left + 1, height - 1, right)
         else:
             heights = stack(available, (Tier((("requests", min(queue, QUEUE_MIN)), ("events", EVENTS_MIN)),
                                              grow=("requests",), rest=("events", "requests")),), {"requests": queue})
-            column(panels, ("requests", "events"), heights, HEADER_HEIGHT + SLOTS_HEIGHT, 0, left)
-            sides = stack(body, (Tier((("details", DETAILS_WIDE_MIN), ("machine", MACHINE_MIN)),
-                                      grow=("machine",), rest=("details",)),), {"machine": machine_natural(right)})
-            column(panels, ("details", "machine"), sides, HEADER_HEIGHT, left + 1, right)
+            column(panels, ("requests", "events"), heights, SLOTS_HEIGHT, 0, left)
+            sides = stack(height - 1, (Tier((("details", DETAILS_WIDE_MIN), ("machine", MACHINE_MIN)),
+                                            grow=("machine",), rest=("details",)),), {"machine": machine_natural(right)})
+            column(panels, ("details", "machine"), sides, 0, left + 1, right)
         arrangement = "wide"
         slots_width = left
     else:
@@ -193,7 +190,7 @@ def overview(width: int, height: int, rows: int, machine_natural: Callable[[int]
             Band("band", floors(EVENTS_LEAST, EVENTS_MIN) if details_width else floors(DETAILS_FLOOR, DETAILS_MIN)),
             Band("bottom", floors(bottom, machine_rows, MACHINE_BARE, MACHINE_MIN), bottom)),
             give_way=("bottom", "band"), grow=("requests", "bottom"), rest=("band", "requests"))
-        column(panels, ("requests", "band", "bottom"), heights, HEADER_HEIGHT + SLOTS_HEIGHT, 0, width)
+        column(panels, ("requests", "band", "bottom"), heights, SLOTS_HEIGHT, 0, width)
         band, row = panels.pop("band", None), panels.pop("bottom", None)
         if band is not None and row is not None and details_width:
             # EVENTS the full-width band; MACHINE on the left and DETAILS on the right under it (owner, fathers#169)
@@ -207,8 +204,8 @@ def overview(width: int, height: int, rows: int, machine_natural: Callable[[int]
                 panels["machine"] = row
         arrangement = "column"
         slots_width = width
-    panels = {"slots": Rect(HEADER_HEIGHT, 0, SLOTS_HEIGHT, slots_width), **panels}
-    return Overview(arrangement, panels, tab_order(panels), Rect(HEADER_HEIGHT + 2, 3, 2, slots_width - 6))
+    panels = {"slots": Rect(0, 0, SLOTS_HEIGHT, slots_width), **panels}
+    return Overview(arrangement, panels, tab_order(panels), Rect(2, 3, 2, slots_width - 6))
 
 
 def column(panels: dict[str, Rect], names: tuple[str, ...], heights: dict[str, int], y: int, x: int,
@@ -229,10 +226,9 @@ def page(width: int, height: int, rows: int, table: str) -> Overview:
     from the height that gives it its least rows under the table's least, so panels only ever arrive as the terminal
     grows. One column: the table, the details, then the strip. Small: only a note."""
     if width < SMALL_WIDTH or height < SMALL_HEIGHT:
-        return Overview("small", {}, (table,), Rect(HEADER_HEIGHT, 3, 0, width - 6),
-                        HEADER_HEIGHT if height > HEADER_HEIGHT + 1 else None)
+        return Overview("small", {}, (table,), Rect(0, 3, 0, width - 6), 1 if height > 2 else None)
     natural = queue_height(rows)
-    available = height - HEADER_HEIGHT - 1  # the header bar and footer row
+    available = height - 1  # the footer row
     panels: dict[str, Rect] = {}
     if width >= WIDE:
         right = max(RIGHT_MIN, width * 2 // 5)
@@ -241,18 +237,18 @@ def page(width: int, height: int, rows: int, table: str) -> Overview:
                                          rest=("events", table), whole=True),
                                     Tier(((table, min(natural, QUEUE_MIN)),), grow=(), rest=(table,))),
                         {table: natural})
-        column(panels, (table, "events"), heights, HEADER_HEIGHT, 0, left)
-        panels["details"] = Rect(HEADER_HEIGHT, left + 1, available, right)
+        column(panels, (table, "events"), heights, 0, 0, left)
+        panels["details"] = Rect(0, left + 1, available, right)
         order = (table, *(name for name in ("events",) if name in panels), "details")
-        return Overview("wide", panels, order, Rect(HEADER_HEIGHT, 0, 0, left))
+        return Overview("wide", panels, order, Rect(0, 0, 0, left))
     heights = stack(available, (
         Tier(((table, min(natural, QUEUE_FLOOR)), ("details", DETAILS_FLOOR), ("events", EVENTS_MIN)),
              grow=(table, "events"), rest=("details", table), whole=True),
         Tier(((table, min(natural, QUEUE_MIN)), ("details", DETAILS_MIN)), grow=(table,), rest=("details", table))),
         {table: natural, "events": EVENTS_MIN + 4})
-    column(panels, (table, "details", "events"), heights, HEADER_HEIGHT, 0, width)
+    column(panels, (table, "details", "events"), heights, 0, 0, width)
     order = tuple(name for name in (table, "details", "events") if name in panels)
-    return Overview("column", panels, order if table in order else (table, *order), Rect(HEADER_HEIGHT, 0, 0, width))
+    return Overview("column", panels, order if table in order else (table, *order), Rect(0, 0, 0, width))
 
 
 def tab_order(panels: dict[str, Rect]) -> tuple[str, ...]:
@@ -391,5 +387,5 @@ NOTICE_WIDTH, NOTICE_HEIGHT = 12, 5  # below either the notice is one line, with
 
 
 def notice(width: int, height: int, lines: int) -> Rect:
-    """The one panel that stands in for the overview: as tall as its lines, between the header and footer."""
-    return Rect(HEADER_HEIGHT, 0, min(max(0, height - HEADER_HEIGHT - 1), lines + 4), width)
+    """The one panel that stands in for the overview: as tall as its lines, above the footer."""
+    return Rect(0, 0, min(height - 1, lines + 4), width)

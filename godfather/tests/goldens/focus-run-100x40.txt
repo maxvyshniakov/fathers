@@ -1,4 +1,3 @@
- Godfather
 ╭─ SLOTS ──────────────────────────────────────────────────────────── 12 cores · 6 slots (manual) ─╮
 │                                                                                                  │
 │  🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅  🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅  🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅  🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅  ╭────────────╮  ╭────────────╮  │
@@ -21,6 +20,7 @@
 ┃  11:57:15  ▫       agent-a1c75285bdf2cd615                       no wait  ok 1m34s        21200  ┃
 ┃  11:55:44  ▪▪      desktop                                       no wait  running 3m55s   10002  ┃
 ┃  11:55:31  ▫       desktop                                       no wait  exit 1 · 7s     21199  ┃
+┃  11:55:26  ▫       agent-a1c75285bdf2cd615                       no wait  ok 1m20s        21198  ┃
 ┃                                                                                                  ┃
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
 ╭─ MACHINE ─────────── queue ahead · 2 waiting ─╮ ╭─ RUN DETAILS ──────────────────────────────────╮
@@ -37,4 +37,4 @@
 │  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  │ │            same plan                           │
 │  −85s   avg 4.4/6 · peak 6 · full 10%    now  │ │                                                │
 ╰─ slots held ──────────────────────────────────╯ ╰────────────────────────────────────────────────╯
- what's new?     ↑↓ select   tab panel   s settings   ? help   q quit      updated 11:59:39  ● live
+ Godfather what's new?      ↑↓ select   s settings   ? help   q quit       updated 11:59:39  ● live

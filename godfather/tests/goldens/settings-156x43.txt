@@ -1,43 +1,43 @@
- Godfather
 ╭─ SLOTS ───────────────────────────────────────────────────── 12 cores · 6 slots (manual) ─╮ ╭─ LEASE DETAILS ────────────────────────────────────────────╮
-│                                     ╭─ SETTINGS ────────────────────── a change saves after a second, or on Enter ─╮                                     │
-│  🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅  🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅  🮅🮅🮅🮅🮅│                                                                              │uild-once                           ┃│
-│  lane-644-bui…  lane-465-sta…  deskt│  GODFATHER · this dashboard only                                             │1 slot                              ┃│
-╰─────────────────────────────────────│    Refresh every             1s                                              │                                    ┃│
-┏━ QUEUE ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━│    Colour theme              Auto                                            │                                    ┃│
-┃                                     │  ──────────────────────────────────────────────────────────────────────────  │                                    ┃│
-▌  ▶️    lane-644-build-once          │  SLOTFATHER · status read-only, live                                         │ 0.9 of 2 cores                     ┃│
-┃  ▶️    lane-465-state-definitions-re│    queue        ~/.local/state/slotfather                                    │ waited 19m34s · running 35m10s     ┃│
-┃  ▶️    desktop                      │    slots        6 total · 2 free · 4 held · 2 waiting                        │ processes                          ┃│
-┃                                     │    capacity     6 slots · saved, fixed count                                 │                                    ┃│
-┃  ⏸️    prof51                       │    budgets      CPU 4 (12 cores) · memory 16 (64 GiB)                        │ht/.claude/worktrees/agent-afa3816b ┃│
-┃  ⏸️    lane-555-host-rename-names   │    draining     none                                                         │                                    ┃│
-┃                                     │    environment  SLOTFATHER_CORES, SLOTFATHER_MEMORY_GIB                      │ht/.claude/worktrees/agent-afa3816b ┃│
-┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┃  ▶ Capacity                  ‹ Fixed ›                                       ┃verify.sh --checks desktop-tests    ┃│
-╭─ SLOTS LOG ─────── label ───────────│    Slots                     6                                               │ng --jobs 1                         ┃│
-│                                     │    Queue order               Backfill                                        │ht                                  ┃│
-│  11:59:35  ▫       agent-ae72d94beb6│    Backfill margin           3×                                              │                                    ┃│
-│  11:58:33  ▫       agent-a1c75285bdf│    Unknown job runtime       1h                                              │once                                ┃│
-│  11:57:15  ▫       agent-a1c75285bdf│    Overrun estimate          0.5×                                            │                                    ┃│
-│  11:55:44  ▪▪      desktop          │    Overtaking stops after    never                                           │                                    ┃│
-│  11:55:31  ▫       desktop          │    Interactive head start    30m                                             │uild-once                           ┃│
-│  11:55:26  ▫       agent-a1c75285bdf│    Batch held back           30m                                             │queue-347                           ┃│
-│  11:55:00  ▫       desktop          │    Batch promoted after      30m                                             │s                                   ┃│
-│  11:54:02  ▫       agent-a1c75285bdf│    Normal promoted after     1h                                              │d                                   ┃│
-│  11:52:53  ▫       agent-a1c75285bdf│    Warn after waiting        30m                                             │fication_plan.py, tools/verify.py,  ┃│
-│  11:52:30  ▫       desktop          │    Reservation timeout       30m                                             │in-module.sh, tools/test-build-     ┃│
-│  11:51:40  ▫       post-merge-456-re│    Memory admission share    0.85                                            │ule.py, tools/app-build.py,         ┃│
-│  11:51:24  ▫       agent-a1c75285bdf│    Default job peak memory   2048 MB                                         │-app-build.py, tools/cargo-test.py, ┃│
-│  11:49:34  ▫▫      data-grid        │    Idle when below           0.1 cores                                       │opment.md, tools/test-cargo-build-  ┃│
-│  11:48:30  ▫       agent-ae72d94beb6│    Idle for                  5m                                              │tools/test-heavy.py,                ┃│
-│  11:47:21  ▫       agent-a0f998f4c57│    Ask to yield after        2m                                              │o_build_cache.py                     │
-│  11:47:17  ▫       agent-a0f998f4c57│                                                                              │                                     │
-│  11:47:13  ▫       agent-a0f998f4c57│  ──────────────────────────────────────────────────────────────────────────  │─────────────────────────────────────╯
-│  11:47:10  ▫       agent-a0f998f4c57│  Shared by every client. Automatic: the lower of the CPU and memory          │eased 0.4 · queue ahead · 2 waiting ─╮
-│  11:47:07  ▫       agent-a0f998f4c57│  budgets.                                                                    │        slots held  avg 4.4/6        │
-│  11:47:04  ▫       agent-a0f998f4c57│                                                                              │9.3/12  ▂▂▂▂▂       ▂▄▂▂▂▄▄▂▂  ▂ ▂   │
-│  11:46:08  ▫       post-merge-491-el│           ↑↓ select   ←→ change   enter edit   d reset   esc close           │normal  █████▇▄▇▄▄▄▇█████████▇▇█▇█▇  │
-│  11:45:53  ▫       agent-a1c75285bdf╰──────────────────────────────────────────────────────────────────────────────╯4.4/6G  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  │
+│                                                                                           │ │                                                            │
+│  🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅  🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅  🮅🮅🮅🮅🮅╭─ SETTINGS ────────────────────── a change saves after a second, or on Enter ─╮uild-once                            │
+│  lane-644-bui…  lane-465-sta…  deskt│                                                                              │1 slot                               │
+╰─────────────────────────────────────│  GODFATHER · this dashboard only                                             │                                     │
+┏━ QUEUE ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━│    Refresh every             1s                                              │                                     │
+┃                                     │    Colour theme              Auto                                            │                                     │
+▌  ▶️    lane-644-build-once          │  ──────────────────────────────────────────────────────────────────────────  │ 0.9 of 2 cores                      │
+┃  ▶️    lane-465-state-definitions-re│  SLOTFATHER · status read-only, live                                         │ waited 19m34s · running 35m10s      │
+┃  ▶️    desktop                      │    queue        ~/.local/state/slotfather                                    │ processes                           │
+┃                                     │    slots        6 total · 2 free · 4 held · 2 waiting                        │                                     │
+┃  ⏸️    prof51                       │    capacity     6 slots · saved, fixed count                                 │ht/.claude/worktrees/agent-afa3816b  │
+┃  ⏸️    lane-555-host-rename-names   │    budgets      CPU 4 (12 cores) · memory 16 (64 GiB)                        │                                     │
+┃                                     │    draining     none                                                         │ht/.claude/worktrees/agent-afa3816b  │
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━│    environment  SLOTFATHER_CORES, SLOTFATHER_MEMORY_GIB                      │verify.sh --checks desktop-tests     │
+╭─ SLOTS LOG ─────── label ───────────┃  ▶ Capacity                  ‹ Fixed ›                                       ┃ng --jobs 1                          │
+│                                     │    Slots                     6                                               │ht                                   │
+│  11:59:35  ▫       agent-ae72d94beb6│    Queue order               Backfill                                        │                                     │
+│  11:58:33  ▫       agent-a1c75285bdf│    Backfill margin           3×                                              │once                                 │
+│  11:57:15  ▫       agent-a1c75285bdf│    Unknown job runtime       1h                                              │                                     │
+│  11:55:44  ▪▪      desktop          │    Overrun estimate          0.5×                                            │                                     │
+│  11:55:31  ▫       desktop          │    Overtaking stops after    never                                           │uild-once                            │
+│  11:55:26  ▫       agent-a1c75285bdf│    Interactive head start    30m                                             │queue-347                            │
+│  11:55:00  ▫       desktop          │    Batch held back           30m                                             │s                                    │
+│  11:54:02  ▫       agent-a1c75285bdf│    Batch promoted after      30m                                             │d                                    │
+│  11:52:53  ▫       agent-a1c75285bdf│    Normal promoted after     1h                                              │fication_plan.py, tools/verify.py,   │
+│  11:52:30  ▫       desktop          │    Warn after waiting        30m                                             │in-module.sh, tools/test-build-      │
+│  11:51:40  ▫       post-merge-456-re│    Reservation timeout       30m                                             │ule.py, tools/app-build.py,          │
+│  11:51:24  ▫       agent-a1c75285bdf│    Memory admission share    0.85                                            │-app-build.py, tools/cargo-test.py,  │
+│  11:49:34  ▫▫      data-grid        │    Default job peak memory   2048 MB                                         │opment.md, tools/test-cargo-build-   │
+│  11:48:30  ▫       agent-ae72d94beb6│    Idle when below           0.1 cores                                       │tools/test-heavy.py,                 │
+│  11:47:21  ▫       agent-a0f998f4c57│    Idle for                  5m                                              │o_build_cache.py                     │
+│  11:47:17  ▫       agent-a0f998f4c57│    Ask to yield after        2m                                              │                                     │
+│  11:47:13  ▫       agent-a0f998f4c57│                                                                              │                                     │
+│  11:47:10  ▫       agent-a0f998f4c57│  ──────────────────────────────────────────────────────────────────────────  │─────────────────────────────────────╯
+│  11:47:07  ▫       agent-a0f998f4c57│  Shared by every client. Automatic: the lower of the CPU and memory          │eased 0.4 · queue ahead · 2 waiting ─╮
+│  11:47:04  ▫       agent-a0f998f4c57│  budgets.                                                                    │        slots held  avg 4.4/6        │
+│  11:46:08  ▫       post-merge-491-el│                                                                              │9.3/12  ▂▂▂▂▂       ▂▄▂▂▂▄▄▂▂  ▂ ▂   │
+│  11:45:53  ▫       agent-a1c75285bdf│           ↑↓ select   ←→ change   enter edit   d reset   esc close           │normal  █████▇▄▇▄▄▄▇█████████▇▇█▇█▇  │
+│  11:45:09  ▫       agent-a1c75285bdf╰──────────────────────────────────────────────────────────────────────────────╯4.4/6G  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  │
 │                                                                                           │ │                               −80s                    now  │
 ╰───────────────────────────────────────────────────────────────────────────────────────────╯ ╰────────────────────────────────────────────────────────────╯
- what's new?                                 ↑↓ select   tab panel   s settings   ? help   q quit                                  updated 11:59:39  ● live
+ Godfather what's new?                            ↑↓ select   tab panel   s settings   ? help   q quit                             updated 11:59:39  ● live

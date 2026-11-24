@@ -134,10 +134,14 @@ class Canvas:
                 self.links.pop((row, column), None)
             self.unsplit(row, max(0, x), min(self.width, x + width))
 
-    def hint(self, y: int, x: int, key: str, action: str, width: int | None = None) -> int:
+    def hint(self, y: int, x: int, key: str, action: str, width: int | None = None, active: str = "") -> int:
         """One footer hint, key and label, drawn and made a click target that does what its key does (HINT_KEYS):
         the one registry both drawing and clicks use. The column after it."""
-        end = self.segments(y, x, [(key, "key"), (f" {action}", "dim")], width)
+        if active and active in key:
+            parts = [(char, "key-active" if char == active else "key") for char in key] + [(f" {action}", "dim")]
+        else:
+            parts = [(key, "key"), (f" {action}", "dim")]
+        end = self.segments(y, x, parts, width)
         presses = HINT_KEYS.get(key)
         if presses is None and key.replace(" ", "").isdigit():  # `1 2 3 pages`: each digit its own key
             presses = tuple(key)
@@ -224,7 +228,8 @@ def sgr(style: str, selected: bool | str, theme: _theme.Theme | None = None) -> 
     back = (theme.tints.get(selected) if isinstance(selected, str) else None) or theme.selection \
         if selected else None
     bold = "b" in flags or (bool(selected) and back is None)
-    codes = ["0"] + (["1"] if bold else []) + (["2"] if "d" in flags and fore is None else [])
+    codes = (["0"] + (["1"] if bold else []) + (["2"] if "d" in flags and fore is None else [])
+             + (["4"] if "u" in flags else []))
     codes += _theme.sgr_colour(fore)
     if back is not None:
         codes += _theme.sgr_colour(back, 4)

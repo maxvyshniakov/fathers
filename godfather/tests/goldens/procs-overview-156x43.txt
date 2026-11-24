@@ -1,4 +1,3 @@
- Godfather   1 Overview   2 Lanes (4 · 1 review · 🔥 gate red)   3 Spawns (1 orphan · 1 expired · 1 unowned)
 ╭─ SLOTS ───────────────────────────────────────────────────── 12 cores · 6 slots (manual) ─╮ ╭─ LEASE DETAILS ────────────────────────────────────────────╮
 │                                                                                           │ │                                                            │
 │  🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅  🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅  🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅  🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅🮅  ╭───────────╮  ╭──────────╮  │ │  label      lane-644-build-once                            │
@@ -23,7 +22,7 @@
 │  11:55:31  ▫       desktop                                no wait  exit 1 · 7s     21199 ┃│ │  base       integrate/queue-347                            │
 │  11:55:26  ▫       agent-a1c75285bdf2cd615                no wait  ok 1m20s        21198 ┃│ │  receipt    in progress                                    │
 │  11:55:00  ▫       desktop                                no wait  ok 6s           21197 ┃│ │  review     not started                                    │
-│  11:54:02  ▫       agent-a1c75285bdf2cd615                no wait  ok 54s          21196  │ │  claims     src/part0/**, src/part1/**, src/part2/**,      │
+│  11:54:02  ▫       agent-a1c75285bdf2cd615                no wait  ok 54s          21196 ┃│ │  claims     src/part0/**, src/part1/**, src/part2/**,      │
 │  11:52:53  ▫       agent-a1c75285bdf2cd615             wait 2m21s  ok 1m13s        21195  │ │             src/part3/**, src/part4/**, src/part5/**,      │
 │  11:52:30  ▫       desktop                                no wait  ok 5s           21194  │ │             src/part6/**, src/part7/**, src/part8/**,      │
 │  11:51:40  ▫       post-merge-456-rename-compat-revi…  wait 1m07s  ok 14m38s       21193  │ │             src/part9/**, src/part10/**                    │
@@ -32,12 +31,13 @@
 │  11:48:30  ▫       agent-ae72d94beb6f08961                no wait  ok 2m36s        21190  │ │  spawns     storybook · running · 1h46m                    │
 │  11:47:21  ▫       agent-a0f998f4c57cd4c0e             wait 7m39s  ok 4s           21189  │ │                                                            │
 │  11:47:17  ▫       agent-a0f998f4c57cd4c0e                no wait  ok 3s           21188  │ │                                                            │
-│  11:47:13  ▫       agent-a0f998f4c57cd4c0e                no wait  ok 2s           21187  │ ╰────────────────────────────────────────────────────────────╯
-│  11:47:10  ▫       agent-a0f998f4c57cd4c0e             wait 5m48s  ok 3s           21186  │ ╭─ MACHINE ───────── unleased 0.4 · queue ahead · 2 waiting ─╮
-│  11:47:07  ▫       agent-a0f998f4c57cd4c0e             wait 5m11s  ok 3s           21185  │ │                               slots held  avg 4.4/6        │
-│  11:47:04  ▫       agent-a0f998f4c57cd4c0e             wait 4m34s  ok 4m56s        21184  │ │  🆗 load ■■■■■■■■■░░░ 9.3/12  ▂▂▂▂▂       ▂▄▂▂▂▄▄▂▂  ▂ ▂   │
-│  11:46:08  ▫       post-merge-491-electron-stop-flake  wait 3m57s  ok 22m39s       21183  │ │  🆗 mem  ■■■■░░░░░░░░ normal  █████▇▄▇▄▄▄▇█████████▇▇█▇█▇  │
-│  11:45:53  ▫       agent-a1c75285bdf2cd615                no wait  ok 36s          21182  │ │  🆗 swap ■■■■■■■■■░░░ 4.4/6G  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  │
+│  11:47:13  ▫       agent-a0f998f4c57cd4c0e                no wait  ok 2s           21187  │ │                                                            │
+│  11:47:10  ▫       agent-a0f998f4c57cd4c0e             wait 5m48s  ok 3s           21186  │ ╰────────────────────────────────────────────────────────────╯
+│  11:47:07  ▫       agent-a0f998f4c57cd4c0e             wait 5m11s  ok 3s           21185  │ ╭─ MACHINE ───────── unleased 0.4 · queue ahead · 2 waiting ─╮
+│  11:47:04  ▫       agent-a0f998f4c57cd4c0e             wait 4m34s  ok 4m56s        21184  │ │                               slots held  avg 4.4/6        │
+│  11:46:08  ▫       post-merge-491-electron-stop-flake  wait 3m57s  ok 22m39s       21183  │ │  🆗 load ■■■■■■■■■░░░ 9.3/12  ▂▂▂▂▂       ▂▄▂▂▂▄▄▂▂  ▂ ▂   │
+│  11:45:53  ▫       agent-a1c75285bdf2cd615                no wait  ok 36s          21182  │ │  🆗 mem  ■■■■░░░░░░░░ normal  █████▇▄▇▄▄▄▇█████████▇▇█▇█▇  │
+│  11:45:09  ▫       agent-a1c75285bdf2cd615             wait 2m43s  ok 10s          21181  │ │  🆗 swap ■■■■■■■■■░░░ 4.4/6G  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  │
 │                                                                                           │ │                               −80s                    now  │
 ╰───────────────────────────────────────────────────────────────────────────────────────────╯ ╰────────────────────────────────────────────────────────────╯
- what's new?                          ↑↓ select   tab panel   1 2 3 pages   s settings   ? help   q quit                           updated 11:59:39  ● live
+ Godfather what's new?                     1 2 3 pages   ↑↓ select   tab panel   s settings   ? help   q quit                      updated 11:59:39  ● live
