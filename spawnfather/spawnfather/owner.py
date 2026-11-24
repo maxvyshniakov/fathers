@@ -30,7 +30,7 @@ import os
 from pathlib import Path
 import re
 import time
-from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple, TypeVar
 
 from . import procs as _procs
 from . import safety as _safety
@@ -383,6 +383,15 @@ def find_claim(store: Store, session: str, words: List[str], now: Optional[float
     except (OSError, ValueError):
         pass
     return newest, ""
+
+
+_EntryT = TypeVar("_EntryT", bound=Mapping[str, Any])
+
+
+def dead_entries(entries: Sequence[_EntryT], table: _procs.Table) -> List[_EntryT]:
+    """Entries whose owning session process is confirmed dead against the process table and Claude registry."""
+    sessions = registry()
+    return [e for e in entries if alive(e.get("owner") or {}, table, sessions) is False]
 
 
 def dumps(owner: Owner) -> str:

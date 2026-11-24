@@ -474,8 +474,7 @@ def reap_command(store: Store, args: argparse.Namespace) -> int:
         liveness_table = _procs.read_or_none()
         if liveness_table is None:
             return report([], args)
-        sessions = _owner.registry()
-        selected = [e for e in selected if _owner.alive(e.get("owner") or {}, liveness_table, sessions) is False]
+        selected = _owner.dead_entries(selected, liveness_table)
         if selected and not args.dry_run and args.owner:
             from . import leftovers as _leftovers
             try:
