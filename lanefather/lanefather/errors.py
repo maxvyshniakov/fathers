@@ -10,3 +10,8 @@ class LaneRefused(LaneError):
     """A refusal by the current state that no override lifts (exit 3): Spawnfather, which removes a lane's things,
     is missing or too old (fathers#171)."""
     code = 3
+
+
+class LaneUsageError(LaneError):
+    """A CLI usage error detected after argument parsing (exit 2, formatted with the command's usage and help)."""
+    code = 2

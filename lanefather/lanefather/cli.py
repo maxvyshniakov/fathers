@@ -46,7 +46,7 @@ from . import (
     tickets,
     wait,
 )
-from .errors import LaneError
+from .errors import LaneError, LaneUsageError
 from .gitops import main_checkout
 from .host import CHECK_MAX_JOBS
 
@@ -69,9 +69,9 @@ class Command:
 
 
 COMMANDS: dict[str, Command] = {
-    "start": Command("register a lane: claims, tickets and agent brief",
+    "start": Command("register a lane, or activate a planned lane with --create",
                      "<id> --ticket N --claims GLOB... [--ticket N|--partial N...] [--decision URL...] "
-                     "[--spec PATH...] [--base REF] [--after ID...] [--fix-of ID,ID] [--create]",
+                     "[--spec PATH...] [--base REF] [--after ID...] [--fix-of ID,ID] [--create] | <id> --create",
                      "fix-login --ticket 12 --claims 'app/**' --create"),
     "next": Command("the first ready queue entry; --start registers it", "[--start] [--base REF] [--create]",
                     "--start --create"),
@@ -210,7 +210,7 @@ def parser(project: config.Config = config.DEFAULT) -> Parser:
     ticket = p.add_argument("--ticket", dest="issues", action=ScopeIssue, required=True, metavar="N",
                             help="an issue the lane completes, its merge saying Fixes #N (repeatable; the first is "
                                  "the primary ticket), or none")
-    p.required_unless.append((ticket, ("--partial",)))
+    p.required_unless.append((ticket, ("--partial", "--create")))
     p.add_argument("--partial", dest="issues", action=ScopeIssue, partial=True, metavar="N",
                    help="an issue the lane does only part of, its merge saying Refs #N (repeatable, in order with "
                         "--ticket)")
@@ -219,13 +219,15 @@ def parser(project: config.Config = config.DEFAULT) -> Parser:
                         "(repeatable)")
     p.add_argument("--spec", action="append", metavar="PATH",
                    help="a spec file the lane answers to, relative to the repository (repeatable)")
-    p.add_argument("--claims", nargs="+", required=True, metavar="GLOB")
+    claims_arg = p.add_argument("--claims", nargs="+", action="extend", required=True, metavar="GLOB")
+    p.required_unless.append((claims_arg, ("--create",)))
     p.add_argument("--base", help="integration branch or commit (default: this worktree's branch)")
     p.add_argument("--branch", help="lane branch (default: lane/<id>)")
-    p.add_argument("--after", nargs="+", default=[], metavar="ID",
-                   help="land after these lanes; their claims may overlap")
+    p.add_argument("--after", nargs="+", action="extend", default=[], metavar="ID",
+                   help="land after these lanes; their claims may overlap (repeatable)")
     p.add_argument("--scratch", nargs="+", default=[], metavar="DIR", help="extra scratch dirs done removes")
-    p.add_argument("--create", action="store_true", help="create the worktree now instead of adopting one")
+    p.add_argument("--create", action="store_true",
+                   help="create the worktree now instead of adopting one (or activate an existing planned lane)")
     p.add_argument("--fix-of", action="append", metavar="ID,ID",
                    help="a fix lane for the review findings of these landed lanes: its land is exempt from review")
     p.add_argument("--agent", type=agent_kind,
@@ -535,9 +537,12 @@ def refuse_foreign(store: state.Store, command: str, lane_id: str) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
+    loaded_cfg: config.Config | None = None
+    chosen_command: str | None = None
     try:
         loaded_cfg, cfg_err = resolve_cli_config(argv, os.getcwd())
         args = parse(argv, loaded_cfg or config.DEFAULT)
+        chosen_command = args.command
         if args.command in ("changelog", "status"):
             return args.run(args)
         if args.command in ("capabilities", "settings"):
@@ -556,6 +561,9 @@ def main(argv: list[str] | None = None) -> int:
             for lane_id in lane_ids(args):
                 refuse_foreign(store, args.command, lane_id)
         return args.run(args, store)
+    except LaneUsageError as error:
+        target = command_parser(parser(loaded_cfg or config.DEFAULT), chosen_command or "")
+        target.usage_error(str(error))
     except LaneError as error:
         print(f"lane: {error}", file=sys.stderr)
         return error.code

@@ -7,6 +7,7 @@
 ```
 lanefather start <id> --ticket N --claims GLOB... [--ticket N|--partial N...] [--decision URL...] [--spec PATH...]
                  [--base REF] [--after ID...] [--fix-of ID,ID] [--create]
+lanefather start <id> --create            activate a planned lane whose --after lanes have landed
 lanefather scope <id> [--add-ticket N] [--add-partial N] [--add-decision URL] [--add-spec PATH]
                  [--mark-partial N] [--mark-complete N] [--json]   a lane's accepted scope
 lanefather next [--start]                 the first ready entry of the ranked queue
