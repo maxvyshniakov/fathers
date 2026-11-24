@@ -18,7 +18,7 @@ import subprocess
 import sys
 from typing import Any
 
-from . import config, state
+from . import config, review_record, state
 from .errors import LaneError
 from .gitops import git, main_checkout, worktree_list
 
@@ -115,14 +115,45 @@ def gate_worktree(common: str, sha: str, project: config.Config = config.DEFAULT
     return path
 
 
+def _review_checkout_in_use(
+    stale: Path,
+    label: str,
+    *,
+    self_pid: int,
+    protected: set[Path],
+    pid_liveness: dict[int, bool],
+) -> bool:
+    """Whether `stale` belongs to another live review process and must not be removed (fathers#60)."""
+    if Path(os.path.realpath(stale)) in protected:
+        return True
+    prefix = f"{label}-checkout-"
+    suffix = stale.name.removeprefix(prefix)
+    if suffix.isdigit():
+        other_pid = int(suffix)
+        if other_pid == self_pid:
+            return False
+        if other_pid in pid_liveness:
+            return pid_liveness[other_pid]
+        return review_record.alive(other_pid)
+    return False
+
+
 @contextlib.contextmanager
 def review_checkout(store: state.Store, main: str, label: str, tip: str) -> Generator[str]:
-    """A worktree detached at the reviewed tip, removed on every exit path, so landing and done go on meanwhile."""
+    """A worktree detached at the reviewed tip, removed on every exit path, so landing and done go on meanwhile.
+    Skips checkouts owned by live or still-running superseded review processes (fathers#60)."""
     root = store.reviews_dir
     root.mkdir(parents=True, exist_ok=True)
+    self_pid = os.getpid()
+    path = root / f"{label}-checkout-{self_pid}"
+    self_real = Path(os.path.realpath(path))
+    protected, pid_liveness = review_record.live_checkout_info(store, label)
     for stale in root.glob(f"{label}-checkout-*"):
+        if Path(os.path.realpath(stale)) != self_real and _review_checkout_in_use(
+            stale, label, self_pid=self_pid, protected=protected, pid_liveness=pid_liveness
+        ):
+            continue
         remove_checkout(main, stale)
-    path = root / f"{label}-checkout-{os.getpid()}"
     try:
         git(main, "worktree", "add", "-q", "--detach", str(path), tip)
         yield str(path)

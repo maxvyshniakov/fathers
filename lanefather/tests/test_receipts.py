@@ -749,10 +749,10 @@ class ReceiptReadersTableTests(LaneCase):
                 {"version": 1, "label": "rv", "status": "running", "pid": dead_pid,
                  "started": "2026-11-21T10:00:00Z", "log": "/tmp/rv.log"},
                 {
-                    # Disagreement preserved in Tidy 3 (#71): show reports raw 'running' on a dead review,
-                    # while status reports 'stopped' and list/review_state report 'review died'.
+                    # Resolved in fathers#60: show and status both report 'stopped' on a dead review,
+                    # while list/review_state report 'review died'.
                     "list_tail": f"review died (pid {dead_pid}, /tmp/rv.log): rerun lanefather review rv",
-                    "show_review": {"status": "running", "findings": 0, "unresolved": 0},
+                    "show_review": {"status": "stopped", "findings": 0, "unresolved": 0},
                     "status_review": {"status": "stopped", "open": 0, "findings": 0},
                     "gate_held": True,
                 },

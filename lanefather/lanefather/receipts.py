@@ -623,21 +623,7 @@ class LaneView:
             return False
         return self.check.tree_match
 
-    def _review_status_for_show(self) -> str:
-        # Behaviour preserved in Tidy 3 (#71): show reports raw 'running' on a dead review until #60.
-        if isinstance(self.review, review_record.Absent):
-            return "not started"
-        if isinstance(self.review, (review_record.Running, review_record.Died)):
-            return "running"
-        if isinstance(self.review, review_record.Exempt):
-            return "exempt"
-        if isinstance(self.review, review_record.Stale):
-            return "stale"
-        if isinstance(self.review, (review_record.PartialPanel, review_record.Unmarked, review_record.Complete)):
-            return "finished"
-        return self.review.raw_status or "not started"
-
-    def _review_status_for_status(self) -> str:
+    def _review_status(self) -> str:
         if isinstance(self.review, review_record.Absent):
             return "not started"
         if isinstance(self.review, review_record.Running):
@@ -700,7 +686,7 @@ class LaneView:
         }
         repo_url = f"https://github.com/{self.repository}" if self.repository else None
         review_block: dict[str, Any] = {
-            "status": self._review_status_for_show(),
+            "status": self._review_status(),
             "findings": self.findings_count,
             "unresolved": self.open_findings_count,
         }
@@ -736,7 +722,7 @@ class LaneView:
     def for_status(self) -> dict[str, Any]:
         """The per-lane entry rendered inside `status --json`."""
         review_block: dict[str, Any] = {
-            "status": self._review_status_for_status(),
+            "status": self._review_status(),
             "open": self.open_findings_count,
             "findings": self.findings_count,
         }

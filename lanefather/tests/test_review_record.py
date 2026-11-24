@@ -641,5 +641,193 @@ class StaleAndDeltaReviewRecordTests(unittest.TestCase):
         self.assertEqual(found.get("a", {}).get("review"), str(delta_log))
 
 
+class ProcessIdentityAndSupersededRunTests(unittest.TestCase):
+    """fathers#60: `(pid, start)` process identity, recycled PID -> Died, start fencing, and superseded tracking."""
+
+    def setUp(self) -> None:
+        self.tmp = pathlib.Path(tempfile.mkdtemp(prefix="lane-proc-id-"))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.store = state.Store(config.Config(project="Alpha"), directory=self.tmp / "state")
+        self.store.directory.mkdir(parents=True, exist_ok=True)
+
+    def test_recycled_pid_with_mismatched_start_reads_as_died_for_primary_and_delta(self) -> None:
+        live_pid = os.getpid()
+        real_start = review_record.process_start(live_pid)
+        self.assertIsInstance(real_start, str)
+        stale_start = "Mon Jan 01 00:00:00 2020"
+
+        # Matching (pid, start) reads Running.
+        running_v = review_record.derive_verdict(
+            {"status": "running", "pid": live_pid, "start": real_start, "started": "t0", "log": "/l"}
+        )
+        self.assertIsInstance(running_v, Running)
+        assert isinstance(running_v, Running)
+        self.assertEqual(running_v.start, real_start)
+
+        # Live PID with different recorded start time reads Died.
+        died_v = review_record.derive_verdict(
+            {"status": "running", "pid": live_pid, "start": stale_start, "started": "t0", "log": "/l"}
+        )
+        self.assertIsInstance(died_v, Died)
+        assert isinstance(died_v, Died)
+        self.assertEqual(died_v.start, stale_start)
+
+        # Malformed or non-finite start values fail closed to Died (strict JSON boundary typing).
+        bad_starts: tuple[Any, ...] = ("", "   ", True, False, [], {}, float("nan"), float("inf"), float("-inf"))
+        for bad_start in bad_starts:
+            with self.subTest(bad_start=bad_start):
+                self.assertIsInstance(
+                    review_record.derive_verdict(
+                        {"status": "running", "pid": live_pid, "start": bad_start, "started": "t0", "log": "/l"}
+                    ),
+                    Died,
+                )
+
+        # Overflowing PIDs never crash `alive()`.
+        self.assertFalse(review_record.alive(99_999_999_999_999_999_999))
+
+        # Corrupted start in `live_checkout_info` falls back to `alive(pid)` so a live review keeps its checkout.
+        corrupt_checkout = self.tmp / "reviews" / "a-checkout-corrupt"
+        state.write_json(
+            self.store.receipt_path("a", "review"),
+            {
+                "version": 1,
+                "label": "a",
+                "status": "running",
+                "pid": live_pid,
+                "start": float("nan"),
+                "checkout": str(corrupt_checkout),
+            },
+        )
+        protected, pid_liveness = review_record.live_checkout_info(self.store, "a")
+        self.assertIn(pathlib.Path(os.path.realpath(corrupt_checkout)), protected)
+        self.assertIs(pid_liveness.get(live_pid), True)
+
+        # Overall review Died hint names `--overall <sha>`, not `review ship-...`.
+        dead_overall = ReviewRecord.from_raw(
+            "ship-abcdef123456",
+            {
+                "version": 1,
+                "label": "ship-abcdef123456",
+                "kind": "overall",
+                "sha": "abcdef1234567890abcdef1234567890abcdef12",
+                "status": "running",
+                "pid": 999_999_999,
+                "started": "t0",
+                "log": "/tmp/o.log",
+            },
+        )
+        overall_lines = review.review_lines(dead_overall, prog="lanefather")
+        self.assertIn("rerun lanefather review --overall abcdef1234", overall_lines[0])
+
+        # Legacy receipt without `start` falls back to PID liveness.
+        self.assertIsInstance(
+            review_record.derive_verdict({"status": "running", "pid": live_pid, "started": "t0", "log": "/l"}),
+            Running,
+        )
+        self.assertIsInstance(
+            review_record.derive_verdict({"status": "running", "pid": 999_999_999, "started": "t0", "log": "/l"}),
+            Died,
+        )
+
+        # Delta review with live PID but mismatched start time also reads Died under Stale.
+        rec: state.Record = {
+            "id": "a",
+            "status": "landed",
+            "common_dir": "/nonexistent/repo/.git",
+            "created": "2026-11-17T00:00:00Z",
+            "landed": {"merge": "m2", "tip": "tip-two", "tree": "tree-two"},
+        }
+        delta_stale = review_record.derive_verdict(
+            {
+                "status": "finished",
+                "kind": "lane",
+                "tip": "tip-one",
+                "tree": "tree-one",
+                "findings": [],
+                "delta": {
+                    "kind": "delta",
+                    "base": "tip-one",
+                    "tip": "tip-two",
+                    "tree": "tree-two",
+                    "status": "running",
+                    "pid": live_pid,
+                    "start": stale_start,
+                    "started": "t0",
+                    "log": "/d.log",
+                },
+            },
+            record=rec,
+        )
+        self.assertIsInstance(delta_stale, review_record.Stale)
+        assert isinstance(delta_stale, review_record.Stale)
+        self.assertIsInstance(delta_stale.delta, Died)
+
+    def test_start_fencing_rejects_same_pid_with_different_start_and_records_superseded(self) -> None:
+        live_pid = os.getpid()
+        other_pid = os.getppid()
+        self.assertNotEqual(live_pid, other_pid)
+        live_start = review_record.process_start(live_pid)
+        other_start = review_record.process_start(other_pid)
+        stale_start = "Mon Jan 01 00:00:00 2020"
+
+        # Worker 1 starts; Worker 2 forces a rerun -> Worker 1 is recorded as superseded.
+        rev1 = ReviewRecord.begin(
+            self.store, "a", {"kind": "lane"}, pid=other_pid, pid_start=other_start, log="/l1", effort="medium"
+        )
+        self.assertEqual((rev1.raw or {}).get("start"), other_start)
+        self.assertTrue(str((rev1.raw or {}).get("checkout") or "").endswith("a-checkout-" + str(other_pid)))
+
+        rev2 = ReviewRecord.begin(
+            self.store,
+            "a",
+            {"kind": "lane"},
+            pid=live_pid,
+            pid_start=live_start,
+            log="/l2",
+            effort="high",
+            force=True,
+        )
+        superseded: list[dict[str, Any]] = (rev2.raw or {}).get("superseded") or []
+        self.assertEqual(len(superseded), 1)
+        self.assertEqual(superseded[0]["pid"], other_pid)
+        self.assertEqual(superseded[0]["start"], other_start)
+        self.assertEqual(superseded[0]["status"], "superseded")
+
+        # Superseded worker (different PID) AND same PID with different start are both fenced out.
+        with self.assertRaises(StaleReviewRunError):
+            ReviewRecord.finish(self.store, "a", {"findings": []}, owner_pid=other_pid, owner_start=other_start)
+        with self.assertRaises(StaleReviewRunError):
+            ReviewRecord.finish(self.store, "a", {"findings": []}, owner_pid=live_pid, owner_start=stale_start)
+        with self.assertRaises(StaleReviewRunError):
+            ReviewRecord.fail(self.store, "a", "late error", owner_pid=live_pid, owner_start=stale_start)
+
+        # Current owner (matching PID and start) finishes cleanly.
+        finished = ReviewRecord.finish(self.store, "a", {"findings": []}, owner_pid=live_pid, owner_start=live_start)
+        self.assertEqual(finished.phase, ReceiptPhase.FINISHED)
+
+        # Delta start fencing with mismatched start on same PID.
+        ReviewRecord.begin_delta(
+            self.store,
+            "a",
+            {},
+            base="tip-one",
+            tip="tip-two",
+            tree="tree-two",
+            pid=live_pid,
+            pid_start=live_start,
+            log="/d.log",
+            effort="medium",
+        )
+        with self.assertRaises(StaleReviewRunError):
+            ReviewRecord.finish_delta(
+                self.store, "a", {"findings": []}, owner_pid=live_pid, owner_start=stale_start
+            )
+        with self.assertRaises(StaleReviewRunError):
+            ReviewRecord.fail_delta(
+                self.store, "a", "late delta err", owner_pid=live_pid, owner_start=stale_start
+            )
+
+
 if __name__ == "__main__":
     unittest.main()

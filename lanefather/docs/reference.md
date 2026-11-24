@@ -197,6 +197,20 @@ review verdict is `Stale(reviewed_tip, landed_tip)`:
   `review_exemption`) until the delta review covers its post-review commits; clean integration merges after the review
   preserve eligibility.
 
+### Review run lifecycle and process identity
+
+Every review receipt write (`start`, `finish`, `fail`, `exempt`, `record`, `mark`, `delta_*`) goes through
+`ReviewRecord._transition`, and stale-receipt clearing (`clear_stale`) takes the same `review-<label>` lock directly
+(fathers#60, fathers#74):
+
+- Running primary and delta review receipts record `(pid, start)` process identity (UTC `lstart` via
+  `fathers_common.proc`) and their detached checkout path. Readers verify `(pid, start)` so a recycled PID with a
+  different start time reads as `Died` (falling back to bare PID liveness only for legacy receipts without `start`).
+- `show --json` and `status --json` both report `review.status = "stopped"` for a dead review (never raw `"running"`).
+- A forced rerun (`--force-reason`) while a review is still running marks the earlier live run in `superseded` on the
+  receipt, leaves its detached checkout intact while its process is still alive (removing only dead/stale checkouts),
+  and fences out the superseded worker with `StaleReviewRunError` if it later tries to finish or fail.
+
 ### Review findings before landing
 
 `land` refuses if another lane in the same repository has a finished review with an unmarked P1 or P2 finding

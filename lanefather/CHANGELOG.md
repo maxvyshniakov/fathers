@@ -8,6 +8,12 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
 
 ### Added
 
+- Review run lifecycle under one lock with `(pid, start)` process identity (fathers#60): primary and delta review runs
+  now record `start` (UTC `lstart` via `fathers_common.proc`) and their checkout path on `<label>.review.json`.
+  Recycled PIDs with a mismatched start time read as `Died` (with bare-PID fallback preserved for legacy receipts
+  without `start`), and a forced rerun (`--force-reason`) while another review is live records the earlier run as
+  `superseded`, leaves its checkout intact until its process exits, and fences out the superseded worker by
+  `(pid, start)`.
 - Lane flow, outcomes, overrides, and review metrics in `lanefather stats` (fathers#47): `lanefather stats [--days N]
   [--lane ID] [--json]` now adds four structured blocks (`lane_flow`, `outcomes`, `overrides`, and `review`) alongside
   the existing `checks` and `reviewers` blocks under `"v": 1`, with matching human-readable sections. `lane_flow`
@@ -299,6 +305,8 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
 
 ### Changed
 
+- `lanefather show` (`show --json`) now reports `review.status = "stopped"` for a dead review instead of raw
+  `"running"`, matching `lanefather status` (fathers#60).
 - Unified check-receipt staleness under `receipts.check_verdict` using the results store's environment hash
   (`results.env_hash`, fathers#59): `land`, `check`, `list`, `show`, and `status` all evaluate check receipts through
   one verdict (`NoReceipt | Green | Red | StaleTree | StaleToolchain`), so a toolchain or platform change invalidates

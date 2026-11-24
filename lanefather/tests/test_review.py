@@ -6,10 +6,12 @@ import json
 import os
 import pathlib
 import shutil
+import subprocess
+import sys
 from typing import Any
 import unittest
 
-from support import NO_FINDINGS, SPREAD_FINDINGS, TWO_FINDINGS, LaneCase
+from support import NO_FINDINGS, SPREAD_FINDINGS, TWO_FINDINGS, LaneCase, close_process
 
 from lanefather import review, scope
 
@@ -1317,6 +1319,186 @@ class StaleReviewAndDeltaTests(LaneCase):
             "start", "clean-fix", "--fix-of", "clean", "--ticket", "404", "--claims", "calls/a.txt"
         )
         self.assertIn("Lane clean-fix", ok_start)
+
+    def test_recycled_pid_with_different_start_reads_as_died_and_show_never_reports_running(self):
+        # fathers#60: live PID with mismatched start time reads as Died across list, show, status, and review.
+        wt = self.created("a", "lib/**")
+        self.commit(wt, {"lib/api.txt": "foo\nrecycled\n"})
+        self.lane("check", "a")
+        self.lane("land", "a", "--keep")
+        created = self.record("a")["created"]
+
+        live_pid = os.getpid()
+        (self.state / "a.review.json").write_text(
+            json.dumps({
+                "version": 1,
+                "label": "a",
+                "kind": "lane",
+                "lane": "a",
+                "lane_created": created,
+                "status": "running",
+                "pid": live_pid,
+                "start": "Mon Jan 01 00:00:00 2020",
+                "started": "2026-11-24T00:00:00Z",
+                "log": str(self.state / "logs" / "review-a.log"),
+            }) + "\n"
+        )
+
+        shown = json.loads(self.lane("show", "a", "--json"))
+        self.assertEqual(shown["review"]["status"], "stopped")
+        listed = json.loads(self.lane("list", "--json"))["lanes"][0]
+        self.assertIn("review died", listed["receipt"])
+        status_lane = json.loads(self.lane("status", "--json", cwd=self.tmp))["projects"][0]["lanes"][0]
+        self.assertEqual(status_lane["review"]["status"], "stopped")
+
+        # Rerunning `review a` without --force-reason succeeds because the recycled PID is treated as Died.
+        out = self.lane("review", "a")
+        self.assertIn("Review of a", out)
+        self.assertEqual(self.review("a")["status"], "finished")
+
+    def test_forced_rerun_supersedes_live_review_and_preserves_its_checkout(self):
+        # fathers#60: forced rerun while another review is live marks the first superseded, keeps its checkout
+        # intact mid-run, removes dead stale checkouts, and fences out the superseded worker.
+        from lanefather import config, review_record, state, worktrees
+
+        wt = self.created("a", "lib/**")
+        self.commit(wt, {"lib/api.txt": "foo\nforced\n"})
+        self.lane("check", "a")
+        self.lane("land", "a", "--keep")
+        rec = self.record("a")
+        tip = rec["landed"]["tip"]
+
+        # Spawn a real live sleeper to stand in for the first running review worker.
+        sleeper = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+        self.addCleanup(close_process, sleeper)
+        first_pid = sleeper.pid
+        first_start = review_record.process_start(first_pid)
+        self.assertIsInstance(first_start, str)
+
+        reviews_dir = self.state / "reviews"
+        reviews_dir.mkdir(parents=True, exist_ok=True)
+        first_checkout = reviews_dir / f"a-checkout-{first_pid}"
+        self.git(self.repo, "worktree", "add", "-q", "--detach", str(first_checkout), tip)
+        self.addCleanup(worktrees.remove_checkout, self.repo, first_checkout)
+        marker_file = first_checkout / ".live-review-marker"
+        marker_file.write_text("still running\n")
+
+        # Also plant a dead stale checkout to verify stale checkouts ARE still cleaned up.
+        dead_checkout = reviews_dir / "a-checkout-999999999"
+        dead_checkout.mkdir(parents=True, exist_ok=True)
+        (dead_checkout / "stale.txt").write_text("stale\n")
+
+        cfg = config.load(self.integration / ".lanefather.toml")
+        store = state.Store(cfg, directory=self.state)
+        review_record.ReviewRecord.begin(
+            store,
+            "a",
+            {"kind": "lane", "lane": "a", "lane_created": rec["created"]},
+            pid=first_pid,
+            pid_start=first_start,
+            checkout=str(first_checkout),
+            log=str(self.state / "logs" / "review-a-1.log"),
+            effort="medium",
+        )
+
+        # Force a rerun while the first worker is live.
+        out = self.lane("review", "a", "--force-reason", "rerun while held")
+        self.assertIn("Review of a", out)
+
+        # First worker's checkout must remain completely intact; dead checkout was removed.
+        self.assertTrue(first_checkout.is_dir(), "live superseded review checkout was deleted mid-run")
+        self.assertEqual(marker_file.read_text(), "still running\n")
+        self.assertFalse(dead_checkout.exists(), "dead stale checkout should be cleaned up")
+
+        # Receipt records the first run as superseded and holds the new finished review.
+        receipt = self.review("a")
+        self.assertEqual(receipt["status"], "finished")
+        self.assertIn("superseded", receipt)
+        self.assertEqual(receipt["superseded"][0]["pid"], first_pid)
+        self.assertEqual(receipt["superseded"][0]["start"], first_start)
+        self.assertEqual(receipt["superseded"][0]["status"], "superseded")
+        self.assertEqual(receipt["superseded"][0]["checkout"], str(first_checkout))
+
+        # Superseded worker attempting to finish is fenced out by StaleReviewRunError.
+        with self.assertRaises(review_record.StaleReviewRunError):
+            review_record.ReviewRecord.finish(
+                store,
+                "a",
+                {"reviewer": "stale", "findings": []},
+                owner_pid=first_pid,
+                owner_start=first_start,
+            )
+
+    def test_review_checkout_protects_custom_named_live_checkout_and_cleans_recycled_pid_checkout(self):
+        # fathers#60: (1) a recorded `checkout` path whose name does not embed the PID is still protected via
+        # realpath matching while its process is alive; (2) a live PID with a mismatched `start` (recycled PID)
+        # has its stale checkout removed; (3) an overflowing numeric suffix does not crash cleanup.
+        from lanefather import config, review_record, state, worktrees
+
+        wt = self.created("a", "lib/**")
+        self.commit(wt, {"lib/api.txt": "foo\ncheckouts\n"})
+        self.lane("check", "a")
+        self.lane("land", "a", "--keep")
+        rec = self.record("a")
+        tip = rec["landed"]["tip"]
+
+        sleeper_live = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+        self.addCleanup(close_process, sleeper_live)
+        live_pid = sleeper_live.pid
+        live_start = review_record.process_start(live_pid)
+        self.assertIsInstance(live_start, str)
+
+        sleeper_recycled = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+        self.addCleanup(close_process, sleeper_recycled)
+        recycled_pid = sleeper_recycled.pid
+
+        reviews_dir = self.state / "reviews"
+        reviews_dir.mkdir(parents=True, exist_ok=True)
+        # Non-PID-suffixed checkout directory protected purely by its recorded `checkout` realpath.
+        custom_live_checkout = reviews_dir / "a-checkout-custom-slot"
+        custom_live_checkout.mkdir(parents=True, exist_ok=True)
+        (custom_live_checkout / "marker.txt").write_text("alive\n")
+
+        # Checkout whose PID is live, but whose recorded `start` does not match (recycled PID) -> stale.
+        recycled_checkout = reviews_dir / f"a-checkout-{recycled_pid}"
+        recycled_checkout.mkdir(parents=True, exist_ok=True)
+        (recycled_checkout / "stale.txt").write_text("recycled\n")
+
+        # Absurd numeric suffix that would overflow C pid_t in os.kill().
+        overflow_checkout = reviews_dir / "a-checkout-99999999999999999999"
+        overflow_checkout.mkdir(parents=True, exist_ok=True)
+
+        cfg = config.load(self.integration / ".lanefather.toml")
+        store = state.Store(cfg, directory=self.state)
+        state.write_json(
+            store.receipt_path("a", "review"),
+            {
+                "version": 1,
+                "label": "a",
+                "kind": "lane",
+                "lane": "a",
+                "lane_created": rec["created"],
+                "status": "running",
+                "pid": recycled_pid,
+                "start": "Mon Jan 01 00:00:00 2020",
+                "checkout": str(recycled_checkout),
+                "superseded": [
+                    {
+                        "pid": live_pid,
+                        "start": live_start,
+                        "checkout": str(custom_live_checkout),
+                        "status": "superseded",
+                    }
+                ],
+            },
+        )
+
+        with worktrees.review_checkout(store, str(self.repo), "a", tip) as checkout:
+            self.assertTrue(pathlib.Path(checkout).is_dir())
+            self.assertTrue(custom_live_checkout.is_dir(), "custom-named live checkout must be protected")
+            self.assertEqual((custom_live_checkout / "marker.txt").read_text(), "alive\n")
+            self.assertFalse(recycled_checkout.exists(), "recycled-PID checkout must be cleaned up")
+            self.assertFalse(overflow_checkout.exists(), "overflowing-PID suffix checkout must be cleaned up")
 
 
 if __name__ == "__main__":
