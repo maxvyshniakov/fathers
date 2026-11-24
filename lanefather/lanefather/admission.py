@@ -344,7 +344,7 @@ def evaluate(project: config.Config, records: list[state.Record], common: str | 
         machine["load_limit"] = answer["load_limit"]
         machine["disk_free_gb"] = host.disk_free_gb(project)
         for warning in answer["warnings"]:
-            print(f"lane: warning: {warning}; the cap is {cap}", file=sys.stderr)
+            print(f"{project.command}: warning: {warning}; the cap is {cap}", file=sys.stderr)
     refusals: list[str] = []
     if len(active) >= cap and not cap_exempt:
         where = f" in {state.project_name(common)}" if common else ""

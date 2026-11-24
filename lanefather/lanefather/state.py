@@ -25,6 +25,7 @@ import json
 import os
 from pathlib import Path
 import re
+import sys
 import threading
 import time
 from typing import Any
@@ -32,11 +33,37 @@ from typing import Any
 from fathers_common.atomic import atomic_write as _atomic_write
 
 from . import config
-from .errors import LaneError
+from .errors import LaneError, LaneNotFound
 
 Record = dict[str, Any]
 
 SCHEMA = 1
+
+
+@contextlib.contextmanager
+def quiet_stdout() -> Generator[None, None, None]:
+    """Redirect Python and subprocess stdout to stderr so a `--json` command emits only its JSON object on stdout."""
+    sys.stdout.flush()
+    saved_fd: int | None = None
+    try:
+        saved_fd = os.dup(1)
+        os.dup2(2, 1)
+    except OSError:
+        if saved_fd is not None:
+            os.close(saved_fd)
+            saved_fd = None
+    try:
+        with contextlib.redirect_stdout(sys.stderr):
+            yield
+    finally:
+        with contextlib.suppress(OSError, ValueError):
+            sys.stdout.flush()
+        if sys.__stdout__ is not None:
+            with contextlib.suppress(OSError, ValueError):
+                sys.__stdout__.flush()
+        if saved_fd is not None:
+            os.dup2(saved_fd, 1)
+            os.close(saved_fd)
 # Lanes in these statuses count toward the cap and hold their claims; a landed lane holds neither.
 OCCUPYING = ("planned", "active")
 LANDED = ("landed", "released", "done")
@@ -99,7 +126,7 @@ class Store:
         if record is None and path.exists():
             raise LaneError(cut_short(path))
         if not isinstance(record, dict):
-            raise LaneError(f"no lane {lane_id}; register it with {self.project.command} start")
+            raise LaneNotFound(f"no lane {lane_id}; register it with {self.project.command} start")
         return migrate(record)  # pyright: ignore[reportUnknownArgumentType]
 
     def save(self, record: Record) -> None:

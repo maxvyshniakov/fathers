@@ -15,3 +15,8 @@ class LaneRefused(LaneError):
 class LaneUsageError(LaneError):
     """A CLI usage error detected after argument parsing (exit 2, formatted with the command's usage and help)."""
     code = 2
+
+
+class LaneNotFound(LaneError):
+    """The named lane or resource does not exist (exit 6, docs/cli.md)."""
+    code = 6

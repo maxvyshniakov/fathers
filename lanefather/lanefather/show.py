@@ -8,7 +8,7 @@ import subprocess
 from typing import Any
 
 from . import admission, config, receipts, state
-from .errors import LaneError
+from .errors import LaneError, LaneNotFound
 from .gitops import main_checkout
 
 
@@ -27,7 +27,9 @@ def summary(lane_id: str, directory: Path) -> dict[str, Any]:
     path = directory / f'{lane_id}.json'
     record = state.read_json(path)
     if record is None:
-        raise LaneError(state.cut_short(path) if path.exists() else f'no lane {lane_id}')
+        if path.exists():
+            raise LaneError(state.cut_short(path))
+        raise LaneNotFound(f'no lane {lane_id}')
     record = state.migrate(record)
     if record.get('id') != lane_id:
         raise LaneError(f'lane id mismatch for {lane_id}')

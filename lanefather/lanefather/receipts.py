@@ -702,6 +702,7 @@ class LaneView:
             review_block["landed_tip"] = self.review.landed_tip
             review_block.setdefault("summary", self.review_words)
         return {
+            "v": 1,
             "version": 1,
             "id": self.id,
             "project": self.project,

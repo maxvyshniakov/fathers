@@ -7,28 +7,28 @@
 ```
 lanefather start <id> --ticket N --claims GLOB... [--ticket N|--partial N...] [--decision URL...] [--spec PATH...]
                  [--review none|evidence|full|double] [--review-decision TEXT] [--gate NAME] [--review-reason TEXT]
-                 [--base REF] [--after ID...] [--fix-of ID,ID] [--create]
-lanefather start <id> --create            activate a planned lane whose --after lanes have landed
+                 [--base REF] [--after ID...] [--fix-of ID,ID] [--create] [--json]
+lanefather start <id> --create [--json]   activate a planned lane whose --after lanes have landed
 lanefather scope <id> [--add-ticket N] [--add-partial N] [--add-decision URL] [--add-spec PATH]
                  [--mark-partial N] [--mark-complete N] [--json]   a lane's accepted scope
 lanefather next [--start]                 the first ready entry of the ranked queue
 lanefather adopt <id> <worktree> <branch> register the worktree an agent created
-lanefather check <id>                     the checks the plan selects for the lane's diff -> receipt
+lanefather check <id> [--rerun] [--slots N] [--json]   the checks the plan selects for the lane's diff -> receipt
 lanefather wait <id> --for registered|landed|done [--timeout S] [--json]   block until the lane is there
-lanefather land <id> [--into WORKTREE] [--keep] [--partial [--remaining TEXT]]
+lanefather land <id> [--into WORKTREE] [--keep] [--partial [--remaining TEXT]] [--slots N] [--json]
 lanefather review <id> [--mark N fixed:<merge>|rejected:<reason>] [--fix-lane] [--record FILE --reviewer ALIAS] [--audit]
 lanefather review --overall <sha> [--since <base>] [--lanes ID,ID] [--paths GLOB... | --areas FILE | --area NAME] [--record FILE --reviewer ALIAS] [--mark N ...]
-lanefather done <id>
-lanefather done --finished [--dry-run]    done on every finished lane of the registered projects
+lanefather done <id> [--json]
+lanefather done --finished [--dry-run] [--json]   done on every finished lane of the registered projects
 lanefather drop <id> [<id> ...]           remove an active lane that adds nothing to its base
 lanefather park <id> --reason REASON      park a lane on park/<id> and free its cap, claims and worktree
 lanefather unpark <id> [--base REF] [--agent KIND] [--force-reason REASON]   resume a parked lane from park/<id>
 lanefather abandon <id> --reason REASON [--keep-branch REF] [--force-reason REASON]   abandon an unlanded lane
 lanefather recheck <id> [--slots N]       rerun a red post-merge smoke on the integration tip
-lanefather smoke <id> [--rerun [--slots N] | --accept REASON]   post-merge smoke status, rerun or accept
+lanefather smoke <id> [--rerun [--slots N] | --accept REASON] [--json]   post-merge smoke status, rerun or accept
 lanefather keep <id> [--off]              auto-done and done --finished leave the lane
 lanefather gc [--dry-run] [--json]         merged idle worktrees, unused branches and gone lanes
-lanefather promote <sha> [--ship] [--no-push] [--install [--deploy HOST]]
+lanefather promote <sha> [--ship] [--no-push] [--slots N] [--install [--deploy HOST]] [--json]
 lanefather sync [--drop-local]
 lanefather perf <sha>
 lanefather shipped <version> --since REF [--head REF]    comment a published version on the issues it fixes
@@ -998,8 +998,14 @@ The `--json` schema follows Godfather's settings contract, version 1: `{"v": 1, 
 `[slots.priority]` values, from the `.lanefather.toml` of the repository the command runs in, are read-only rows of a
 `project` section. `revision` is the SHA-256 of the settings file; a `set` or `reset` with a stale `--revision` is
 refused and its reply is the current settings, and without `--revision` it merges. Writes take an `flock` on
-`settings.lock` and replace the file atomically, mode 0600. Exit codes: 0 done, 2 invalid, 3 conflict, 4 read-only.
+`settings.lock` and replace the file atomically, mode 0600. Exit codes: 0 done, 2 invalid, 3 conflict, 5 read-only.
 `capabilities --json` advertises it as `dashboard.settings`: `{"versions": [1]}`.
+
+CLI exit codes follow [docs/cli.md](../../docs/cli.md#exit-codes): 0 done, 1 failed or internal error (with traceback
+logged in `ledger.log`), 2 usage error, 3 refused by current state (`next` with nothing ready, `settings` conflict,
+missing Spawnfather), 5 read-only (`settings`), 6 not found (missing lane), 75 temporary (`wait` timeout). `--slots`
+is the primary worker-budget flag across `check`, `land`, `recheck`, `smoke` and `promote`, with `--jobs` accepted as
+a compatible alias (fathers#130).
 
 ## Installed runtime contract
 

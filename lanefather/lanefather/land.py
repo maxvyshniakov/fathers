@@ -13,7 +13,9 @@ the batch gate; each skip's reason is in the output, the receipt (`skipped`) and
 """
 from __future__ import annotations
 
+import contextlib
 from dataclasses import dataclass
+import json
 import os
 import subprocess
 import sys
@@ -727,6 +729,7 @@ def after_land(store: state.Store, landed: Landed, smoke: Smoke) -> int:
 
 def land(args: Any, store: state.Store) -> int:
     """Land a green lane in three phases: merge, post-merge smoke, and after-land."""
+    as_json = getattr(args, "json", False) is True
     partial = getattr(args, "partial", False) is True
     remaining_raw = getattr(args, "remaining", None)
     remaining: str | None = None
@@ -736,9 +739,27 @@ def land(args: Any, store: state.Store) -> int:
         remaining = remaining_raw.strip()
         if not remaining:
             raise LaneUsageError("--remaining must be non-empty")
-    landed = merge(
-        store, args.id, args.into, args.message, bool(args.keep), args.force_reason, args.wait,
-        repair=getattr(args, "repair", False) is True, partial=partial, remaining=remaining,
-    )
-    smoke = post_merge(store, landed, args.slots)
-    return after_land(store, landed, smoke)
+    with state.quiet_stdout() if as_json else contextlib.nullcontext():
+        landed = merge(
+            store, args.id, args.into, args.message, bool(args.keep), args.force_reason, args.wait,
+            repair=getattr(args, "repair", False) is True, partial=partial, remaining=remaining,
+        )
+        smoke = post_merge(store, landed, args.slots)
+        code = after_land(store, landed, smoke)
+    if as_json:
+        latest = state.read_json(store.record_path(args.id)) or smoke.record
+        print(json.dumps({
+            "v": 1,
+            "lane": args.id,
+            "status": latest.get("status", smoke.record.get("status")),
+            "branch": smoke.record.get("branch"),
+            "onto": landed.onto,
+            "merge": landed.merge,
+            "integration": landed.integration,
+            "post_merge": smoke.status,
+            "summary": smoke.summary,
+            "partial": partial,
+            "keep": bool(args.keep),
+            "exit_code": code,
+        }))
+    return code

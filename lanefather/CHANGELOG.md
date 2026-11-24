@@ -8,6 +8,15 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
 
 ### Added
 
+- CLI convention conformance and versioned JSON replies (fathers#130):
+  - Every `--json` reply now carries top-level `"v": 1`: added `"v": 1` to `list --json` and `show --json` (keeping
+    legacy `"version": 1` beside `"v"` on `show --json` for existing readers), and added `--json` structured replies
+    to `start`, `check`, `land`, `promote`, `done`, and `smoke`.
+  - Unified the worker-budget flag to `--slots` across `check`, `land`, `recheck`, `smoke`, and `promote`, keeping
+    `--jobs` as a compatible alias on all five commands.
+  - Errors in `cli.main` now prefix with the configured program name instead of hard-coded `lane:`; unexpected
+    non-`LaneError` exceptions print one clean `<prog>: internal error: <type>: <message>` line to stderr (exit 1)
+    while recording the full traceback in the event log (`cli.internal_error`).
 - Built-in verified-tree stamp ledger and `lanefather stamp` CLI (fathers#48):
   - Shipped `lanefather.stamp` with the tree-keyed ledger in `<git common dir>/<stamp_file>` (default
     `verified-trees`, 50-entry retention, atomic replacement via `fathers_common.atomic.atomic_write`, exclusive
@@ -336,6 +345,8 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
 
 ### Changed
 
+- Exit codes conform to `docs/cli.md` (fathers#130): `settings` read-only refusals moved from exit 4 to exit 5, and
+  missing-lane lookups (`state.Store.load`, `show`) exit 6 (`LaneNotFound`).
 - `lanefather show` (`show --json`) now reports `review.status = "stopped"` for a dead review instead of raw
   `"running"`, matching `lanefather status` (fathers#60).
 - Unified check-receipt staleness under `receipts.check_verdict` using the results store's environment hash
