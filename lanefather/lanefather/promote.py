@@ -27,6 +27,7 @@ from . import (
     review,
     review_gate,
     review_record,
+    scope,
     slots,
     state,
     tickets,
@@ -174,6 +175,24 @@ def load_promote_record(store: state.Store, sha: str) -> dict[str, Any] | None:
                     raise LaneError(f"promote record {path} is invalid or damaged; restore or remove the file")
                 clean[key] = list(value)
         steps[step_name] = clean
+    raw_exempt = raw.get("exempt_lanes")
+    exempt_lanes: list[dict[str, Any]] = []
+    if raw_exempt is not None:
+        if not isinstance(raw_exempt, list):
+            raise LaneError(f"promote record {path} is invalid or damaged; restore or remove the file")
+        for raw_item in cast(list[Any], raw_exempt):
+            if not isinstance(raw_item, dict):
+                raise LaneError(f"promote record {path} is invalid or damaged; restore or remove the file")
+            item = cast(dict[str, Any], raw_item)
+            if not all(isinstance(item.get(k), str) for k in ("lane", "ticket", "review_class", "reason", "merge")):
+                raise LaneError(f"promote record {path} is invalid or damaged; restore or remove the file")
+            exempt_lanes.append({
+                "lane": item["lane"],
+                "ticket": item["ticket"],
+                "review_class": item["review_class"],
+                "reason": item["reason"],
+                "merge": item["merge"],
+            })
     return {
         "version": version,
         "sha": rec_sha,
@@ -190,6 +209,7 @@ def load_promote_record(store: state.Store, sha: str) -> dict[str, Any] | None:
         "updated": updated,
         "finished": finished,
         "steps": steps,
+        "exempt_lanes": exempt_lanes,
     }
 
 
@@ -235,6 +255,7 @@ class PromoteRun:
     pushed: bool = False
     record: dict[str, Any] | None = None
     step_evidence: dict[str, dict[str, Any]] = field(default_factory=dict[str, dict[str, Any]])
+    exempt_lanes: list[dict[str, Any]] = field(default_factory=list[dict[str, Any]])
 
 
 def substitute(text: str, values: dict[str, str]) -> str:
@@ -474,6 +495,18 @@ def step_ship_refusal(run: PromoteRun) -> None:
 def step_review_gate(run: PromoteRun) -> None:
     prog = run.store.prog
     report = review_gate.gate_report(run.store, run.cwd, run.common, run.sha)
+    run.exempt_lanes = list(report.get("exempt_lanes") or [])
+    if run.record is not None:
+        run.record["exempt_lanes"] = list(run.exempt_lanes)
+        _save_promote_record(run)
+    for entry in run.exempt_lanes:
+        print(
+            f"lane: review class {entry['review_class']}: lane {entry['lane']} "
+            f"({scope.display_ticket(entry['ticket'])}): {entry['reason']}",
+            flush=True,
+        )
+    for alert in cast(list[dict[str, Any]], report.get("audit_alerts") or []):
+        print(f"lane: audit alert: {alert['text']}", flush=True)
     for entry in report["reported"]:
         print(f"lane: reported, does not block: {entry['text']}", flush=True)
     blocking = [e["text"] for e in report["blocking"]]
@@ -585,6 +618,8 @@ def step_publish_refs(run: PromoteRun) -> int:
 
 def step_after_promote(run: PromoteRun) -> None:
     after_promote(run.cwd, run.sha, run.store.project)
+    for message in review.start_audit_reviews(run.store, run.cwd, run.exempt_lanes):
+        print(f"lane: {message}", flush=True)
 
 
 def step_release_comments(run: PromoteRun) -> None:
@@ -692,6 +727,8 @@ def promote_sha(run: PromoteRun) -> int:
                 run.ship_base = promote_record["ship_base"]
             if promote_record.get("pushed"):
                 run.pushed = True
+            if promote_record.get("exempt_lanes"):
+                run.exempt_lanes = list(promote_record["exempt_lanes"])
             recorded_steps: dict[str, dict[str, Any]] = promote_record["steps"]
             start_index = len(steps)
             for index, (name, _) in enumerate(steps):
@@ -728,6 +765,7 @@ def promote_sha(run: PromoteRun) -> int:
                 "updated": now,
                 "finished": None,
                 "steps": {},
+                "exempt_lanes": [],
             }
             start_index = 0
         run.record = promote_record

@@ -28,6 +28,7 @@ from . import (
     postmerge,
     receipts,
     review,
+    review_class,
     review_gate,
     review_record,
     scope,
@@ -347,6 +348,22 @@ def merge(
         pre_land_problem = review.pre_land_review_problem(store, record, main, tip, tree, integration, prog=prog)
         if pre_land_problem:
             problems.append(pre_land_problem)
+        int_head = git(integration, "rev-parse", "HEAD")
+        if repair and git_ok(integration, "merge-base", "--is-ancestor", tip, int_head):
+            repaired_merge = _find_merge_commit(integration, tip)
+            if repaired_merge:
+                lane_stats = review_class.diff_stats(integration, repaired_merge[1], repaired_merge[0])
+            else:
+                diff_base = git(main, "merge-base", int_head, tip, check=False) or int_head
+                lane_stats = review_class.diff_stats(main, diff_base, tip)
+        else:
+            diff_base = git(main, "merge-base", int_head, tip, check=False) or int_head
+            lane_stats = review_class.diff_stats(main, diff_base, tip)
+        is_fix_lane = bool(list(review.valid_fix_parents(record, store)))
+        class_problems = review_class.land_problems(
+            record, lane_stats, store.project, root=main, is_fix_lane=is_fix_lane, receipt=receipt,
+        )
+        problems.extend(class_problems)
         if problems and not force_reason:
             raise LaneError("land refused: " + "; ".join(problems))
         if problems:
@@ -358,7 +375,11 @@ def merge(
             if pre_land_problem is not None:
                 reviewed = False
                 words = pre_land_problem
-            if not reviewed and not review.review_exemption(record, store):
+            eff_cls_onto, _ = review_class.effective_class(
+                record, lane_stats, store.project, root=main, is_fix_lane=is_fix_lane, receipt=receipt,
+            )
+            class_exempt = eff_cls_onto in ("none", "evidence") and not class_problems
+            if not reviewed and not class_exempt and not review.review_exemption(record, store):
                 if not force_reason:
                     raise LaneError(f"land refused: {integration} is on {onto}, which promote would not hold for "
                                     f"this lane's review ({words}); run {prog} review {lane_id} and mark its "
@@ -438,9 +459,19 @@ def post_merge(store: state.Store, landed: Landed, slots: int | None) -> Smoke:
                 inspector, receipt, record["landed"], merge_tree, previous, toolchain, record.get("worktree")
             )
             if exact_verified is not None and exact_narrowing is not None:
-                merged_paths = plan.diff_paths(checkout, previous, merge_sha) or []
-                docs_only = review.documentation_only(merged_paths, store.project)
-                record = store.update(lane_id, lambda rec: rec["landed"].update(docs_only=docs_only))
+                merged_stats = review_class.diff_stats(checkout, previous, merge_sha)
+                docs_only = review.documentation_only(list(merged_stats.paths), store.project)
+                eff_cls, eff_why = review_class.effective_class(
+                    record, merged_stats, store.project, root=checkout,
+                    is_fix_lane=bool(list(review.valid_fix_parents(record, store))),
+                    receipt=receipt,
+                )
+                record = store.update(
+                    lane_id,
+                    lambda rec: rec["landed"].update(
+                        docs_only=docs_only, review_class=eff_cls, review_class_reason=eff_why,
+                    ),
+                )
                 print(
                     f"lane: {review.start_lane_review(store, record, force_fresh=landed.pre_land_overridden)}",
                     flush=True,
@@ -472,8 +503,19 @@ def post_merge(store: state.Store, landed: Landed, slots: int | None) -> Smoke:
                 print(f"lane: preparing post-merge plan for {lane_id} in {checkout} ({prep_reason}); "
                       "queue: slotfather status", flush=True)
                 merged_plan = inspector.plan_for(previous)
+                merged_stats = review_class.diff_stats(checkout, previous, merge_sha)
                 plan_docs_only = review.documentation_only(merged_plan["paths"], store.project)
-                record = store.update(lane_id, lambda rec: rec["landed"].update(docs_only=plan_docs_only))
+                eff_cls, eff_why = review_class.effective_class(
+                    record, merged_stats, store.project, root=checkout,
+                    is_fix_lane=bool(list(review.valid_fix_parents(record, store))),
+                    receipt=receipt,
+                )
+                record = store.update(
+                    lane_id,
+                    lambda rec: rec["landed"].update(
+                        docs_only=plan_docs_only, review_class=eff_cls, review_class_reason=eff_why,
+                    ),
+                )
                 print(
                     f"lane: {review.start_lane_review(store, record, force_fresh=landed.pre_land_overridden)}",
                     flush=True,

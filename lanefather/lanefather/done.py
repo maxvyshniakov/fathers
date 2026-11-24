@@ -33,6 +33,8 @@ from . import (
     lifetimes,
     postmerge,
     registry,
+    review_class,
+    review_gate,
     review_record,
     scope,
     state,
@@ -151,7 +153,7 @@ def evaluate_completion(
     lane_id = str(record["id"])
     prog = store.project.command
     pm = postmerge.PostMergeRecord.load(store, record, integration=integration)
-    rev = review_record.ReviewRecord.load(store, lane_id, record=record)
+    verdict = _effective_review_verdict(store, record)
     is_kept = bool(keep_override or kept(record))
     done_auto = store.project.done_auto
     needs_lock_probe = (
@@ -159,7 +161,7 @@ def evaluate_completion(
         and lifecycle.awaiting_done(record)
         and pm.phase in postmerge.SMOKE_OK_PHASES
         and isinstance(
-            rev.verdict,
+            verdict,
             (review_record.Absent, review_record.Exempt, review_record.Complete)
             if mode is postmerge.CompletionMode.INTERACTIVE
             else (review_record.Exempt, review_record.Complete),
@@ -172,7 +174,7 @@ def evaluate_completion(
     return postmerge.decide_completion(
         stage,
         pm.phase,
-        rev.verdict,
+        verdict,
         kept=is_kept,
         done_auto=done_auto,
         worktree_lock=lock,
@@ -182,6 +184,29 @@ def evaluate_completion(
         raw_smoke=pm.raw_status,
         cleared_by=pm.cleared_by,
     )
+
+
+def _effective_review_verdict(store: state.Store, record: Record) -> review_record.ReviewVerdict:
+    """Resolve a lane's review verdict, including batch coverage and `double` 2-reviewer enforcement."""
+    lane_id = str(record["id"])
+    rev = review_record.ReviewRecord.load(store, lane_id, record=record)
+    if isinstance(rev.verdict, (review_record.Absent, review_record.Failed, review_record.Died)):
+        batch_rev = review_gate.covering_batch_review(store, record)
+        if batch_rev is not None:
+            rev = batch_rev
+    raw_landed: Any = record.get("landed")
+    eff_cls = (
+        cast(dict[str, Any], raw_landed).get("review_class")
+        if isinstance(raw_landed, dict)
+        else None
+    )
+    if not isinstance(eff_cls, str) or eff_cls not in review_class.CLASS_RANK:
+        eff_cls = review_class.declared_class(record)
+    if eff_cls == "double" and rev.has_finished_receipt:
+        double_err = review_class.double_review_problem(rev.raw, label=lane_id, prog=store.project.command)
+        if double_err is not None:
+            return review_record.Failed(error=double_err, raw_status="incomplete")
+    return rev.verdict
 
 
 def done_readiness(
@@ -196,18 +221,18 @@ def done_readiness(
     lane_id = str(record["id"])
     prog = store.project.command
     pm = postmerge.PostMergeRecord.load(store, record, integration=integration)
-    rev = review_record.ReviewRecord.load(store, lane_id, record=record)
+    verdict = _effective_review_verdict(store, record)
     is_kept = False if allow_kept else kept(record)
     mode = (
         postmerge.CompletionMode.INTERACTIVE
-        if allow_absent_review and isinstance(rev.verdict, review_record.Absent)
+        if allow_absent_review and isinstance(verdict, review_record.Absent)
         else postmerge.CompletionMode.FINISHED
     )
     stage = str(record["status"]) if record.get("status") is not None else None
     decision = postmerge.decide_completion(
         stage,
         pm.phase,
-        rev.verdict,
+        verdict,
         kept=is_kept,
         done_auto=True,
         worktree_lock=None,
@@ -760,7 +785,11 @@ def _refuse_unmarked_findings(store: state.Store, lane_id: str, record: Record, 
     if unmarked:
         prog = store.prog
         blocks = store.project.review_blocks
-        holds = ", which hold lands" if any(f.get("severity", "P2") in blocks for f in unmarked) else ""
+        holds = (
+            ", which hold lands"
+            if any(review_class.blocks_gate(f.get("severity", "P2"), blocks) for f in unmarked)
+            else ""
+        )
         noun = "dropped" if verb == "drop" else "parked" if verb == "park" else "abandoned"
         raise LaneError(
             f"{verb} refused: lane {lane_id}'s review has {len(unmarked)} unmarked "

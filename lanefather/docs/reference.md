@@ -6,6 +6,7 @@
 
 ```
 lanefather start <id> --ticket N --claims GLOB... [--ticket N|--partial N...] [--decision URL...] [--spec PATH...]
+                 [--review none|evidence|full|double] [--review-decision TEXT] [--gate NAME] [--review-reason TEXT]
                  [--base REF] [--after ID...] [--fix-of ID,ID] [--create]
 lanefather start <id> --create            activate a planned lane whose --after lanes have landed
 lanefather scope <id> [--add-ticket N] [--add-partial N] [--add-decision URL] [--add-spec PATH]
@@ -15,8 +16,8 @@ lanefather adopt <id> <worktree> <branch> register the worktree an agent created
 lanefather check <id>                     the checks the plan selects for the lane's diff -> receipt
 lanefather wait <id> --for registered|landed|done [--timeout S] [--json]   block until the lane is there
 lanefather land <id> [--into WORKTREE] [--keep]
-lanefather review <id> [--mark N fixed:<merge>|rejected:<reason>] [--fix-lane]
-lanefather review --overall <sha> --since <base>
+lanefather review <id> [--mark N fixed:<merge>|rejected:<reason>] [--fix-lane] [--record FILE --reviewer ALIAS] [--audit]
+lanefather review --overall <sha> [--since <base>] [--lanes ID,ID] [--record FILE --reviewer ALIAS] [--mark N ...]
 lanefather done <id>
 lanefather done --finished [--dry-run]    done on every finished lane of the registered projects
 lanefather drop <id> [<id> ...]           remove an active lane that adds nothing to its base
@@ -100,7 +101,8 @@ lane, and a batch fix lane started with `start <id> --fix-of A,B,C` for the find
 parent's ID in the string `review_fix_of` for older Lanefather versions. The complete batch is in
 `review_fix_of_all`. Mark each parent's findings with the fix lane's merge (`review A --mark N fixed:<fix lane id>`).
 A lane started with `--fix-of` has its own worktree, counts toward the cap like any lane, and runs its own check
-plan even with one parent. `start` warns when an id that reads `review-fixes` names no parent. A batch fix lane's
+plan even with one parent. `start` refuses an id containing `review-fixes` that names no parent (`--fix-of`,
+overridable with `--force-reason`; fathers#252). A batch fix lane's
 scope is what its own `--ticket` and `--partial` name: `--partial N` keeps its merge from closing N a second time.
 
 ### Accepted scope
@@ -318,6 +320,7 @@ self-contained configuration in the README for a Repo-Kit consumer.
 | `[checks]` `verify`, `plan_module`, `triage`, `toolchain`, `toolchain_name`, `slot_env` | the check contract below |
 | `[review]` `blocks` | the unmarked review finding severities that hold the batch gate, promote and `findings` (default `["P1", "P2"]`; fathers#109) |
 | `[review]` `panel`, `panel_required` | the review panel (fathers#151): two or more model aliases of the models file that review every lane at once; `panel_required = true` holds the gate while a member gave no answer ([Reviewer configuration](#reviewer-configuration)) |
+| `[review.classes]` `none`, `evidence`, `full`, `double`, `max_lines`, `max_files`, `audit_every` | risk-based review classes decided at `start --review` (stored as `review_class` on the lane record) and checked at `land` (fathers#252): path globs per class (`double` and `steering` checked first, then `evidence`/`none`, then `full`), diff size bounds (`max_lines`, `max_files`; binary files escalate `none`/`evidence` when `max_lines` is set), and 1-in-N (`audit_every`, default `5`, `0` disables) non-blocking post-hoc audit sampling of `none`/`evidence` lanes at `promote` (emitting `review.audit_alert` on P0/P1 findings) |
 | `[checks]` `gate_only` | check-id patterns (fnmatch) the post-merge smoke leaves to the batch gate, such as tooling self-tests (fathers#94); a tree whose plan names whole suites has no check ids to match, so its smoke runs them |
 | `[checks.min_slots]` | table mapping check-id or suite fnmatch patterns (or the reserved `default` fallback key, not a literal suite/check name pattern, for checks/suites matched by no other pattern or declared floor) to positive integer minimum slot floors for lane checks and red-check reruns (fathers#173, fathers#247); raises `<slot_env>_MIN_JOBS` and `--jobs` for matching selections (clamped at the machine's total slot capacity when known, while `--slots` still overrides), leaves unmatched selections at `default` (or `1` when `default` is omitted), and is reported under `policy.min_slots` in `capabilities --json` (capability `checks.min_slots.default`) |
 | `[lane]` `worktrees_root`, `targets`, `target_label`, `cache_partitions`, `cache_depfiles` | managed worktree root (default `.claude/worktrees`), per-lane build directories and label, and shared cache partition depfile globs (default `debug/*.d`, `release/*.d`) |

@@ -436,9 +436,10 @@ class ReviewGateTests(ReviewGateCase):
         self.lane("check", "a-fixes", cwd=worktree)
         receipt = json.loads((self.state / "a-fixes.receipt.json").read_text())
         self.assertNotIn("fix_of", receipt, "start --fix-of runs its own plan with one parent too")
-        output = self.start("review-fixes-r4", "docs/**")
-        self.assertIn("lanefather: warning: review-fixes-r4 looks like a fix lane but names no parent", output)
-        self.assertIn("--fix-of", output)
+        refused = self.start("review-fixes-r4", "docs/**", ok=False)
+        self.assertIn("review-fixes-r4 looks like a fix lane but names no parent", refused)
+        self.assertIn("--fix-of", refused)
+        self.start("review-fixes-r4", "docs/**", extra=("--force-reason", "standalone docs cleanup"))
         self.assertIn("--fix-of nosuch: no lane by that name",
                       self.start("x-fix", "native/**", extra=("--fix-of", "a,nosuch"), ok=False))
         self.assertIn("--fix-of review-fixes-r4: lane review-fixes-r4 is planned, not landed",
