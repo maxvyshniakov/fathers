@@ -15,7 +15,7 @@ lanefather next [--start]                 the first ready entry of the ranked qu
 lanefather adopt <id> <worktree> <branch> register the worktree an agent created
 lanefather check <id>                     the checks the plan selects for the lane's diff -> receipt
 lanefather wait <id> --for registered|landed|done [--timeout S] [--json]   block until the lane is there
-lanefather land <id> [--into WORKTREE] [--keep]
+lanefather land <id> [--into WORKTREE] [--keep] [--partial [--remaining TEXT]]
 lanefather review <id> [--mark N fixed:<merge>|rejected:<reason>] [--fix-lane] [--record FILE --reviewer ALIAS] [--audit]
 lanefather review --overall <sha> [--since <base>] [--lanes ID,ID] [--record FILE --reviewer ALIAS] [--mark N ...]
 lanefather done <id>
@@ -425,23 +425,30 @@ release_comment = true    # promote --ship and `shipped`: comment main's SHA or 
 preview = "https://preview.example.com/{short}"   # optional; {sha} {short} {branch} {ticket} {lane}; {ticket}
                                                   # is the primary ticket
 repo = "owner/name"       # optional; default: origin's GitHub repository
+umbrella = [347, "owner/repo#97"]  # optional; umbrella/epic tickets that never close, never get `integrated`,
+                                   # and never get release comments (fathers#64)
 ```
 
 The rules cover every ticket of the lane's [accepted scope](#accepted-scope). The merge ends with one line per
-ticket, in scope order: `Fixes #N` for a ticket it completes, `Refs #N` for a partial one (`Fixes owner/repo#N`
-and `Refs owner/repo#N` for [another repository's](#accepted-scope)); a ticket that a given
+ticket, in scope order: `Fixes #N` for a ticket it completes, `Refs #N` for a partial or umbrella ticket (`Fixes
+owner/repo#N` and `Refs owner/repo#N` for [another repository's](#accepted-scope)); a ticket that a given
 `land -m` message already names on a `Fixes` or `Refs` line of its own keeps that line. The default title names
 every ticket: `Merge lane/<id> (#A, #B)`. After a green smoke, land labels each completed ticket `integrated` and
-comments on every ticket (`ticket.marked`, one event per ticket); a partial ticket's comment says the merge does part
-of it and the issue stays open, unlabelled. Before the merge, land warns about a lane commit, or a given message,
-that says `Fixes #N` for a partial ticket, since GitHub closes the ticket anyway when that commit reaches `main`
-(`ticket.trailer_conflict`); the land goes on.
+comments on every ticket (`ticket.marked`, one event per ticket); a partial or umbrella ticket's comment says the
+issue stays open and is not labelled. `lanefather land <id> --partial [--remaining TEXT]` marks every ticket of the
+lane partial for that land (emitting `Refs #N`, skipping `integrated`, recording `partial: true` and optional
+`remaining` on `landed`, and noting `remaining: <TEXT>` in the land comment); follow-up `--fix-of` lanes inherit
+partial scope from a partially landed parent. Before the merge, land warns about a lane commit, or a given message,
+that says `Fixes #N` for a partial or umbrella ticket, since GitHub closes the ticket anyway when that commit reaches
+`main` (`ticket.trailer_conflict`); a commit that already says `Refs #N` does not warn, and the land goes on.
 
 `integrated` means done and landed in the integration branch, not yet on `main` or released. A merge origin does not
 have yet (a remote-tracking branch, as last fetched, that contains it) is said to be local only and is not linked. A
 red smoke leaves the issue unmarked for the fix's land. The issues a release closes are those a `Fixes #N` line in
 the shipped range names: origin's `main` before the push to the SHA for `promote --ship`, `--since` to `--head` for
-`lanefather shipped <version>`, which a project's release process runs after it publishes. Each of them loses its `integrated` label, which no longer holds once it is released. `gh` runs without a
+`lanefather shipped <version>`, which a project's release process runs after it publishes, skipping any umbrella
+ticket and any ticket that only landed partially in that range. Each closed issue loses its `integrated` label, which
+no longer holds once it is released. `gh` runs without a
 prompt with `--repo`; a failure warns and goes to the ledger and never fails the land, promote or release. `start`
 and `next --start` warn about a lane registered with `--ticket none` while any rule is on, and `done` does not count
 land's comment as the lane's evidence. The capability is `tickets.lifecycle`.

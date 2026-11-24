@@ -58,6 +58,8 @@ class Tickets:
     preview: str = ""
     # owner/name for gh; by default the GitHub repository of the origin remote.
     repo: str = ""
+    # Umbrella/epic tickets that never get `Fixes #N`, the `integrated` label, or release comments (fathers#64).
+    umbrella: tuple[str, ...] = ()
 
     def enabled(self) -> bool:
         return self.integrated_label or self.land_comment or self.fixes_trailer or self.release_comment
@@ -298,7 +300,7 @@ TABLE_KEYS = {
     "promote": ("branches", "ship_refuses", "ship_refusal", "install", "deploy", "install_env_drop", "after"),
     "hooks": ("process_scan", "project"),
     "gc": ("after_remove", "after_remove_report", "dirs", "branches", "collect_uncommitted_sessions", "disposable"),
-    "tickets": ("integrated_label", "land_comment", "fixes_trailer", "release_comment", "preview", "repo"),
+    "tickets": ("integrated_label", "land_comment", "fixes_trailer", "release_comment", "preview", "repo", "umbrella"),
     "slots": ("priority",),
     "review": ("blocks", "panel", "panel_required", "classes"),
     "done": ("auto", "stop_inside"),
@@ -393,6 +395,56 @@ def _known(table: dict[str, Any], name: str, keys: tuple[str, ...]) -> None:
         raise LaneError(f"{CONFIG_NAME}: {where}has unknown keys {', '.join(unknown)}; known: {', '.join(keys)}")
 
 
+_UMBRELLA_OWNER = r"[A-Za-z0-9][A-Za-z0-9-]{0,38}"
+_UMBRELLA_REPO = r"(?!\.\.?/|\.\.?#)[A-Za-z0-9_.-]{1,100}"
+_UMBRELLA_FOREIGN = re.compile(rf"^({_UMBRELLA_OWNER})/({_UMBRELLA_REPO})#([1-9]\d*)$")
+_UMBRELLA_URL = re.compile(rf"^https://github\.com/({_UMBRELLA_OWNER})/({_UMBRELLA_REPO})/issues/([1-9]\d*)/?$")
+_UMBRELLA_LOCAL = re.compile(r"^#?([1-9]\d*)$")
+
+
+def _umbrella_ref(value: Any) -> str:
+    if isinstance(value, int) and not isinstance(value, bool):
+        if value < 1:
+            raise LaneError(
+                f"{CONFIG_NAME}: [tickets] umbrella entry {value!r} must be a positive integer or ticket reference"
+            )
+        return f"{value}"
+    if isinstance(value, str):
+        given = value.strip()
+        found = _UMBRELLA_FOREIGN.match(given) or _UMBRELLA_URL.match(given)
+        if found:
+            owner, name, number = found.groups()
+            return f"{owner}/{name}#{number}"
+        local = _UMBRELLA_LOCAL.match(given)
+        if local:
+            return local.group(1)
+        raise LaneError(
+            f"{CONFIG_NAME}: [tickets] umbrella entry {value!r} must be a positive integer, #N, owner/repo#N, "
+            "or GitHub issue URL"
+        )
+    raise LaneError(
+        f"{CONFIG_NAME}: [tickets] umbrella entry {value!r} must be a positive integer or ticket reference string"
+    )
+
+
+def _umbrella(table: dict[str, Any]) -> tuple[str, ...]:
+    raw = table.get("umbrella")
+    if raw is None:
+        return ()
+    if not isinstance(raw, (list, tuple)):
+        raise LaneError(f"{CONFIG_NAME}: [tickets] umbrella must be a list of ticket numbers or owner/repo#N strings")
+    items = cast(list[Any] | tuple[Any, ...], raw)
+    parsed: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        normalized = _umbrella_ref(item)
+        key = normalized.lower()
+        if key not in seen:
+            seen.add(key)
+            parsed.append(normalized)
+    return tuple(parsed)
+
+
 def _tickets(table: dict[str, Any]) -> Tickets:
     flags: dict[str, bool] = {}
     for key in ("integrated_label", "land_comment", "fixes_trailer", "release_comment"):
@@ -403,7 +455,7 @@ def _tickets(table: dict[str, Any]) -> Tickets:
     repo = _string(table, "repo", "")
     if repo and not re.fullmatch(r"[\w.-]+/[\w.-]+", repo):
         raise LaneError(f"{CONFIG_NAME}: [tickets] repo must be owner/name")
-    return Tickets(**flags, preview=_string(table, "preview", ""), repo=repo)
+    return Tickets(**flags, preview=_string(table, "preview", ""), repo=repo, umbrella=_umbrella(table))
 
 
 def parse(data: dict[str, Any], path: Path | None = None) -> Config:

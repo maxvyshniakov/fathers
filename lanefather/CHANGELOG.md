@@ -8,6 +8,16 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
 
 ### Added
 
+- Umbrella tickets and partial land flags in the ticket lifecycle (fathers#64):
+  - `[tickets] umbrella = [...]` accepts positive integer issue numbers or `owner/repo#N` / GitHub issue URL strings
+    with strict type validation. Umbrella tickets never get `Fixes #N` in `merge_message` (using `Refs #N` instead),
+    never get the `integrated` label in `after_land` (while still receiving a land comment noting they stay open),
+    warn on manual `Fixes #N` commits (`ticket.trailer_conflict`), and are skipped by `promote --ship` / `shipped`
+    release comments and label removal.
+  - `lanefather land <id> --partial [--remaining TEXT]` treats all tickets of the lane as partial for that land:
+    emits `Refs #N` instead of `Fixes #N`, skips the `integrated` label, includes `partial:` and `remaining: <TEXT>`
+    in the land comment, records `partial: true` (and `remaining`) on `record["landed"]`, skips release comments for
+    tickets that only landed partially, and causes follow-up `--fix-of` lanes to inherit partial scope.
 - Risk-based review classes decided at lane start and checked at land (fathers#252):
   - `lanefather start --review none|evidence|full|double` stores `review_class` on the lane record (with optional
     `--review-decision`, `--gate` and `--review-reason`). At `land`, Lanefather computes the minimum required review

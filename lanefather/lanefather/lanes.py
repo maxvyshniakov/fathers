@@ -546,6 +546,36 @@ def activate_planned(store: state.Store, lane_id: str, *, base: str | None = Non
     return updated
 
 
+def _inherit_partial_scope(store: state.Store, parents: Sequence[str],
+                           items: Sequence[scope.Item]) -> tuple[scope.Item, ...]:
+    """Any ticket of `items` that a fix parent landed partially (via `land --partial` or a partial scope entry)
+    stays partial on the follow-up fix lane, so its merge says `Refs` instead of `Fixes` (fathers#64)."""
+    if not parents:
+        return tuple(items)
+    default_repo = store.project.tickets.repo
+    partial_keys: set[str] = set()
+    for parent_id in parents:
+        parent = state.read_json(store.record_path(parent_id))
+        if not isinstance(parent, dict):
+            continue
+        if not default_repo and isinstance(parent.get("common_dir"), str) and parent["common_dir"]:
+            default_repo = tickets.repository(parent["common_dir"], store.project.tickets) or ""
+        raw_landed: Any = parent.get("landed")
+        landed_partial = isinstance(raw_landed, dict) and cast(dict[str, Any], raw_landed).get("partial") is True
+        for issue in scope.issues(parent):
+            if landed_partial or issue.partial:
+                partial_keys.add(tickets.norm_key(issue.number, default_repo))
+    if not partial_keys:
+        return tuple(items)
+    return tuple(
+        scope.Issue(item.number, True)
+        if isinstance(item, scope.Issue) and not item.partial
+        and tickets.norm_key(item.number, default_repo) in partial_keys
+        else item
+        for item in items
+    )
+
+
 def start(args: Any, store: state.Store) -> int:
     existing = state.read_json(store.record_path(args.id))
     if existing and (not lifecycle.finished(existing) or lifecycle.parked(existing)):
@@ -563,8 +593,11 @@ def start(args: Any, store: state.Store) -> int:
     after = list(dict.fromkeys(option_list(getattr(args, "after", None))))
     given = getattr(args, "fix_of", None) or ()
     parents = list(dict.fromkeys(name for value in given for name in value.replace(",", " ").split()))
-    items = scope.from_options(raw_issues, option_list(getattr(args, "decision", None)),
-                               option_list(getattr(args, "spec", None)))
+    items = _inherit_partial_scope(
+        store, parents,
+        scope.from_options(raw_issues, option_list(getattr(args, "decision", None)),
+                           option_list(getattr(args, "spec", None))),
+    )
     record, rules = prepare(
         store, os.getcwd(), args.id, scope.primary(items), lane_claims, args.base, after,
         args.branch, args.scratch, parents=parents, batch_fix=True, items=items,

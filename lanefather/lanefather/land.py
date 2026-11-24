@@ -38,7 +38,7 @@ from . import (
     worktrees,
 )
 from . import results as result_store
-from .errors import LaneError
+from .errors import LaneError, LaneUsageError
 from .gitops import current_branch, dirty, git, git_ok, main_checkout
 from .host import host, host_fields
 from .landing import landing
@@ -282,15 +282,28 @@ def _finish_land_transition(
     store: state.Store, lane_id: str, *, merge_sha: str, previous: str, tip: str, tree: str,
     integration: str, onto: str | None, keep: bool, new_overrides: list[dict[str, Any]],
     receipt: dict[str, Any] | None, pre_land_overridden: bool = False,
+    partial: bool = False, remaining: str | None = None,
 ) -> Landed:
+    landed_meta: dict[str, Any] = {
+        "merge": merge_sha, "previous": previous, "tip": tip, "tree": tree,
+        "integration": integration, "at": journal.now(), "keep": keep,
+    }
+    ledger_details: dict[str, Any] = {
+        "merge": merge_sha, "previous": previous, "tip": tip, "onto": onto,
+        "integration": integration, "keep": keep,
+    }
+    if partial:
+        landed_meta["partial"] = True
+        ledger_details["partial"] = True
+        if remaining:
+            landed_meta["remaining"] = remaining
+            ledger_details["remaining"] = remaining
     record = lifecycle.transition(
         store, lane_id, "land",
-        landed={"merge": merge_sha, "previous": previous, "tip": tip, "tree": tree,
-                "integration": integration, "at": journal.now(), "keep": keep},
+        landed=landed_meta,
         overrides=new_overrides or None,
         ledger_message=f"land {lane_id} merge={merge_sha} previous={previous}",
-        ledger_details={"merge": merge_sha, "previous": previous, "tip": tip, "onto": onto,
-                        "integration": integration, "keep": keep},
+        ledger_details=ledger_details,
     )
     return Landed(
         record=record, merge=merge_sha, previous=previous, integration=integration,
@@ -302,6 +315,7 @@ def _finish_land_transition(
 def merge(
     store: state.Store, lane_id: str, into: str | None, message: str | None,
     keep: bool, force_reason: str | None, wait: float, *, repair: bool = False,
+    partial: bool = False, remaining: str | None = None,
 ) -> Landed:
     """Phase 1 of land: validate, record landing intent, merge `--no-ff`, and transition to `landed`."""
     prog = store.prog
@@ -337,9 +351,15 @@ def merge(
             merge_sha = found[0] if found else git(integration, "rev-parse", "HEAD")
             previous = found[1] if found else (intent_prev or merge_sha)
             keep_flag = bool(keep or record.get("keep"))
+            intent_partial = partial or intent.get("partial") is True
+            raw_intent_rem = intent.get("remaining")
+            intent_remaining = remaining if remaining is not None else (
+                raw_intent_rem if isinstance(raw_intent_rem, str) and raw_intent_rem else None
+            )
             return _finish_land_transition(
                 store, lane_id, merge_sha=merge_sha, previous=previous, tip=tip, tree=tree,
                 integration=integration, onto=onto, keep=keep_flag, new_overrides=new_overrides, receipt=receipt,
+                partial=intent_partial, remaining=intent_remaining,
             )
         problems: list[str] = []
         problem = merge_problem(lane_id, tip, tree, receipt, record=record, prog=prog)
@@ -404,20 +424,31 @@ def merge(
             return _finish_land_transition(
                 store, lane_id, merge_sha=merge_sha, previous=prev_sha, tip=tip, tree=tree,
                 integration=integration, onto=onto, keep=keep_flag, new_overrides=new_overrides, receipt=receipt,
+                partial=partial, remaining=remaining,
             )
         issues = scope.issues(record)
-        ticket = f" ({', '.join(issue.ref for issue in issues)})" if issues else ""
+        effective_issues = [scope.Issue(issue.number, True) for issue in issues] if partial else issues
+        ticket = f" ({', '.join(issue.ref for issue in effective_issues)})" if effective_issues else ""
+        repo = tickets.repository(record["common_dir"], store.project.tickets) or ""
         merge_msg = tickets.merge_message(
-            message or f"Merge {record['branch']}{ticket}", issues, store.project.tickets
+            message or f"Merge {record['branch']}{ticket}", effective_issues, store.project.tickets, repo=repo
         )
-        tickets.warn_trailer_conflicts(store, record, integration, previous, tip, message or "")
+        tickets.warn_trailer_conflicts(
+            store, record, integration, previous, tip, message or "", issues=effective_issues, repo=repo
+        )
         merge_config = [part for setting in store.project.merge_config for part in ("-c", setting)]
         conflicts = ""
         with landing(record["common_dir"], f"{prog} land {lane_id} (pid {os.getpid()})", wait, store=store) as env:
             review_override = check_other_reviews(store, record, force_reason)
             if review_override is not None:
                 new_overrides.append(review_override)
-            landing_intent = {"tip": tip, "integration": integration, "previous": previous, "at": journal.now()}
+            landing_intent: dict[str, Any] = {
+                "tip": tip, "integration": integration, "previous": previous, "at": journal.now(),
+            }
+            if partial:
+                landing_intent["partial"] = True
+                if remaining:
+                    landing_intent["remaining"] = remaining
             store.update(lane_id, lambda rec: rec.__setitem__("landing", landing_intent))
             merged = subprocess.run(["git", *merge_config, "merge", "--no-ff", "-m", merge_msg, record["branch"]],
                                     cwd=integration, capture_output=True, text=True, env=env)
@@ -437,7 +468,7 @@ def merge(
         return _finish_land_transition(
             store, lane_id, merge_sha=merge_sha, previous=previous, tip=tip, tree=tree,
             integration=integration, onto=onto, keep=keep_flag, new_overrides=new_overrides, receipt=receipt,
-            pre_land_overridden=bool(pre_land_problem),
+            pre_land_overridden=bool(pre_land_problem), partial=partial, remaining=remaining,
         )
 
 
@@ -655,9 +686,18 @@ def after_land(store: state.Store, landed: Landed, smoke: Smoke) -> int:
 
 def land(args: Any, store: state.Store) -> int:
     """Land a green lane in three phases: merge, post-merge smoke, and after-land."""
+    partial = getattr(args, "partial", False) is True
+    remaining_raw = getattr(args, "remaining", None)
+    remaining: str | None = None
+    if isinstance(remaining_raw, str):
+        if not partial:
+            raise LaneUsageError("--remaining goes with --partial")
+        remaining = remaining_raw.strip()
+        if not remaining:
+            raise LaneUsageError("--remaining must be non-empty")
     landed = merge(
         store, args.id, args.into, args.message, bool(args.keep), args.force_reason, args.wait,
-        repair=getattr(args, "repair", False) is True,
+        repair=getattr(args, "repair", False) is True, partial=partial, remaining=remaining,
     )
     smoke = post_merge(store, landed, args.slots)
     return after_land(store, landed, smoke)
