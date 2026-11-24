@@ -1680,6 +1680,65 @@ class MinSlotsUnitTests(unittest.TestCase):
         added = next(r for r in selection if r["id"] == "browser:e2e")
         self.assertEqual(added.get("min_slots"), 4)
 
+    def test_default_min_slots_fallback_and_specific_override(self) -> None:
+        from lanefather import config, plan, verify
+        cfg = config.parse({"checks": {"min_slots": {"default": 2, "browser": 3, "structure": 1}}})
+        lane_plan: dict[str, Any] = {
+            "selection": [
+                {"id": "structure-check", "suite": "structure", "paths": ["README.md"]},
+                {"id": "lib-check", "suite": "lib", "paths": ["lib/a.txt"]},
+                {"id": "browser:e2e", "suite": "browser", "paths": ["app/a.ts"]},
+            ],
+        }
+        # Explicit structure=1 overrides default=2.
+        self.assertEqual(
+            plan.required_min_slots(lane_plan, {"structure": ["structure-check"]}, ["structure"], project=cfg),
+            (1, ["structure-check"]),
+        )
+        # Unmatched lib falls back to default=2.
+        self.assertEqual(
+            plan.required_min_slots(lane_plan, {"lib": ["lib-check"]}, ["lib"], project=cfg),
+            (2, ["lib-check"]),
+        )
+        # Specific browser=3 wins over default=2.
+        self.assertEqual(
+            plan.required_min_slots(
+                lane_plan, {"lib": ["lib-check"], "browser": ["browser:e2e"]}, ["lib", "browser"], project=cfg
+            ),
+            (3, ["browser:e2e"]),
+        )
+        # Suite-level fallback (no per-check selection) also honours default and specific patterns.
+        self.assertEqual(plan.required_min_slots({}, None, ["lib"], project=cfg), (2, ["lib"]))
+        self.assertEqual(plan.required_min_slots({}, None, ["structure"], project=cfg), (1, ["structure"]))
+        # Plan-wide declared slots/min_slots suppresses default, while a higher explicit pattern still wins.
+        self.assertEqual(plan.required_min_slots({"min_slots": 1}, None, ["lib"], project=cfg), (1, ["plan"]))
+        self.assertEqual(plan.required_min_slots({"slots": 1}, None, ["browser"], project=cfg), (3, ["browser"]))
+        # Rerun floor honours default fallback when no selection is present, and matches suite patterns for checks
+        # whose id differs from their suite name.
+        self.assertEqual(verify.rerun_min_slots(["lib-check"], None, [], project=cfg), 2)
+        self.assertEqual(verify.rerun_min_slots(["structure"], None, [], project=cfg), 1)
+        suite_plan: dict[str, Any] = {"selection": None}
+        fresh_structure = [{"suite": "structure", "status": "failed", "failed_checks": ["structure-check"]}]
+        self.assertEqual(verify.rerun_min_slots(["structure-check"], suite_plan, fresh_structure, project=cfg), 1)
+        fresh_lib = [{"suite": "lib", "status": "failed", "failed_checks": ["lib-check"]}]
+        self.assertEqual(verify.rerun_min_slots(["lib-check"], suite_plan, fresh_lib, project=cfg), 2)
+        self.assertEqual(
+            verify.rerun_min_slots(["lib-check"], {"selection": None, "min_slots": 1}, fresh_lib, project=cfg),
+            1,
+        )
+
+    def test_slots_wrap_formats_raised_min_count_range(self) -> None:
+        from lanefather import slots
+        with (unittest.mock.patch.object(slots, "command", return_value="/usr/bin/slotfather"),
+              unittest.mock.patch.object(slots, "leased", return_value=False),
+              unittest.mock.patch.object(slots, "supports_range", return_value=True)):
+            wrapped_range = slots.wrap(4, "lane-a", ["echo", "hi"], min_count=2)
+            wrapped_exact = slots.wrap(2, "lane-a", ["echo", "hi"], min_count=2)
+            wrapped_default = slots.wrap(4, "lane-a", ["echo", "hi"])
+        self.assertEqual(wrapped_range[wrapped_range.index("-n") + 1], "2-4")
+        self.assertEqual(wrapped_exact[wrapped_exact.index("-n") + 1], "2")
+        self.assertEqual(wrapped_default[wrapped_default.index("-n") + 1], "4")
+
 
 class SlotRangeWorkerTests(LaneCase):
     def receipt(self, lane_id: str) -> dict[str, Any]:
@@ -1767,6 +1826,44 @@ class SlotRangeWorkerTests(LaneCase):
             wrapped = slots.wrap(2, "lane-a", ["echo", "hi"], min_count=1)
         self.assertIn("-n", wrapped)
         self.assertEqual(wrapped[wrapped.index("-n") + 1], "2")
+
+    def test_slot_range_honours_config_min_slots_floor_only_for_matching_selection(self):
+        config = (self.integration / ".lanefather.toml").read_text() + '\n[checks.min_slots]\nlib = 2\n'
+        self.commit(self.integration, {".lanefather.toml": config}, "configure [checks.min_slots] for lib")
+        sf_log_path = self.state / "slotfather.log"
+        self.env.update(
+            FAKE_SLOTFATHER_RANGE="1",
+            FAKE_SLOTFATHER_TOTAL="4",
+            FAKE_SLOTFATHER_HELD="3",
+            FAKE_SLOTFATHER_LOG=str(sf_log_path),
+        )
+        worktree = self.created("a", "lib/**", "README.md")
+        self.commit(worktree, {"lib/api.txt": "foo\nmin-slots\n"})
+        self.lane("check", "a")
+
+        receipt = self.receipt("a")
+        self.assertEqual(receipt["jobs"], 2)
+        self.assertTrue(receipt["jobs_decision"]["slot_range"])
+        self.assertEqual(receipt["jobs_decision"]["min_jobs"], 2)
+        self.assertEqual(receipt["jobs_decision"]["min_slots"], 2)
+        self.assertEqual(receipt["jobs_decision"]["min_slots_for"], ["lib-check"])
+        self.assertEqual(receipt["jobs_decision"]["granted"], 2)
+        sf_log: list[dict[str, Any]] = [json.loads(line) for line in sf_log_path.read_text().splitlines() if line]
+        runs = [entry for entry in sf_log if entry["command"] == "run"]
+        self.assertTrue(any("-n" in entry["args"] and "2-2" in entry["args"] for entry in runs))
+
+        # Structure-only run (lib-check reused) does not match lib = 2 -> falls back to 1-2 and 1 granted slot.
+        sf_log_path.write_text("")
+        self.commit(worktree, {"README.md": "docs only\n"})
+        self.lane("check", "a")
+        receipt2 = self.receipt("a")
+        self.assertEqual(receipt2["jobs"], 1)
+        self.assertEqual(receipt2["jobs_decision"]["min_jobs"], 1)
+        self.assertNotIn("min_slots", receipt2["jobs_decision"])
+        self.assertEqual(receipt2["jobs_decision"]["granted"], 1)
+        sf_log2: list[dict[str, Any]] = [json.loads(line) for line in sf_log_path.read_text().splitlines() if line]
+        runs2 = [entry for entry in sf_log2 if entry["command"] == "run"]
+        self.assertTrue(any("-n" in entry["args"] and "1-2" in entry["args"] for entry in runs2))
 
 
 class MissingVerifierTests(LaneCase):

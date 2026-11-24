@@ -358,10 +358,12 @@ class SeamTests(ConfigCase):
         self.assertEqual(reviewer.Reviewer(cfg).choices, list(reviewer.DEFAULTS))
 
     def test_checks_min_slots_parses_and_rejects_invalid_entries(self):
-        cfg = self.use('[checks.min_slots]\n"browser:*" = 2\nlib = 3\n')
-        self.assertEqual(cfg.min_slots, (("browser:*", 2), ("lib", 3)))
+        cfg = self.use('[checks.min_slots]\n"browser:*" = 2\nlib = 3\ndefault = 2\n')
+        self.assertEqual(cfg.min_slots, (("browser:*", 2), ("default", 2), ("lib", 3)))
         for bad in ('[checks]\nmin_slots = 2\n', '[checks.min_slots]\n"browser:*" = 0\n',
-                    '[checks.min_slots]\n"browser:*" = true\n', '[checks.min_slots]\n"" = 2\n'):
+                    '[checks.min_slots]\n"browser:*" = -1\n', '[checks.min_slots]\n"browser:*" = 1.5\n',
+                    '[checks.min_slots]\n"browser:*" = "2"\n', '[checks.min_slots]\n"browser:*" = true\n',
+                    '[checks.min_slots]\n"" = 2\n', '[checks.min_slots]\n"   " = 2\n'):
             with self.subTest(bad=bad), self.assertRaises(LaneError):
                 self.use(bad)
 

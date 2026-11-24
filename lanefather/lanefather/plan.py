@@ -182,30 +182,46 @@ def required_min_slots(
     *,
     project: config.Config = config.DEFAULT,
 ) -> tuple[int, list[str]]:
-    """The minimum slot floor declared by the checks/suites that will actually run (fathers#173), from the plan's
-    per-check `min_slots`/`slots` fields or `.lanefather.toml` `[checks.min_slots]` patterns."""
+    """The minimum slot floor declared by the checks/suites that will actually run (fathers#173, fathers#247), from
+    the plan's per-check `min_slots`/`slots` fields or `.lanefather.toml` `[checks.min_slots]` patterns (`default`
+    applies to any running check/suite matched by no other pattern or declared floor)."""
     needs: dict[str, int] = {}
-    patterns = project.min_slots
+    default_floor: int | None = None
+    patterns: list[tuple[str, int]] = []
+    for pattern, count in project.min_slots:
+        if pattern == "default":
+            default_floor = count
+        else:
+            patterns.append((pattern, count))
     if remaining is None:
         top = declared_slots(lane_plan)
         if top is not None and suites:
             needs["plan"] = top
         for suite in suites:
+            matched = top is not None
             for pattern, count in patterns:
                 if fnmatch.fnmatchcase(suite, pattern):
                     needs[suite] = max(needs.get(suite, 0), count)
+                    matched = True
+            if not matched and default_floor is not None:
+                needs[suite] = max(needs.get(suite, 0), default_floor)
     else:
         running = {c for ids in remaining.values() for c in ids}
         for row in lane_plan.get("selection") or ():
             cid = str(row["id"])
             if cid not in running:
                 continue
+            matched = False
             declared = declared_slots(row)
             if declared is not None:
                 needs[cid] = max(needs.get(cid, 0), declared)
+                matched = True
             for pattern, count in patterns:
                 if fnmatch.fnmatchcase(cid, pattern) or fnmatch.fnmatchcase(str(row["suite"]), pattern):
                     needs[cid] = max(needs.get(cid, 0), count)
+                    matched = True
+            if not matched and default_floor is not None:
+                needs[cid] = max(needs.get(cid, 0), default_floor)
     if not needs:
         return 1, []
     floor = max(needs.values())

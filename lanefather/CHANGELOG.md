@@ -8,6 +8,10 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
 
 ### Added
 
+- `[checks.min_slots]` policy reporting and `default` fallback (fathers#247): `[checks.min_slots]` now supports a
+  reserved `default` fallback key for running checks/suites matched by no other pattern or declared floor (advertised
+  as `checks.min_slots.default`), is exposed under `policy.min_slots` in `lanefather capabilities --json`, and is
+  documented in `docs/reference.md`.
 - Post-merge smoke lifecycle and `lanefather smoke` command (fathers#56): `land` now records `post_merge.status =
   "running"` (`pid`, `start`, `checkout`, `lane_created`) before the post-merge smoke starts; a `running` smoke whose
   holder process has exited reads as `killed` via `fathers_common.proc`. `lanefather smoke <id> [--rerun | --accept

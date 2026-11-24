@@ -19,7 +19,8 @@ MANIFEST = 'INSTALL.json'
 CAPABILITIES = ('project.readiness', 'project.update_queue', 'project-hook', 'canonical-reference-transaction',
                 'promote.step-leases', 'tickets.lifecycle', 'slots.priority', 'dashboard.events',
                 'dashboard.status', 'dashboard.settings', 'host.min_disk_gb', 'lane.drop',
-                'post_merge.cleared', 'lane.wait', 'review.fix_of', 'lane.load_advisory', 'project.policy')
+                'post_merge.cleared', 'lane.wait', 'review.fix_of', 'lane.load_advisory', 'project.policy',
+                'checks.min_slots.default')
 # The dashboard contract versions Godfather reads (its SPEC.md, "Capabilities contract").
 DASHBOARD = 1
 
@@ -82,7 +83,7 @@ def minimum_gb(project: config.Config | None = None) -> float:
 
 
 def policy_summary(project: config.Config | None = None) -> dict[str, Any]:
-    """Effective project policy values reported by `capabilities --json` (fathers#131)."""
+    """Effective project policy values reported by `capabilities --json` (fathers#131, fathers#247)."""
     cfg = project or config.DEFAULT
     return {
         'promoted': list(cfg.promoted),
@@ -93,6 +94,7 @@ def policy_summary(project: config.Config | None = None) -> dict[str, Any]:
         'cache_depfiles': list(cfg.cache_depfiles),
         'toolchain': bool(cfg.toolchain and cfg.toolchain_pin),
         'toolchain_name': cfg.toolchain_name,
+        'min_slots': dict(cfg.min_slots),
     }
 
 
