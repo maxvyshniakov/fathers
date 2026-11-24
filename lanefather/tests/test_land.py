@@ -854,5 +854,204 @@ class SmokeNarrowingTests(LaneCase):
             self.assertIn("browser: blocked checks: browser:e2e", buf2.getvalue())
 
 
+class PostMergePlanReuseTests(LaneCase):
+    """fathers#249: post-merge `plan` mode reuses passing whole-suite results from the lane's check receipt when the
+    merge tree equals the lane tree or the diff touches no input of the suite, failing closed on any ambiguity."""
+
+    def _enable_whole_suite_plan_mode(self) -> pathlib.Path:
+        """Remove `plan_module` (so post-merge runs `plan`, not `smoke`) and enable `FIXTURE_SUITE_PLAN=1`."""
+        log = self.tmp / "plan-bootstrap.log"
+        cfg_text = (self.integration / ".lanefather.toml").read_text().replace(
+            'plan_module = "tools/verification_plan.py"\n', "",
+        )
+        verify_text = (self.integration / "verify.sh").read_text().replace(
+            'if args[:1] == ["--changed"]:\n',
+            f'if args[:1] == ["--changed"]:\n    with open({str(log)!r}, "a") as _log:\n'
+            '        _log.write(str(root) + "\\n")\n',
+        )
+        self.commit(self.integration, {".lanefather.toml": cfg_text, "verify.sh": verify_text},
+                    "whole-suite plan mode")
+        self.env["FIXTURE_SUITE_PLAN"] = "1"
+        return log
+
+    def _post(self, lane_id: str) -> dict[str, Any]:
+        return json.loads((self.state / f"{lane_id}.post-merge.json").read_text())
+
+    def _receipt(self, lane_id: str) -> dict[str, Any]:
+        return json.loads((self.state / f"{lane_id}.receipt.json").read_text())
+
+    def test_whole_suite_plan_reuses_all_suites_when_merge_tree_equals_lane_tree(self) -> None:
+        log = self._enable_whole_suite_plan_mode()
+        worktree = self.created("a", "lib/**")
+        self.commit(worktree, {"lib/api.txt": "foo\nbaz\n"})
+        self.lane("check", "a")
+        self.assertEqual(self.verify_runs(), ["structure,lib"])
+        self.assertEqual(len(log.read_text().splitlines()), 1)
+        receipt = self._receipt("a")
+        self.assertIsNone(receipt["selection"])
+        self.assertIsNone(receipt["checks"])
+
+        output = self.lane("land", "a")
+        merge_tree = self.git(self.integration, "rev-parse", "HEAD^{tree}")
+        self.assertEqual(merge_tree, receipt["tree"])
+        # Neither plan bootstrap nor verifier ran during post-merge.
+        self.assertEqual(self.verify_runs(), ["structure,lib"])
+        self.assertEqual(len(log.read_text().splitlines()), 1)
+        self.assertIn("2 suites", output)
+        self.assertIn("no plan bootstrap needed", output)
+        self.assertIn(f"skipped: the lane's green receipt verified the merge tree {merge_tree[:10]}", output)
+
+        post = self._post("a")
+        self.assertEqual((post["kind"], post["status"], post["suites"], post["jobs"]), ("skip", "green", [], 0))
+        self.assertTrue(post["narrowing"]["narrowed"])
+        self.assertEqual(post["narrowing"]["dropped_suites"], ["structure", "lib"])
+        self.assertEqual(post["narrowing"]["reused_suites"]["lib"]["reused_from"], receipt["tree"])
+        self.assertEqual(post["results"], [])
+        self.assertRegex((self.state / "ledger.log").read_text(),
+                         r"post-merge a green skip jobs=0 suites=- lane_verified=2 ")
+
+    def test_whole_suite_plan_reuses_untouched_suite_and_runs_touched_suite_on_disjoint_diff(self) -> None:
+        self._enable_whole_suite_plan_mode()
+        worktree = self.created("a", "lib/**")
+        self.commit(worktree, {"lib/api.txt": "foo\nbaz\n"})
+        self.lane("check", "a")
+        self.assertEqual(self.verify_runs(), ["structure,lib"])
+        receipt = self._receipt("a")
+
+        # Integration moves on a disjoint path (`docs/install.md`) which selects `structure` and `host-journeys`,
+        # NOT `lib`. `merged_plan` selects `structure,lib`; `lib` is untouched by the delta and reused from `a`.
+        self.commit(self.integration, {"docs/install.md": "journey\n"}, "disjoint docs change")
+        output = self.lane("land", "a")
+        self.assertEqual(self.verify_runs()[-1], "structure")
+        self.assertIn("narrowed plan: structure; the lane's receipt stands for 1 more", output)
+
+        post = self._post("a")
+        self.assertEqual((post["kind"], post["status"], post["suites"]), ("narrowed", "green", ["structure"]))
+        self.assertTrue(post["narrowing"]["narrowed"])
+        self.assertEqual(post["narrowing"]["dropped_suites"], ["lib"])
+        self.assertEqual(post["narrowing"]["integration_paths"], ["docs/install.md"])
+        self.assertEqual(post["narrowing"]["reused_suites"]["lib"]["reused_from"], receipt["tree"])
+
+    def test_whole_suite_plan_fails_closed_when_integration_touches_shared_or_unowned_input(self) -> None:
+        self._enable_whole_suite_plan_mode()
+        worktree = self.created("a", "lib/**")
+        self.commit(worktree, {"lib/api.txt": "foo\nbaz\n"})
+        self.lane("check", "a")
+        # `tooling/moved.txt` selects the full gate in `delta` -> fail closed, re-run all planned suites.
+        self.integration_moves()
+        output = self.lane("land", "a")
+        self.assertEqual(self.verify_runs()[-1], "structure,lib")
+        self.assertIn("whole, since what the integration brought in selects the full gate", output)
+        post = self._post("a")
+        self.assertEqual((post["kind"], post["status"], post["suites"]), ("plan", "green", ["structure", "lib"]))
+        self.assertFalse(post["narrowing"]["narrowed"])
+
+    def test_whole_suite_plan_fails_closed_on_stale_red_stopped_partial_and_malformed_receipts(self) -> None:
+        from lanefather import config, plan, state
+
+        self._enable_whole_suite_plan_mode()
+        worktree = self.created("a", "lib/**")
+        self.commit(worktree, {"lib/api.txt": "foo\nbaz\n"})
+        self.lane("check", "a")
+        receipt = self._receipt("a")
+        tip = self.git(worktree, "rev-parse", "HEAD")
+        tree = receipt["tree"]
+        landed = {"tip": tip, "tree": tree}
+        store = state.Store(config.load(config.find(self.integration)), directory=self.state)
+        inspector = plan.Checkout(store.project, worktree)
+
+        with unittest.mock.patch.dict(os.environ, self.env, clear=False):
+            # Missing receipt -> fail closed.
+            kind, suites, narrowing = plan.narrow_suites(
+                inspector, None, landed, tree, "plan", ["structure", "lib"], worktree, toolchain=None,
+            )
+            self.assertEqual((kind, suites, narrowing["narrowed"]), ("plan", ["structure", "lib"], False))
+
+            # Wrong tree -> fail closed.
+            stale = dict(receipt, tree="0" * 40)
+            kind, suites, narrowing = plan.narrow_suites(
+                inspector, stale, landed, tree, "plan", ["structure", "lib"], worktree, toolchain=None,
+            )
+            self.assertEqual((kind, suites, narrowing["narrowed"]), ("plan", ["structure", "lib"], False))
+
+            # Stopped receipt -> fail closed.
+            stopped = dict(receipt, stopped={"failed": ["structure-check"], "not_run": 1})
+            kind, suites, narrowing = plan.narrow_suites(
+                inspector, stopped, landed, tree, "plan", ["structure", "lib"], worktree, toolchain=None,
+            )
+            self.assertEqual((kind, suites, narrowing["narrowed"]), ("plan", ["structure", "lib"], False))
+            self.assertIn("stopped", narrowing["reason"])
+
+            # Pre-existing / failed suite row -> not reused (runs again while passed suite is reused).
+            pre_existing = dict(receipt, results=[
+                {"suite": "structure", "status": "passed", "log": "/tmp/s.log"},
+                {"suite": "lib", "status": "failed", "failed_checks": ["lib-check"], "log": "/tmp/l.log"},
+            ])
+            kind, suites, narrowing = plan.narrow_suites(
+                inspector, pre_existing, landed, tree, "plan", ["structure", "lib"], worktree, toolchain=None,
+            )
+            self.assertEqual((kind, suites, narrowing["dropped_suites"]), ("narrowed", ["lib"], ["structure"]))
+
+            # Partial suite row (with `checks` subset) -> does not stand for a whole suite.
+            partial = dict(receipt, results=[
+                {"suite": "structure", "status": "passed", "log": "/tmp/s.log"},
+                {"suite": "lib", "status": "passed", "checks": ["schema-check"], "log": "/tmp/l.log"},
+            ])
+            kind, suites, narrowing = plan.narrow_suites(
+                inspector, partial, landed, tree, "plan", ["structure", "lib"], worktree, toolchain=None,
+            )
+            self.assertEqual((kind, suites, narrowing["dropped_suites"]), ("narrowed", ["lib"], ["structure"]))
+
+            # Malformed `results` entries -> fail closed, no crash, all suites re-run.
+            malformed = dict(receipt, results=["not-a-dict", {"suite": 123, "status": "passed"}])
+            kind, suites, narrowing = plan.narrow_suites(
+                inspector, malformed, landed, tree, "plan", ["structure", "lib"], worktree, toolchain=None,
+            )
+            self.assertEqual((kind, suites, narrowing["dropped_suites"]), ("plan", ["structure", "lib"], []))
+
+            # Exact-tree reuse with malformed `suites` -> fail closed.
+            bad_suites = dict(receipt, suites=["structure", 42])
+            verified, _narrow, _reasons, why = plan.exact_tree_reuse(
+                inspector, bad_suites, landed, tree, receipt["base"], None, worktree,
+            )
+            self.assertIsNone(verified)
+            self.assertIn("invalid suites", why or "")
+
+    def test_narrow_smoke_reruns_dependent_checks_when_dependency_reruns(self) -> None:
+        from lanefather import config, plan, state
+
+        worktree = self.created("a", "lib/**")
+        self.commit(worktree, {"lib/api.txt": "foo\nbaz\n"})
+        self.lane("check", "a")
+        receipt = self._receipt("a")
+        # Add a consumer check that passed in the receipt and depends on `structure-check`.
+        receipt = dict(receipt, check_results={
+            **receipt["check_results"],
+            "consumer-check": {"suite": "lib", "status": "passed"},
+        })
+        tip = self.git(worktree, "rev-parse", "HEAD")
+        landed = {"tip": tip, "tree": receipt["tree"]}
+        # Integration moves on `docs/install.md`, which selects `structure-check` in `delta` (not `lib-check` or
+        # `consumer-check`). Because `consumer-check` declares `depends_on: ["structure-check"]`, it must re-run too.
+        self.commit(self.integration, {"docs/install.md": "journey\n"}, "touch docs")
+        self.git(self.integration, "merge", "--no-ff", "-m", "merge a", "lane/a")
+        merge_tree = self.git(self.integration, "rev-parse", "HEAD^{tree}")
+        store = state.Store(config.load(config.find(self.integration)), directory=self.state)
+        inspector = plan.Checkout(store.project, self.integration)
+        rows = [
+            {"id": "structure-check", "suite": "structure", "paths": ["lib/api.txt"]},
+            {"id": "lib-check", "suite": "lib", "paths": ["lib/api.txt"]},
+            {"id": "consumer-check", "suite": "lib", "paths": ["lib/api.txt"], "depends_on": ["structure-check"]},
+        ]
+        with unittest.mock.patch.dict(os.environ, self.env, clear=False):
+            kind, kept, narrowing, lane_verified = plan.narrow_smoke(
+                inspector, receipt, landed, merge_tree, "plan", rows, worktree, toolchain=None,
+            )
+        self.assertEqual(kind, "narrowed")
+        self.assertEqual([r["id"] for r in kept or []], ["structure-check", "consumer-check"])
+        self.assertEqual(narrowing["dropped"], ["lib-check"])
+        self.assertEqual(list(lane_verified), ["lib-check"])
+
+
 if __name__ == "__main__":
     unittest.main()

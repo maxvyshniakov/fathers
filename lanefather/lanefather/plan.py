@@ -269,7 +269,13 @@ def plan_for(root: Any, base: str, project: config.Config = config.DEFAULT) -> d
     full_why = plan.get("unowned") or plan["paths"]
     selection: Rows = [{"id": row["id"], "suite": row["suite"],
                         "paths": row["paths"] or (full_why if plan.get("full") else []),
-                        **({"min_slots": need} if (need := declared_slots(row)) is not None else {})}
+                        **({"min_slots": need} if (need := declared_slots(row)) is not None else {}),
+                        **({"depends_on": list(cast(list[str], deps))}
+                           if isinstance((deps := row.get("depends_on")), list)
+                           and all(isinstance(d, str) and d for d in cast(list[Any], deps)) else {}),
+                        **({"requires": list(cast(list[str], reqs))}
+                           if isinstance((reqs := row.get("requires")), list)
+                           and all(isinstance(r, str) and r for r in cast(list[Any], reqs)) else {})}
                        for row in rows if plan.get("full") or not row["producer"]]
     plan["selection"] = selection
     plan["selected"] = suites_of(selection)
@@ -508,6 +514,110 @@ def reuse_from_receipt(
     return reused
 
 
+def _diff_paths(root: Path, base_ref: str, target_ref: str) -> list[str] | None:
+    """Changed paths between `base_ref` and `target_ref` using NUL-delimited git diff, or None on git error."""
+    result = subprocess.run(
+        ["git", "-C", str(root), "-c", "core.quotePath=false", "diff", "--no-renames", "--name-only", "-z",
+         base_ref, target_ref, "--"],
+        capture_output=True,
+    )
+    if result.returncode != 0:
+        return None
+    return [part.decode("utf-8", errors="surrogateescape") for part in result.stdout.split(b"\x00") if part]
+
+
+def _passed_check_results(receipt: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Return `{check_id: entry}` for every check that strictly passed in `receipt["check_results"]`."""
+    raw_results: Any = receipt.get("check_results")
+    if not isinstance(raw_results, dict):
+        return {}
+    passed: dict[str, dict[str, Any]] = {}
+    for cid, raw_entry in cast(dict[Any, Any], raw_results).items():
+        if not isinstance(cid, str) or not cid or not isinstance(raw_entry, dict):
+            continue
+        entry = cast(dict[str, Any], raw_entry)
+        if entry.get("status") != "passed":
+            continue
+        if entry.get("blocked_by") or entry.get("classification"):
+            continue
+        passed[cid] = entry
+    return passed
+
+
+def _passed_suite_results(receipt: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Return `{suite: row}` for every whole suite that strictly passed in `receipt["results"]`.
+
+    A suite is eligible only when every row for it is a whole-suite pass (`status == "passed"`, no per-check
+    `"checks"` subset, and no `failed_checks`, `blocked_checks`, or `environment`). Any malformed row fails closed.
+    """
+    raw_results: Any = receipt.get("results")
+    if not isinstance(raw_results, list):
+        return {}
+    passed: dict[str, dict[str, Any]] = {}
+    disqualified: set[str] = set()
+    for raw_row in cast(list[Any], raw_results):
+        if not isinstance(raw_row, dict):
+            return {}
+        row = cast(dict[str, Any], raw_row)
+        suite = row.get("suite")
+        if not isinstance(suite, str) or not suite:
+            return {}
+        is_whole_pass = (
+            row.get("status") == "passed"
+            and "checks" not in row
+            and not row.get("failed_checks")
+            and not row.get("blocked_checks")
+            and not row.get("environment")
+        )
+        if not is_whole_pass:
+            disqualified.add(suite)
+            passed.pop(suite, None)
+        elif suite not in disqualified:
+            passed[suite] = row
+    return passed
+
+
+def _expand_dependent_checks(rows: Rows, running: set[str]) -> set[str]:
+    """Transitively mark any check whose declared dependencies (`depends_on`/`requires`) are re-running."""
+    expanded = set(running)
+    deps_by_id: dict[str, set[str]] = {}
+    for row in rows:
+        cid = row.get("id")
+        if not isinstance(cid, str) or not cid:
+            continue
+        deps: set[str] = set()
+        for key in ("depends_on", "requires"):
+            raw = row.get(key)
+            if isinstance(raw, list):
+                deps.update(item for item in cast(list[Any], raw) if isinstance(item, str) and item)
+        if deps:
+            deps_by_id[cid] = deps
+    changed = True
+    while changed:
+        changed = False
+        for cid, deps in deps_by_id.items():
+            if cid not in expanded and (deps & expanded):
+                expanded.add(cid)
+                changed = True
+    return expanded
+
+
+def _valid_selection_rows(raw_rows: Any) -> Rows | None:
+    """Validate a receipt or plan selection list: every item must be a dict with a non-empty string `id`."""
+    if not isinstance(raw_rows, list):
+        return None
+    validated: Rows = []
+    for raw_row in cast(list[Any], raw_rows):
+        if not isinstance(raw_row, dict):
+            return None
+        row = cast(dict[str, Any], raw_row)
+        cid = row.get("id")
+        if not isinstance(cid, str) or not cid:
+            return None
+        validated.append(row)
+    return validated
+
+
 def exact_tree_reuse(
     checkout: Checkout | Any,
     receipt: dict[str, Any] | None,
@@ -521,38 +631,94 @@ def exact_tree_reuse(
     project: config.Config = config.DEFAULT,
 ) -> tuple[dict[str, dict[str, Any]] | None, dict[str, Any] | None, dict[str, Any], str | None]:
     """Check whether the lane's green receipt already covers the exact merge tree before running `plan_for`
-    (fathers#198). A consumer whose plan adapter bootstraps dependencies (such as bun install under a heavy slot)
-    would otherwise wait in the slot queue only to discover that nothing needs to run.
+    (fathers#198, fathers#249). A consumer whose plan adapter bootstraps dependencies (such as bun install under a
+    heavy slot) would otherwise wait in the slot queue only to discover that nothing needs to run.
 
-    Returns (lane_verified, narrowing, reasons, fallback_reason). When `lane_verified` is not None, every check the
-    post-merge selection would run already passed on this exact merge tree under the same toolchain and platform;
-    otherwise `fallback_reason` names why plan preparation is still required."""
+    Returns (lane_verified, narrowing, reasons, fallback_reason). When `lane_verified` is not None, every check (or
+    whole suite in whole-suite `plan` mode) the post-merge selection would run already passed on this exact merge tree
+    under the same toolchain and platform; otherwise `fallback_reason` names why plan preparation is still required."""
     inspector = _as_checkout(checkout, project)
     resolved_tc = inspector.toolchain() if toolchain is UNRESOLVED else toolchain
+    ids = inspector.smoke_checks()
+    found = inspector.module()
+    has_smoke = bool(ids and found is not None)
+    whole_suite_plan = (
+        not has_smoke
+        and isinstance(receipt, dict)
+        and receipt.get("selection") is None
+        and receipt.get("checks") is None
+    )
     reason = receipts.smoke_basis(
-        None, receipt, landed, resolved_tc, worktree=worktree, platform=platform, project=inspector.project
+        None, receipt, landed, resolved_tc, worktree=worktree, platform=platform, project=inspector.project,
+        require_checks=not whole_suite_plan,
     )
     receipt_tree = receipts.tree_of(receipt)
     if reason or receipt is None or receipt_tree is None:
         return None, None, {}, reason or "the lane has no receipt"
     if merge_tree != receipt_tree:
         return None, None, {}, f"merge tree {merge_tree[:10]} differs from lane receipt {receipt_tree[:10]}"
-    raw_results: Any = receipt.get("check_results") or {}
-    results = cast(dict[str, dict[str, Any]], raw_results) if isinstance(raw_results, dict) else {}
-    passed = {c for c, e in results.items() if receipts.status_of(e) == "passed"}
     receipt_base = receipt.get("base")
-    same_base = bool(receipt_base) and (
+    same_base = isinstance(receipt_base, str) and bool(receipt_base) and (
         receipt_base == previous
         or (gitops.git_ok(inspector.root, "cat-file", "-e", f"{receipt_base}^{{tree}}")
             and gitops.git(inspector.root, "rev-parse", f"{previous}^{{tree}}")
             == gitops.git(inspector.root, "rev-parse", f"{receipt_base}^{{tree}}")))
-    ids = inspector.smoke_checks()
-    found = inspector.module()
+    raw_reasons: Any = receipt.get("reasons")
+    reasons = dict(cast(dict[str, Any], raw_reasons)) if isinstance(raw_reasons, dict) else {}
+    if whole_suite_plan:
+        raw_suites: Any = receipt.get("suites")
+        if not isinstance(raw_suites, list) or not all(
+            isinstance(s, str) and s for s in cast(list[Any], raw_suites)
+        ):
+            return None, None, {}, "the lane's receipt has invalid suites"
+        receipt_suites = cast(list[str], raw_suites)
+        if not receipt.get("full") and not same_base:
+            merged_paths = _diff_paths(inspector.root, previous, merge_tree)
+            if merged_paths is None:
+                return None, None, {}, "merge base differs from the lane receipt's base"
+            outside = sorted(set(merged_paths) - receipt_paths(receipt))
+            if outside:
+                listed = ", ".join(outside[:3]) + ("..." if len(outside) > 3 else "")
+                return None, None, {}, (
+                    f"merge base differs from the lane receipt's base and the merge changes {listed}, "
+                    "which its plan did not cover"
+                )
+        passed_suites = _passed_suite_results(receipt)
+        missing_suites = [s for s in receipt_suites if s not in passed_suites]
+        if missing_suites:
+            listed = ", ".join(missing_suites[:3]) + ("..." if len(missing_suites) > 3 else "")
+            return None, None, {}, f"lane receipt did not verify suite(s) {listed}"
+        reused_suites = {
+            s: {
+                "suite": s,
+                "status": "passed",
+                "reused_from": (
+                    passed_suites[s]["reused_from"]
+                    if isinstance(passed_suites[s].get("reused_from"), str) and passed_suites[s]["reused_from"]
+                    else receipt_tree
+                ),
+                "log": passed_suites[s]["log"] if isinstance(passed_suites[s].get("log"), str) else "",
+            }
+            for s in receipt_suites
+        }
+        narrowing: dict[str, Any] = {
+            "receipt_tree": receipt_tree,
+            "receipt_head": receipt.get("head"),
+            "lane_tip": landed.get("tip"),
+            "narrowed": True,
+            "integration_paths": [],
+            "dropped": [],
+            "dropped_suites": list(receipt_suites),
+            "reused_suites": reused_suites,
+        }
+        return {}, narrowing, reasons, None
+    passed_map = _passed_check_results(receipt)
     rows: Rows
-    if ids and found is not None:
+    if has_smoke:
+        receipt_selection = _valid_selection_rows(receipt.get("selection"))
         if (same_base and isinstance(receipt.get("suites"), list)
-                and set(receipt["suites"]) <= {"structure"} and receipt.get("selection") is not None):
-            rows = list(receipt["selection"])
+                and set(receipt["suites"]) <= {"structure"} and receipt_selection is not None):
+            rows = receipt_selection
         else:
             smoke_list = inspector.smoke_rows()
             if smoke_list is None:
@@ -564,38 +730,45 @@ def exact_tree_reuse(
                 # path that plan left out; for both scoped and full receipts, every check in the receipt's own
                 # selection must have passed as well (a green receipt may carry flaky/pre-existing failures).
                 if not receipt.get("full"):
-                    merged = {p for p in gitops.git(
-                        inspector.root, "-c", "core.quotePath=false", "diff", "--no-renames", "--name-only",
-                        previous, merge_tree, "--",
-                    ).splitlines() if p}
-                    outside = sorted(merged - receipt_paths(receipt))
-                    if outside or receipt.get("selection") is None:
+                    merged_paths = _diff_paths(inspector.root, previous, merge_tree)
+                    outside = sorted(set(merged_paths) - receipt_paths(receipt)) if merged_paths is not None else []
+                    if merged_paths is None or outside or receipt_selection is None:
                         listed = ", ".join(outside[:3]) + ("..." if len(outside) > 3 else "")
                         return None, None, {}, ("merge base differs from the lane receipt's base"
                                                 + (f" and the merge changes {listed}, which its plan did not cover"
                                                    if outside else ""))
-                elif receipt.get("selection") is None:
+                elif receipt_selection is None:
                     return None, None, {}, "merge base differs from the lane receipt's base"
                 named = {str(row["id"]) for row in rows}
-                rows = rows + [row for row in receipt["selection"] if str(row["id"]) not in named]
+                rows = rows + [row for row in receipt_selection if str(row["id"]) not in named]
     else:
-        if receipt.get("selection") is None:
+        receipt_selection = _valid_selection_rows(receipt.get("selection"))
+        if receipt_selection is None:
             return None, None, {}, "the lane's receipt has no per-check selection"
         if not receipt.get("full") and not same_base:
-            return None, None, {}, "merge base differs from the lane receipt's base"
-        rows = list(receipt["selection"])
-    missing = [str(row["id"]) for row in rows if str(row["id"]) not in passed]
+            merged_paths = _diff_paths(inspector.root, previous, merge_tree)
+            if merged_paths is None:
+                return None, None, {}, "merge base differs from the lane receipt's base"
+            outside = sorted(set(merged_paths) - receipt_paths(receipt))
+            if outside:
+                listed = ", ".join(outside[:3]) + ("..." if len(outside) > 3 else "")
+                return None, None, {}, (
+                    f"merge base differs from the lane receipt's base and the merge changes {listed}, "
+                    "which its plan did not cover"
+                )
+        rows = receipt_selection
+    missing = [str(row["id"]) for row in rows if str(row["id"]) not in passed_map]
     if missing:
         listed = ", ".join(missing[:3]) + ("..." if len(missing) > 3 else "")
         return None, None, {}, f"lane receipt did not verify {listed}"
     lane_verified = {
-        str(row["id"]): dict(results[str(row["id"])],
-                             reused_from=results[str(row["id"])].get("reused_from") or receipt_tree)
+        str(row["id"]): dict(passed_map[str(row["id"])],
+                             reused_from=passed_map[str(row["id"])].get("reused_from") or receipt_tree)
         for row in rows
     }
-    narrowing = {"receipt_tree": receipt_tree, "receipt_head": receipt.get("head"), "lane_tip": landed["tip"],
+    narrowing = {"receipt_tree": receipt_tree, "receipt_head": receipt.get("head"), "lane_tip": landed.get("tip"),
                  "narrowed": True, "integration_paths": [], "dropped": list(lane_verified)}
-    return lane_verified, narrowing, dict(receipt.get("reasons") or {}), None
+    return lane_verified, narrowing, reasons, None
 
 
 def narrow_smoke(
@@ -612,9 +785,12 @@ def narrow_smoke(
     project: config.Config = config.DEFAULT,
 ) -> tuple[str, Rows | None, dict[str, Any], dict[str, dict[str, Any]]]:
     """The part of the post-merge selection `rows` that the merge still needs after the lane's green receipt
-    (#640): (kind, rows, narrowing, lane_verified)."""
+    (#640, fathers#249): (kind, rows, narrowing, lane_verified)."""
     if rows is None:
         return kind, rows, {"narrowed": False, "reason": "the tree's plan names whole suites"}, {}
+    valid_rows = _valid_selection_rows(rows)
+    if valid_rows is None:
+        return kind, rows, {"narrowed": False, "reason": "post-merge selection has invalid check rows"}, {}
     inspector = _as_checkout(checkout, project)
     resolved_tc = inspector.toolchain() if toolchain is UNRESOLVED else toolchain
     reason = receipts.smoke_basis(
@@ -623,37 +799,173 @@ def narrow_smoke(
     receipt_tree = receipts.tree_of(receipt)
     if reason or receipt is None or receipt_tree is None:
         return kind, rows, {"narrowed": False, "reason": reason}, {}
-    basis = {"receipt_tree": receipt_tree, "receipt_head": receipt.get("head"), "lane_tip": landed["tip"]}
+    lane_tip = landed.get("tip")
+    basis = {"receipt_tree": receipt_tree, "receipt_head": receipt.get("head"), "lane_tip": lane_tip}
     paths: list[str]
     if merge_tree == receipt_tree:
         brought: dict[str, list[str]] = {}
         paths = []
     else:
-        delta = inspector.plan_for(str(landed["tip"]))
-        paths = list(delta["paths"])
-        if delta.get("full") or delta["selection"] is None:
+        if not isinstance(lane_tip, str) or not lane_tip:
+            return kind, rows, dict(basis, narrowed=False, reason="the landed record has no lane tip"), {}
+        tip_tree = gitops.git(
+            inspector.root, "rev-parse", "--verify", "--quiet", f"{lane_tip}^{{tree}}", check=False,
+        )
+        if tip_tree != receipt_tree:
+            return kind, rows, dict(basis, narrowed=False, reason="lane tip tree does not match receipt tree"), {}
+        diff_paths = _diff_paths(inspector.root, receipt_tree, merge_tree)
+        if diff_paths is None:
+            return kind, rows, dict(basis, narrowed=False, reason="could not diff lane tree against merge tree"), {}
+        delta = inspector.plan_for(lane_tip)
+        raw_delta_paths: Any = delta.get("paths")
+        paths = (
+            [p for p in cast(list[Any], raw_delta_paths) if isinstance(p, str)]
+            if isinstance(raw_delta_paths, list)
+            else []
+        )
+        delta_selection = _valid_selection_rows(delta.get("selection"))
+        if delta.get("full") or delta_selection is None:
             return kind, rows, dict(basis, narrowed=False, integration_paths=paths,
                                     reason="what the integration brought in selects the full gate"), {}
-        brought = {str(row["id"]): list(row["paths"]) for row in delta["selection"]}
-    raw_results: Any = receipt.get("check_results") or {}
-    results = cast(dict[str, dict[str, Any]], raw_results) if isinstance(raw_results, dict) else {}
-    passed = {c for c, e in results.items() if receipts.status_of(e) == "passed"}
+        if delta.get("unowned"):
+            return kind, rows, dict(basis, narrowed=False, integration_paths=paths,
+                                    reason="what the integration brought in includes unowned paths"), {}
+        if diff_paths and not paths:
+            return kind, rows, dict(
+                basis, narrowed=False, integration_paths=diff_paths,
+                reason="delta plan did not report the changed paths between lane tree and merge tree",
+            ), {}
+        brought = {
+            str(row["id"]): [p for p in cast(list[Any], row["paths"]) if isinstance(p, str)]
+            if isinstance(row.get("paths"), list) else []
+            for row in delta_selection
+        }
+    passed_map = _passed_check_results(receipt)
+    raw_results: Any = receipt.get("check_results")
+    results = cast(dict[str, Any], raw_results) if isinstance(raw_results, dict) else {}
+    initial_running = {
+        str(row["id"])
+        for row in valid_rows
+        if str(row["id"]) in brought or str(row["id"]) not in passed_map
+    }
+    running = _expand_dependent_checks(valid_rows, initial_running)
     kept: Rows = []
-    for row in rows:
+    for row in valid_rows:
         cid = str(row["id"])
         if cid in brought:
             kept.append(dict(row, paths=brought[cid]))
-        elif cid not in passed:
+        elif cid not in passed_map:
             unverified = receipts.status_of(results.get(cid), "not selected")
             kept.append(dict(row, unverified=unverified))
-    running = {str(row["id"]) for row in kept}
+        elif cid in running:
+            kept.append(dict(row, dependency_rerun=True))
     lane_verified = {
-        str(row["id"]): dict(results[str(row["id"])],
-                             reused_from=results[str(row["id"])].get("reused_from") or receipt_tree)
-        for row in rows if str(row["id"]) not in running
+        str(row["id"]): dict(passed_map[str(row["id"])],
+                             reused_from=passed_map[str(row["id"])].get("reused_from") or receipt_tree)
+        for row in valid_rows if str(row["id"]) not in running
     }
     narrowing = dict(basis, narrowed=True, integration_paths=paths, dropped=list(lane_verified))
     return ("narrowed" if kept else "skip"), kept, narrowing, lane_verified
+
+
+def narrow_suites(
+    checkout: Checkout | Any,
+    receipt: dict[str, Any] | None,
+    landed: dict[str, Any],
+    merge_tree: str,
+    kind: str,
+    suites: list[str],
+    worktree: Any = None,
+    *,
+    toolchain: Any = UNRESOLVED,
+    platform: str | None = None,
+    project: config.Config = config.DEFAULT,
+) -> tuple[str, list[str], dict[str, Any]]:
+    """The suites of a whole-suite post-merge `plan` that still need to run after the lane's green receipt
+    (fathers#249): `(kind, kept_suites, narrowing)`. Fail-closed on any missing, red, stale, stopped, or malformed
+    receipt, full or unowned delta, or suite not passed as a whole suite in the receipt."""
+    if kind != "plan" or not suites:
+        return kind, list(suites), {"narrowed": False, "reason": "the tree's plan names whole suites"}
+    inspector = _as_checkout(checkout, project)
+    resolved_tc = inspector.toolchain() if toolchain is UNRESOLVED else toolchain
+    reason = receipts.smoke_basis(
+        None, receipt, landed, resolved_tc, worktree=worktree, platform=platform, project=inspector.project,
+        require_checks=False,
+    )
+    receipt_tree = receipts.tree_of(receipt)
+    if reason or receipt is None or receipt_tree is None:
+        return kind, list(suites), {"narrowed": False, "reason": reason or "the lane has no receipt"}
+    lane_tip = landed.get("tip")
+    basis = {"receipt_tree": receipt_tree, "receipt_head": receipt.get("head"), "lane_tip": lane_tip}
+    paths: list[str]
+    brought_suites: set[str]
+    if merge_tree == receipt_tree:
+        brought_suites = set()
+        paths = []
+    else:
+        if not isinstance(lane_tip, str) or not lane_tip:
+            return kind, list(suites), dict(basis, narrowed=False, reason="the landed record has no lane tip")
+        tip_tree = gitops.git(
+            inspector.root, "rev-parse", "--verify", "--quiet", f"{lane_tip}^{{tree}}", check=False,
+        )
+        if tip_tree != receipt_tree:
+            return kind, list(suites), dict(basis, narrowed=False, reason="lane tip tree does not match receipt tree")
+        diff_paths = _diff_paths(inspector.root, receipt_tree, merge_tree)
+        if diff_paths is None:
+            return kind, list(suites), dict(basis, narrowed=False, reason="could not diff lane tree against merge tree")
+        delta = inspector.plan_for(lane_tip)
+        raw_delta_paths: Any = delta.get("paths")
+        paths = (
+            [p for p in cast(list[Any], raw_delta_paths) if isinstance(p, str)]
+            if isinstance(raw_delta_paths, list)
+            else []
+        )
+        if delta.get("full"):
+            return kind, list(suites), dict(
+                basis, narrowed=False, integration_paths=paths,
+                reason="what the integration brought in selects the full gate",
+            )
+        if delta.get("unowned"):
+            return kind, list(suites), dict(
+                basis, narrowed=False, integration_paths=paths,
+                reason="what the integration brought in includes unowned paths",
+            )
+        if diff_paths and not paths:
+            return kind, list(suites), dict(
+                basis, narrowed=False, integration_paths=diff_paths,
+                reason="delta plan did not report the changed paths between lane tree and merge tree",
+            )
+        raw_selected: Any = delta.get("selected")
+        if not isinstance(raw_selected, list) or not all(
+            isinstance(s, str) and s for s in cast(list[Any], raw_selected)
+        ):
+            return kind, list(suites), dict(
+                basis, narrowed=False, integration_paths=paths,
+                reason="delta plan returned invalid suites",
+            )
+        brought_suites = set(cast(list[str], raw_selected))
+    passed_suites = _passed_suite_results(receipt)
+    kept_suites = [s for s in suites if s in brought_suites or s not in passed_suites]
+    dropped_suites = [s for s in suites if s not in kept_suites]
+    reused_suites = {
+        s: {
+            "suite": s,
+            "status": "passed",
+            "reused_from": (
+                passed_suites[s]["reused_from"]
+                if isinstance(passed_suites[s].get("reused_from"), str) and passed_suites[s]["reused_from"]
+                else receipt_tree
+            ),
+            "log": passed_suites[s]["log"] if isinstance(passed_suites[s].get("log"), str) else "",
+        }
+        for s in dropped_suites
+    }
+    narrowing = dict(
+        basis, narrowed=True, integration_paths=paths, dropped=[],
+        dropped_suites=dropped_suites, reused_suites=reused_suites,
+    )
+    new_kind = "skip" if not kept_suites else ("narrowed" if dropped_suites else kind)
+    return new_kind, kept_suites, narrowing
 
 
 def smoke_reuse(

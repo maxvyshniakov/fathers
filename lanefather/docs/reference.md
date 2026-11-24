@@ -423,7 +423,13 @@ land's comment as the lane's evidence. The capability is `tickets.lifecycle`.
 ```
 
 The plan module (`plan_module`) answers `SUITES`, `checks(...)` and `smoke(root)`; `PERF = "<suite>"` names the perf
-suite, and `CAPABILITIES` may advertise `"only"`. A project without one gets whole suites.
+suite, and `CAPABILITIES` may advertise `"only"`. A project without one gets whole suites. In post-merge `plan` mode
+(projects without `smoke(root)`), `land` reuses passing whole-suite results from the lane's current green check receipt
+when the merge tree equals the receipt tree (skipping plan preparation and the verifier) or when the diff from the lane
+tip to the merge touches no input of that suite (`narrowing.dropped_suites` and `narrowing.reused_suites`, fathers#249).
+Reuse fails closed on missing, red, stale, stopped, or malformed receipts, full or unowned delta plans, suites that did
+not pass as whole suites (including pre-existing-classified failures), and checks declaring `depends_on`/`requires` on a
+check that re-runs.
 
 The report is `{checks: [{id, status, log, blocked_by, failed_tests?, outside_failed_tests?, failure_evidence?}], stopped, environment, capabilities?}`. Optional row fields feed the run
 history (fathers#92): `seconds` (the check's duration; without it `stats` has no p50/p90 for the check), `started`
