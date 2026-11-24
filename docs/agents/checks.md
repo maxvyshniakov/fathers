@@ -41,7 +41,7 @@ The installed commands use only Python's standard library (3.11+: each package's
   of its exact file, rule and message fails; a package without a baseline (Spawnfather) allows none. The budget only
   shrinks: `python3 tools/check.py --shrink-baseline` after fixing debt; never grow it or weaken a rule to pass.
 - A package's `[tool.ruff.lint] ignore` lists the shared rules it does not pass yet; drop a code with the fix.
-- `tools/test_checks.py` (in the `tools` check) holds the four `check.py` copies identical and their pins equal:
+- `tools/test_checks.py` (in the `tools` check) holds the five `check.py` copies identical and their pins equal:
   change them together.
 
 ## Heavy checks
@@ -63,7 +63,7 @@ The installed commands use only Python's standard library (3.11+: each package's
 ## Pins
 
 - Ruff 0.14.3 and Pyright 1.1.407 in each package's `requirements-dev.txt`: Slotfather's and Godfather's baselines
-  key on Pyright's messages, which another version rewrites. Move all four together, with the baselines, when a
+  key on Pyright's messages, which another version rewrites. Move all five together, with the baselines, when a
   typing ticket retires those budgets.
 - uv 0.13.5 in the Lanefather and Spawnfather workflows, which run the pinned tools through uv.
 

@@ -24,12 +24,16 @@
 
 ## Push
 
-- `git fetch origin`, read the outgoing range (`git log --oneline origin/main..<sha>`), then
-  `git push origin <sha>:refs/heads/main`. The SHA must contain `origin/main`. Never force, never `--no-verify`.
-- Afterwards fast-forward a clean main checkout: `git -C <main checkout> merge --ff-only origin/main`.
+- Everyday integration (`dev`): `git fetch origin`, read the outgoing range (`git log --oneline origin/dev..<sha>`),
+  then `git push origin dev` (or `git push origin <sha>:refs/heads/dev`). The SHA must contain `origin/dev`.
+- Promotion to `main` (only on an explicit push request): `git fetch origin`, read the outgoing range
+  (`git log --oneline origin/main..<sha>`), then `git push origin <sha>:refs/heads/main`. The SHA must contain
+  `origin/main`.
+- Never force-push and never `--no-verify`.
+- Afterwards fast-forward a clean checkout on the pushed branch:
+  `git -C <checkout> merge --ff-only origin/<branch>`.
 - Then delete the merged topic branch, after removing its worktree if it has one:
-  `git worktree remove <path>` and `git branch -d <branch>`. `-d` refuses a branch `main` does not contain; never
-  `-D` it.
+  `git worktree remove <path>` and `git branch -d <branch>`. `-d` refuses an unmerged branch; never `-D` it.
 
 ## CI
 
