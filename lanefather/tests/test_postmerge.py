@@ -93,6 +93,26 @@ class PostMergeTransitionAndFencingTests(unittest.TestCase):
             record["post_merge"] = {"status": "green", "receipt": str(self.store.receipt_path(lane_id, "post-merge"))}
         elif phase is PostMergePhase.RED:
             record["post_merge"] = {"status": "red", "receipt": str(self.store.receipt_path(lane_id, "post-merge"))}
+        elif phase is PostMergePhase.RUNNING:
+            record["post_merge"] = {
+                "status": "running",
+                "pid": os.getpid(),
+                "checkout": str(self.tmp / "smoke-0"),
+                "receipt": str(self.store.receipt_path(lane_id, "post-merge")),
+            }
+        elif phase is PostMergePhase.KILLED:
+            record["post_merge"] = {
+                "status": "killed",
+                "pid": 999_999,
+                "checkout": str(self.tmp / "smoke-0"),
+                "receipt": str(self.store.receipt_path(lane_id, "post-merge")),
+            }
+        elif phase is PostMergePhase.ACCEPTED:
+            record["post_merge"] = {
+                "status": "accepted",
+                "reason": "known flake",
+                "by": "tester",
+            }
         elif phase is PostMergePhase.CLEARED:
             record["post_merge"] = {
                 "status": "green",
@@ -112,8 +132,47 @@ class PostMergeTransitionAndFencingTests(unittest.TestCase):
                     with self.assertRaises(LaneError):
                         apply_post_merge_event("a", phase, event)
 
-                # Also exercise `record_smoke` and `record_recheck` on disk for the 4 write events.
-                if event in (PostMergeEvent.SMOKE_GREEN, PostMergeEvent.SMOKE_RED):
+                # Also exercise disk-writing methods for each write event.
+                if event is PostMergeEvent.SMOKE_START:
+                    lane_id = f"st-{phase.value}".replace("_", "-")
+                    rec_path = self._seed_lane(lane_id, phase=phase)
+                    before = rec_path.read_bytes()
+                    if expected is not None:
+                        pm, written = PostMergeRecord.start_smoke(
+                            self.store, lane_id, merge_sha=self.merge_sha, checkout=str(self.tmp / "smoke-0"),
+                        )
+                        self.assertEqual(pm.phase, expected)
+                        self.assertIsNotNone(written)
+                        assert written is not None
+                        self.assertTrue(written.exists())
+                        saved_post = self.store.load(lane_id)["post_merge"]
+                        self.assertEqual(saved_post["status"], "running")
+                        self.assertEqual(saved_post["pid"], os.getpid())
+                        self.assertEqual(saved_post["lane_created"], "2026-11-22T00:00:00Z")
+                    else:
+                        with self.assertRaises(LaneError):
+                            PostMergeRecord.start_smoke(
+                                self.store, lane_id, merge_sha=self.merge_sha, checkout=str(self.tmp / "smoke-0"),
+                            )
+                        self.assertEqual(rec_path.read_bytes(), before)
+
+                elif event is PostMergeEvent.ACCEPT:
+                    lane_id = f"ac-{phase.value}".replace("_", "-")
+                    rec_path = self._seed_lane(lane_id, phase=phase)
+                    before = rec_path.read_bytes()
+                    if expected is not None:
+                        pm = PostMergeRecord.accept_smoke(self.store, lane_id, reason="accepted in test", by="tester")
+                        self.assertEqual(pm.phase, expected)
+                        saved_post = self.store.load(lane_id)["post_merge"]
+                        self.assertEqual(saved_post["status"], "accepted")
+                        self.assertEqual(saved_post["reason"], "accepted in test")
+                        self.assertEqual(saved_post["by"], "tester")
+                    else:
+                        with self.assertRaises(LaneError):
+                            PostMergeRecord.accept_smoke(self.store, lane_id, reason="accepted in test", by="tester")
+                        self.assertEqual(rec_path.read_bytes(), before)
+
+                elif event in (PostMergeEvent.SMOKE_GREEN, PostMergeEvent.SMOKE_RED):
                     lane_id = f"s-{phase.value}-{event.value}".replace("_", "-")
                     rec_path = self._seed_lane(lane_id, phase=phase)
                     before = rec_path.read_bytes()
@@ -247,7 +306,7 @@ class DecideCompletionExhaustiveTests(unittest.TestCase):
                 )
 
                 is_auto = mode in (CompletionMode.AUTO_AFTER_SMOKE, CompletionMode.AUTO_AFTER_REVIEW)
-                smoke_ok = smoke in (PostMergePhase.GREEN, PostMergePhase.CLEARED)
+                smoke_ok = smoke in (PostMergePhase.GREEN, PostMergePhase.CLEARED, PostMergePhase.ACCEPTED)
                 review_done = v_name in ("exempt", "complete")
                 review_ok_interactive = review_done or v_name == "absent"
 
@@ -305,7 +364,7 @@ class DecideCompletionExhaustiveTests(unittest.TestCase):
                 if expected is CompletionAction.REFUSE:
                     self.assertTrue(decision.refusal)
 
-        self.assertEqual(checked, 5120)
+        self.assertEqual(checked, 8960)
 
 
 class CrashedRecheckAndCrossProjectTests(LaneCase):

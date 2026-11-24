@@ -322,5 +322,144 @@ class DoneReadinessUnifiedTests(LaneCase):
         self.assertEqual(final["post_merge"]["cleared_by"]["kind"], "gate")
 
 
+class PostMergeSmokeLifecycleTests(LaneCase):
+    """fathers#56: post-merge smoke recorded while running, dead holder reads as killed, `smoke --rerun` / `--accept`,
+    and `done` requiring green / skipped / accepted."""
+
+    def _checked(self, lane_id: str, path: str = "lib/a.txt") -> pathlib.Path:
+        wt = pathlib.Path(self.created(lane_id, path))
+        self.commit(wt, {path: f"{lane_id}\n"})
+        self.lane("check", lane_id)
+        return wt
+
+    def test_running_smoke_shows_running_and_killed_holder_reads_killed_then_rerun_passes_done(self) -> None:
+        wt = self._checked("a", "lib/a.txt")
+        self.integration_moves()
+        hold = self.tmp / "hold-smoke"
+        land_proc = self.background_land("a", hold)
+        checkout = self.wait_started(hold, land_proc)
+        try:
+            # While the smoke is held, post_merge is recorded as `running` with pid, start, checkout, and lane_created.
+            rec = self.record("a")
+            pm = rec["post_merge"]
+            self.assertEqual(pm["status"], "running")
+            self.assertEqual(pm["pid"], land_proc.pid)
+            self.assertEqual(pm["checkout"], checkout)
+            self.assertEqual(pm["lane_created"], rec["created"])
+            self.assertIn("start", pm)
+            receipt = json.loads((self.state / "a.post-merge.json").read_text())
+            self.assertEqual(receipt["status"], "running")
+            self.assertEqual(receipt["lane_created"], rec["created"])
+
+            # `list`, `status`, and `smoke <id>` show `post-merge running`, and `done` refuses.
+            self.assertIn("post-merge running", self.lane("list"))
+            self.assertIn("post-merge running", self.lane("status"))
+            status_json = json.loads(self.lane("status", "--json"))
+            self.assertEqual(status_json["projects"][0]["lanes"][0]["post_merge"], "running")
+            self.assertIn("post-merge running", self.lane("smoke", "a"))
+            done_running = self.lane("done", "a", ok=False)
+            self.assertIn("post-merge smoke is running", done_running)
+            self.assertTrue(wt.exists())
+
+            # Kill the holder process -> reads as `killed`, and `done` still refuses.
+            land_proc.kill()
+            land_proc.wait(timeout=10)
+        finally:
+            if land_proc.poll() is None:
+                land_proc.kill()
+                land_proc.wait(timeout=10)
+
+        self.assertIn("post-merge killed", self.lane("list"))
+        self.assertIn("post-merge killed", self.lane("status"))
+        status_after = json.loads(self.lane("status", "--json"))
+        self.assertEqual(status_after["projects"][0]["lanes"][0]["post_merge"], "killed")
+        self.assertIn("post-merge killed", self.lane("smoke", "a"))
+        done_killed = self.lane("done", "a", ok=False)
+        self.assertIn("post-merge smoke was killed", done_killed)
+        self.assertIn("lanefather smoke a --rerun", done_killed)
+        self.assertIn("lanefather smoke a --accept REASON", done_killed)
+        self.assertTrue(wt.exists())
+
+        # `smoke <id> --rerun` runs to green, after which `done` passes.
+        rerun_out = self.lane("smoke", "a", "--rerun")
+        self.assertIn("post-merge green", rerun_out)
+        self.assertEqual(self.record("a")["post_merge"]["status"], "green")
+        self.lane("done", "a")
+        self.assertEqual(self.record("a")["status"], "done")
+        self.assertFalse(wt.exists())
+
+    def test_red_smoke_refusal_and_accept_override_let_done_pass(self) -> None:
+        wt = self._checked("a", "lib/a.txt")
+        self.integration_moves()
+        self.env["FIXTURE_STATUS"] = "post-merge-a:lib-check=failed"
+        self.assertIn("post-merge red", self.lane("land", "a", ok=False))
+        del self.env["FIXTURE_STATUS"]
+
+        # Refusal message names the real paths: smoke --rerun, smoke --accept REASON, or a follow-up lane.
+        refused = self.lane("done", "a", ok=False)
+        self.assertIn("lanefather smoke a --rerun", refused)
+        self.assertIn("lanefather smoke a --accept REASON", refused)
+        self.assertIn("follow-up lane", refused)
+        self.assertNotIn("fix forward", refused)
+
+        # `smoke <id> --accept REASON` logs via `journal.override`, shows `post-merge accepted`, and lets `done` pass.
+        accepted_out = self.lane("smoke", "a", "--accept", "unrelated infra flake")
+        self.assertIn("post-merge smoke accepted (unrelated infra flake)", accepted_out)
+        rec = self.record("a")
+        self.assertEqual(rec["post_merge"]["status"], "accepted")
+        self.assertEqual(rec["post_merge"]["reason"], "unrelated infra flake")
+        self.assertTrue(rec["post_merge"]["by"])
+        self.assertTrue(any(o.get("reason") == "unrelated infra flake" for o in rec.get("overrides", [])))
+        ledger = (self.state / "ledger.log").read_text()
+        self.assertIn("override smoke a --accept: unrelated infra flake (post-merge smoke is red)", ledger)
+
+        self.assertIn("post-merge accepted", self.lane("list"))
+        self.assertIn("post-merge accepted", self.lane("status"))
+        status_json = json.loads(self.lane("status", "--json"))
+        self.assertEqual(status_json["projects"][0]["lanes"][0]["post_merge"], "accepted")
+
+        self.lane("done", "a")
+        self.assertEqual(self.record("a")["status"], "done")
+        self.assertFalse(wt.exists())
+
+    def test_smoke_rerun_on_red_smoke_clears_and_lets_done_pass(self) -> None:
+        wt = self._checked("r", "lib/r.txt")
+        self.integration_moves()
+        self.env["FIXTURE_STATUS"] = "post-merge-r:lib-check=failed"
+        self.assertIn("post-merge red", self.lane("land", "r", ok=False))
+        del self.env["FIXTURE_STATUS"]
+        self.assertEqual(self.record("r")["post_merge"]["status"], "red")
+
+        rerun_out = self.lane("smoke", "r", "--rerun")
+        self.assertIn("post-merge green", rerun_out)
+        self.assertEqual(self.record("r")["post_merge"]["status"], "green")
+        self.lane("done", "r")
+        self.assertEqual(self.record("r")["status"], "done")
+        self.assertFalse(wt.exists())
+
+    def test_skipped_smoke_passes_done_and_missing_post_merge_refuses_done(self) -> None:
+        wt_skip = self._checked("s", "lib/s.txt")
+        self.lane("land", "s", "--keep")
+        # Explicit `status: "skipped"` in post_merge counts as green and lets `done` pass.
+        rec_path = self.state / "s.json"
+        rec_data = json.loads(rec_path.read_text())
+        rec_data["post_merge"] = {"status": "skipped", "kind": "skip", "reason": "exact tree match"}
+        rec_path.write_text(json.dumps(rec_data))
+        self.lane("done", "s")
+        self.assertEqual(self.record("s")["status"], "done")
+        self.assertFalse(wt_skip.exists())
+
+        # Legacy record missing `post_merge` -> `done` refuses without `--force-reason`.
+        wt_miss = self._checked("m", "lib/m.txt")
+        self.lane("land", "m", "--keep")
+        miss_path = self.state / "m.json"
+        miss_data = json.loads(miss_path.read_text())
+        miss_data.pop("post_merge", None)
+        miss_path.write_text(json.dumps(miss_data))
+        refused = self.lane("done", "m", ok=False)
+        self.assertIn("post-merge smoke is not run", refused)
+        self.assertTrue(wt_miss.exists())
+
+
 if __name__ == "__main__":
     unittest.main()

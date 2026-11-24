@@ -15,7 +15,9 @@ import os
 from pathlib import Path
 from typing import Any, Literal, cast
 
-from . import lifecycle, receipts, review_record, state
+from fathers_common import proc
+
+from . import events, journal, lifecycle, receipts, review_record, state
 from . import results as result_store
 from .errors import LaneError
 from .gitops import git, git_ok
@@ -29,28 +31,54 @@ class PostMergePhase(StrEnum):
     """Lifecycle phase of a lane's post-merge verification."""
 
     UNRUN = "unrun"
+    RUNNING = "running"
+    KILLED = "killed"
     GREEN = "green"
     RED = "red"
     CLEARED = "cleared"
+    ACCEPTED = "accepted"
+
+
+SMOKE_OK_PHASES: tuple[PostMergePhase, ...] = (
+    PostMergePhase.GREEN,
+    PostMergePhase.CLEARED,
+    PostMergePhase.ACCEPTED,
+)
 
 
 class PostMergeEvent(StrEnum):
     """State-machine transitions permitted on a lane's post-merge verification."""
 
+    SMOKE_START = "smoke_start"
     SMOKE_GREEN = "smoke_green"
     SMOKE_RED = "smoke_red"
     RECHECK_GREEN = "recheck_green"
     RECHECK_RED = "recheck_red"
     CLEAR = "clear"
+    ACCEPT = "accept"
 
 
 POST_MERGE_TRANSITIONS: dict[tuple[PostMergePhase, PostMergeEvent], PostMergePhase] = {
+    (PostMergePhase.UNRUN, PostMergeEvent.SMOKE_START): PostMergePhase.RUNNING,
+    (PostMergePhase.KILLED, PostMergeEvent.SMOKE_START): PostMergePhase.RUNNING,
+    (PostMergePhase.RED, PostMergeEvent.SMOKE_START): PostMergePhase.RUNNING,
     (PostMergePhase.UNRUN, PostMergeEvent.SMOKE_GREEN): PostMergePhase.GREEN,
+    (PostMergePhase.RUNNING, PostMergeEvent.SMOKE_GREEN): PostMergePhase.GREEN,
+    (PostMergePhase.KILLED, PostMergeEvent.SMOKE_GREEN): PostMergePhase.GREEN,
     (PostMergePhase.UNRUN, PostMergeEvent.SMOKE_RED): PostMergePhase.RED,
+    (PostMergePhase.RUNNING, PostMergeEvent.SMOKE_RED): PostMergePhase.RED,
+    (PostMergePhase.KILLED, PostMergeEvent.SMOKE_RED): PostMergePhase.RED,
     (PostMergePhase.RED, PostMergeEvent.RECHECK_GREEN): PostMergePhase.CLEARED,
+    (PostMergePhase.RUNNING, PostMergeEvent.RECHECK_GREEN): PostMergePhase.CLEARED,
+    (PostMergePhase.KILLED, PostMergeEvent.RECHECK_GREEN): PostMergePhase.CLEARED,
     (PostMergePhase.RED, PostMergeEvent.RECHECK_RED): PostMergePhase.RED,
+    (PostMergePhase.RUNNING, PostMergeEvent.RECHECK_RED): PostMergePhase.RED,
+    (PostMergePhase.KILLED, PostMergeEvent.RECHECK_RED): PostMergePhase.RED,
     (PostMergePhase.RED, PostMergeEvent.CLEAR): PostMergePhase.CLEARED,
     (PostMergePhase.CLEARED, PostMergeEvent.CLEAR): PostMergePhase.CLEARED,
+    (PostMergePhase.RED, PostMergeEvent.ACCEPT): PostMergePhase.ACCEPTED,
+    (PostMergePhase.KILLED, PostMergeEvent.ACCEPT): PostMergePhase.ACCEPTED,
+    (PostMergePhase.UNRUN, PostMergeEvent.ACCEPT): PostMergePhase.ACCEPTED,
 }
 
 
@@ -149,8 +177,33 @@ def decide_completion(
     if smoke is PostMergePhase.RED:
         reason = "its post-merge smoke is red"
         refusal = (
-            "its post-merge check is red: fix forward (a follow-up commit on the lane) first, or "
-            f"rerun its smoke on the integration tip with {prog} recheck {lane_id}"
+            f"its post-merge check is red: rerun its smoke with {prog} smoke {lane_id} --rerun "
+            f"(or {prog} recheck {lane_id}), accept it with {prog} smoke {lane_id} --accept REASON, "
+            "or land a follow-up lane"
+        )
+        return CompletionDecision(
+            action=CompletionAction.NOOP if is_auto else CompletionAction.REFUSE,
+            mode=mode,
+            ready=False,
+            reason=reason,
+            refusal=refusal,
+        )
+
+    if smoke is PostMergePhase.RUNNING:
+        reason = "its post-merge smoke is running"
+        return CompletionDecision(
+            action=CompletionAction.NOOP if is_auto else CompletionAction.REFUSE,
+            mode=mode,
+            ready=False,
+            reason=reason,
+            refusal=f"{reason}; wait for it to finish",
+        )
+
+    if smoke is PostMergePhase.KILLED:
+        reason = "its post-merge smoke was killed"
+        refusal = (
+            f"{reason}: rerun it with {prog} smoke {lane_id} --rerun, "
+            f"or accept it with {prog} smoke {lane_id} --accept REASON"
         )
         return CompletionDecision(
             action=CompletionAction.NOOP if is_auto else CompletionAction.REFUSE,
@@ -162,15 +215,19 @@ def decide_completion(
 
     if smoke is PostMergePhase.UNRUN:
         smoke_words = f"its post-merge smoke is {raw_smoke or 'not run'}"
+        refusal = (
+            f"{smoke_words}: run {prog} smoke {lane_id} --rerun, "
+            f"or accept it with {prog} smoke {lane_id} --accept REASON"
+        )
         return CompletionDecision(
             action=CompletionAction.NOOP if is_auto else CompletionAction.REFUSE,
             mode=mode,
             ready=False,
             reason=smoke_words,
-            refusal=smoke_words,
+            refusal=refusal,
         )
 
-    # Smoke is GREEN or CLEARED and stage is landed or released.
+    # Smoke is GREEN, CLEARED, or ACCEPTED and stage is landed or released.
     if mode is CompletionMode.AUTO_AFTER_SMOKE and kept:
         return CompletionDecision(
             action=CompletionAction.HOLD_KEPT,
@@ -288,17 +345,102 @@ def post_merge(record: Record) -> dict[str, Any]:
 
 
 def persisted_phase(record: Record) -> PostMergePhase:
-    """Derive the persisted `PostMergePhase` on `record` without Git or external receipt I/O."""
+    """Derive the persisted `PostMergePhase` on `record` without Git, process-table, or external receipt I/O."""
     post = post_merge(record)
     raw_status = post.get("status")
+    status_str = raw_status if isinstance(raw_status, str) else None
     raw_cleared: Any = post.get("cleared_by")
     cleared_dict = cast(dict[str, Any], raw_cleared) if isinstance(raw_cleared, dict) else None
     has_cleared = bool(cleared_dict)
-    if raw_status == "green":
+    if status_str in ("green", "skipped"):
         return PostMergePhase.CLEARED if has_cleared else PostMergePhase.GREEN
-    if raw_status == "red":
+    if status_str == "accepted":
+        return PostMergePhase.ACCEPTED
+    if status_str == "red":
         return PostMergePhase.CLEARED if has_cleared else PostMergePhase.RED
+    if status_str == "running":
+        return PostMergePhase.RUNNING
+    if status_str == "killed":
+        return PostMergePhase.KILLED
     return PostMergePhase.UNRUN
+
+
+def _holder_identity(pid: int | None = None) -> tuple[int, str | None]:
+    """Return `(pid, utc_lstart)` for the smoke holder process using `fathers_common.proc`."""
+    actual_pid = os.getpid() if pid is None else pid
+    try:
+        found = proc.identities([actual_pid], clock="utc", timeout=5)
+    except proc.ProcTableError:
+        return actual_pid, None
+    entry = found.get(actual_pid)
+    return actual_pid, (entry.start if entry is not None else None)
+
+
+def _smoke_holder_alive(post: dict[str, Any]) -> bool:
+    """Whether the `running` post-merge smoke holder (`pid` + `start`) is still alive (fail-closed on ps error)."""
+    raw_pid = post.get("pid")
+    if not isinstance(raw_pid, int) or isinstance(raw_pid, bool) or raw_pid <= 0:
+        return False
+    raw_start = post.get("start")
+    started_epoch: float | None = None
+    unparsed_start: str | None = None
+    if isinstance(raw_start, (int, float)) and not isinstance(raw_start, bool):
+        started_epoch = float(raw_start)
+    elif isinstance(raw_start, str) and raw_start:
+        parsed = proc.parse_lstart(raw_start, "utc")
+        if parsed is not None:
+            started_epoch = float(parsed)
+        else:
+            unparsed_start = raw_start
+    elif raw_start is not None:
+        return False
+    try:
+        live = proc.identities([raw_pid], clock="utc", timeout=5)
+    except proc.ProcTableError:
+        # Fail-closed (fathers#121): never claim a running smoke was killed when ps cannot be read.
+        return True
+    entry = live.get(raw_pid)
+    if entry is None:
+        return False
+    if started_epoch is not None:
+        return proc.same_process(started_epoch, None, entry)
+    if unparsed_start is not None:
+        return proc.norm(unparsed_start) == entry.start
+    return True
+
+
+def live_phase(record: Record) -> tuple[PostMergePhase, str | None]:
+    """Evaluate `persisted_phase(record)` and resolve a dead `running` holder to `(KILLED, 'killed')`."""
+    post = post_merge(record)
+    raw = post.get("status")
+    raw_status = raw if isinstance(raw, str) else None
+    phase = persisted_phase(record)
+    if phase is PostMergePhase.RUNNING:
+        if _smoke_holder_alive(post):
+            return PostMergePhase.RUNNING, "running"
+        return PostMergePhase.KILLED, "killed"
+    return phase, raw_status
+
+
+def effective_status(record: Record) -> str | None:
+    """Live post-merge status word for `list` and `status`: resolves dead `running` holders to `'killed'`."""
+    post = post_merge(record)
+    if not post:
+        return None
+    _, status = live_phase(record)
+    return status
+
+
+def _actor_label() -> str:
+    """Human-readable identity of who accepted a smoke (`agent:session`, `$USER`, or `pid:<n>`)."""
+    who = events.actor()
+    if who.get("type") == "agent" and isinstance(who.get("name"), str):
+        session = who.get("session")
+        return f"{who['name']}:{session}" if isinstance(session, str) and session else str(who["name"])
+    user = os.environ.get("USER", "").strip()
+    if user:
+        return user
+    return f"pid:{os.getpid()}"
 
 
 def apply_post_merge_event(lane_id: str, phase: PostMergePhase, event: PostMergeEvent) -> PostMergePhase:
@@ -604,28 +746,173 @@ class PostMergeRecord:
         """Load and evaluate post-merge state for `record` in `store` without mutating files."""
         lane_id = str(record["id"])
         post = post_merge(record)
-        raw = post.get("status")
-        raw_status = str(raw) if raw is not None else None
-        rec_path = str(post["receipt"]) if post.get("receipt") is not None else None
+        rec_path = post["receipt"] if isinstance(post.get("receipt"), str) else None
         raw_cleared: Any = post.get("cleared_by")
         cleared_dict = cast(dict[str, Any], raw_cleared) if isinstance(raw_cleared, dict) else None
         saved_cleared = cleared_dict if cleared_dict else None
-        disk_phase = persisted_phase(record)
-        if disk_phase is PostMergePhase.GREEN:
+        phase, live_status = live_phase(record)
+        if phase is PostMergePhase.GREEN:
             return cls(lane_id=lane_id, record=record, phase=PostMergePhase.GREEN,
-                       raw_status=raw_status, receipt_path=rec_path, cleared_by=None)
-        if disk_phase is PostMergePhase.CLEARED:
+                       raw_status=live_status, receipt_path=rec_path, cleared_by=None)
+        if phase is PostMergePhase.ACCEPTED:
+            return cls(lane_id=lane_id, record=record, phase=PostMergePhase.ACCEPTED,
+                       raw_status="accepted", receipt_path=rec_path, cleared_by=None)
+        if phase is PostMergePhase.CLEARED:
             return cls(lane_id=lane_id, record=record, phase=PostMergePhase.CLEARED,
-                       raw_status=raw_status, receipt_path=rec_path, cleared_by=saved_cleared)
-        if disk_phase is PostMergePhase.RED:
+                       raw_status=live_status, receipt_path=rec_path, cleared_by=saved_cleared)
+        if phase is PostMergePhase.RED:
             found_cleared = clearing(record, store, integration)
             if found_cleared is not None:
                 return cls(lane_id=lane_id, record=record, phase=PostMergePhase.CLEARED,
-                           raw_status=raw_status, receipt_path=rec_path, cleared_by=found_cleared)
+                           raw_status=live_status, receipt_path=rec_path, cleared_by=found_cleared)
             return cls(lane_id=lane_id, record=record, phase=PostMergePhase.RED,
-                       raw_status=raw_status, receipt_path=rec_path, cleared_by=None)
+                       raw_status=live_status, receipt_path=rec_path, cleared_by=None)
+        if phase is PostMergePhase.RUNNING:
+            return cls(lane_id=lane_id, record=record, phase=PostMergePhase.RUNNING,
+                       raw_status="running", receipt_path=rec_path, cleared_by=None)
+        if phase is PostMergePhase.KILLED:
+            return cls(lane_id=lane_id, record=record, phase=PostMergePhase.KILLED,
+                       raw_status="killed", receipt_path=rec_path, cleared_by=None)
         return cls(lane_id=lane_id, record=record, phase=PostMergePhase.UNRUN,
-                   raw_status=raw_status, receipt_path=rec_path, cleared_by=None)
+                   raw_status=live_status, receipt_path=rec_path, cleared_by=None)
+
+    @classmethod
+    def start_smoke(
+        cls,
+        store: state.Store,
+        lane_id: str,
+        *,
+        merge_sha: str,
+        checkout: str,
+        pid: int | None = None,
+        start: str | float | None = None,
+        write_receipt: bool = True,
+    ) -> tuple[PostMergeRecord, Path | None]:
+        """Record `post_merge.status = 'running'` (`pid`, `start`, `checkout`, `lane_created`) before smoke runs."""
+        if pid is not None and (isinstance(pid, bool) or pid <= 0):
+            raise LaneError(f"post-merge {lane_id}: invalid pid {pid!r}")
+        if start is None:
+            actual_pid, actual_start = _holder_identity(pid)
+        else:
+            actual_pid = os.getpid() if pid is None else pid
+            actual_start = start
+        with store.locked("state"):
+            latest = store.load(lane_id)
+            _check_not_stale(latest, merge_sha, action="start post-merge smoke")
+            current_phase, _ = live_phase(latest)
+            target_phase = apply_post_merge_event(lane_id, current_phase, PostMergeEvent.SMOKE_START)
+            lane_created = state.lane_created_of(latest)
+            target: Path | None = None
+            receipt_ref: str | None = None
+            if write_receipt:
+                receipt_data: Receipt = {
+                    "version": 1,
+                    "lane": lane_id,
+                    **({"lane_created": lane_created} if lane_created else {}),
+                    "merge": merge_sha,
+                    "checkout": checkout,
+                    "pid": actual_pid,
+                    **({"start": actual_start} if actual_start is not None else {}),
+                    "started": journal.now(),
+                    "status": "running",
+                }
+                target = _write_receipt(store, lane_id, "post-merge", receipt_data)
+                receipt_ref = str(target)
+            else:
+                prev_receipt = post_merge(latest).get("receipt")
+                if isinstance(prev_receipt, str):
+                    receipt_ref = prev_receipt
+            pm_entry: dict[str, Any] = {
+                "status": "running",
+                "pid": actual_pid,
+                **({"start": actual_start} if actual_start is not None else {}),
+                "checkout": checkout,
+                **({"lane_created": lane_created} if lane_created else {}),
+                **({"receipt": receipt_ref} if receipt_ref else {}),
+            }
+            updated = lifecycle.transition(
+                store,
+                lane_id,
+                "record_smoke",
+                post_merge=pm_entry,
+            )
+            return (
+                cls(
+                    lane_id=lane_id,
+                    record=updated,
+                    phase=target_phase,
+                    raw_status="running",
+                    receipt_path=receipt_ref,
+                    cleared_by=None,
+                ),
+                target,
+            )
+
+    @classmethod
+    def accept_smoke(
+        cls,
+        store: state.Store,
+        lane_id: str,
+        *,
+        reason: str,
+        by: str | None = None,
+    ) -> PostMergeRecord:
+        """Accept a red, killed, or missing post-merge smoke with an audited `journal.override` entry."""
+        cleaned = reason.strip()
+        if not cleaned:
+            raise LaneError("smoke --accept requires a non-empty reason")
+        who = by.strip() if isinstance(by, str) and by.strip() else _actor_label()
+        with store.locked("state"):
+            latest = store.load(lane_id)
+            if lifecycle.finished(latest):
+                raise LaneError(f"smoke --accept refused: lane {lane_id} is already done")
+            if not lifecycle.awaiting_done(latest):
+                raise LaneError(f"smoke --accept refused: lane {lane_id} is {latest.get('status')}, not landed")
+            current_phase, live_status = live_phase(latest)
+            if current_phase is PostMergePhase.RUNNING:
+                raise LaneError(f"smoke --accept refused: lane {lane_id}'s post-merge smoke is still running")
+            if current_phase in SMOKE_OK_PHASES:
+                shown = "green" if current_phase is PostMergePhase.CLEARED else (live_status or "green")
+                raise LaneError(f"smoke --accept refused: lane {lane_id}'s post-merge smoke is already {shown}")
+            target_phase = apply_post_merge_event(lane_id, current_phase, PostMergeEvent.ACCEPT)
+            prev_status = live_status or "not run"
+            prev_post = post_merge(latest)
+            prev_receipt = prev_post["receipt"] if isinstance(prev_post.get("receipt"), str) else None
+            lane_created = state.lane_created_of(latest)
+            override_entry = journal.override(
+                "smoke",
+                latest,
+                cleaned,
+                [f"post-merge smoke is {prev_status}"],
+                qualifier="--accept",
+                details={"post_merge_status": prev_status, "by": who},
+                audited=False,
+                store=store,
+            )
+            pm_entry: dict[str, Any] = {
+                "status": "accepted",
+                "reason": cleaned,
+                "by": who,
+                "at": override_entry["at"],
+                "previous_status": prev_status,
+                **({"receipt": prev_receipt} if prev_receipt else {}),
+                **({"lane_created": lane_created} if lane_created else {}),
+            }
+            updated = lifecycle.transition(
+                store,
+                lane_id,
+                "record_smoke",
+                overrides=[override_entry],
+                post_merge=pm_entry,
+            )
+            return cls(
+                lane_id=lane_id,
+                record=updated,
+                phase=target_phase,
+                raw_status="accepted",
+                receipt_path=prev_receipt,
+                cleared_by=None,
+            )
 
     @classmethod
     def record_smoke(
@@ -638,13 +925,14 @@ class PostMergeRecord:
         payload: Receipt,
     ) -> tuple[PostMergeRecord, Path]:
         """Validate fencing & phase transition, write `<id>.post-merge.json`, and persist `record["post_merge"]`."""
-        if status not in ("green", "red"):
+        if status not in ("green", "skipped", "red"):
             raise LaneError(f"post-merge {lane_id}: invalid smoke status {status!r}")
-        event = PostMergeEvent.SMOKE_GREEN if status == "green" else PostMergeEvent.SMOKE_RED
+        event = PostMergeEvent.SMOKE_GREEN if status in ("green", "skipped") else PostMergeEvent.SMOKE_RED
         with store.locked("state"):
             latest = store.load(lane_id)
             _check_not_stale(latest, merge_sha, action="record post-merge smoke")
-            target_phase = apply_post_merge_event(lane_id, persisted_phase(latest), event)
+            current_phase, _ = live_phase(latest)
+            target_phase = apply_post_merge_event(lane_id, current_phase, event)
             lane_created = state.lane_created_of(latest)
             receipt_data: Receipt = {
                 **payload,
@@ -657,7 +945,11 @@ class PostMergeRecord:
                 store,
                 lane_id,
                 "record_smoke",
-                post_merge={"status": status, "receipt": str(target)},
+                post_merge={
+                    "status": status,
+                    "receipt": str(target),
+                    **({"lane_created": lane_created} if lane_created else {}),
+                },
             )
             return (
                 cls(
@@ -690,7 +982,8 @@ class PostMergeRecord:
         with store.locked("state"):
             latest = store.load(lane_id)
             _check_not_stale(latest, merge_sha, action="record recheck")
-            target_phase = apply_post_merge_event(lane_id, persisted_phase(latest), event)
+            current_phase, _ = live_phase(latest)
+            target_phase = apply_post_merge_event(lane_id, current_phase, event)
             red_path = red_receipt_path or str(
                 payload.get("red_receipt") or receipts.path(store, lane_id, "post-merge")
             )
@@ -716,7 +1009,12 @@ class PostMergeRecord:
                     store,
                     lane_id,
                     "record_recheck",
-                    post_merge={"status": "green", "receipt": str(target), "cleared_by": cleared_by},
+                    post_merge={
+                        "status": "green",
+                        "receipt": str(target),
+                        "cleared_by": cleared_by,
+                        **({"lane_created": lane_created} if lane_created else {}),
+                    },
                 )
                 return (
                     cls(
@@ -730,7 +1028,18 @@ class PostMergeRecord:
                     target,
                 )
             existing_post = post_merge(latest)
-            existing_path = str(existing_post["receipt"]) if existing_post.get("receipt") is not None else None
+            existing_path = existing_post["receipt"] if isinstance(existing_post.get("receipt"), str) else red_path
+            if current_phase is not PostMergePhase.RED:
+                latest = lifecycle.transition(
+                    store,
+                    lane_id,
+                    "record_recheck",
+                    post_merge={
+                        "status": "red",
+                        "receipt": existing_path,
+                        **({"lane_created": lane_created} if lane_created else {}),
+                    },
+                )
             return (
                 cls(
                     lane_id=lane_id,
@@ -749,10 +1058,9 @@ class PostMergeRecord:
         lane_id = str(record["id"])
         if not lifecycle.awaiting_done(record):
             raise LaneError(f"recheck refused: lane {lane_id} is {record.get('status')}, not landed")
-        phase = persisted_phase(record)
-        if phase is not PostMergePhase.RED:
-            smoke = post_merge(record).get("status")
-            shown = "green" if phase is PostMergePhase.CLEARED else (smoke or "not run")
+        phase, live_status = live_phase(record)
+        if phase not in (PostMergePhase.RED, PostMergePhase.KILLED):
+            shown = "green" if phase is PostMergePhase.CLEARED else (live_status or "not run")
             raise LaneError(f"recheck refused: lane {lane_id}'s post-merge smoke is {shown}: nothing to recheck")
         red = red_receipt(record, store)
         post_path = receipts.path(store, lane_id, "post-merge")

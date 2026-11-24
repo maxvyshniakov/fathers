@@ -743,6 +743,11 @@ def lane_view(
 
     raw_post = record.get("post_merge")
     post_dict = cast(dict[str, Any], raw_post) if isinstance(raw_post, dict) else None
+    post_status = post_dict.get("status") if post_dict is not None else None
+    if post_status == "running":
+        from . import postmerge
+
+        post_status = postmerge.effective_status(record)
 
     ticket_raw = str(record.get("ticket", "")).lstrip("#")
     ticket_number = ticket_raw if ticket_raw and ticket_raw != "none" else None
@@ -786,7 +791,7 @@ def lane_view(
         check=check_v,
         check_receipt_path=check_path,
         post_merge_present=bool(post_dict),
-        post_merge_status=post_dict.get("status") if post_dict is not None else None,
+        post_merge_status=post_status,
         landed_present=bool(record.get("landed")),
         is_active=lifecycle.active(record),
         is_finished=lifecycle.finished(record),

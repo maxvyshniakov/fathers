@@ -171,6 +171,9 @@ def recheck(args: Any, store: state.Store) -> int:
         else:
             tip = rplan.tip
             with worktrees.smoke_checkout(record["common_dir"], tip, store.project) as checkout:
+                postmerge.PostMergeRecord.start_smoke(
+                    store, args.id, merge_sha=merge_sha, checkout=checkout, write_receipt=False,
+                )
                 toolchain = plan.toolchain_state(checkout, store.project)
                 decision, results, check_results, triaged, _stamp, status = run_smoke(
                     store, record, checkout, suites, selected, f"recheck-{args.id}", args.slots, toolchain
@@ -399,6 +402,7 @@ def post_merge(store: state.Store, landed: Landed, slots: int | None) -> Smoke:
     previous = landed.previous
     receipt = landed.receipt
     with worktrees.smoke_checkout(record["common_dir"], merge_sha, store.project) as checkout:
+        postmerge.PostMergeRecord.start_smoke(store, lane_id, merge_sha=merge_sha, checkout=checkout)
         inspector = plan.Checkout(store.project, checkout)
         merge_tree = git(checkout, "rev-parse", "HEAD^{tree}")
         toolchain = inspector.toolchain()

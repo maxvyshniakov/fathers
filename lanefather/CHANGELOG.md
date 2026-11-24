@@ -8,6 +8,14 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
 
 ### Added
 
+- Post-merge smoke lifecycle and `lanefather smoke` command (fathers#56): `land` now records `post_merge.status =
+  "running"` (`pid`, `start`, `checkout`, `lane_created`) before the post-merge smoke starts; a `running` smoke whose
+  holder process has exited reads as `killed` via `fathers_common.proc`. `lanefather smoke <id> [--rerun | --accept
+  REASON]` reports smoke state, reruns red, killed or missing smokes (keeping `lanefather recheck` compatible), or
+  accepts them with an audited `override` entry (`status = "accepted"`, `reason`, `by`). `done` requires `green`,
+  `skipped`, or `accepted` (or a cleared red smoke), refuses `running`, `killed`, `red` or missing results, and names
+  `smoke <id> --rerun`, `smoke <id> --accept REASON`, or a follow-up lane; `list` and `status` display `post-merge
+  running`, `post-merge killed`, and `post-merge accepted`.
 - Recorded and resumable promote/ship runs (fathers#58): `lanefather promote` records each run's step outcomes and
   evidence in `<state>/promote/promote-<sha>.json`, including `ship_base` captured before push and per-step status
   for `[[promote.install]]` and `[[promote.deploy]]`. Rerunning an unfinished promote or `--ship` resumes from the
