@@ -468,6 +468,9 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
 
 ### Fixed
 
+- The post-merge smoke no longer stays on the one slot `slotfather advise` named at launch on a busy machine
+  (fathers#255): with Slotfather's `slot-range` it requests `1-3` slots like a lane check requests `1-2`, takes what is
+  free when the lease is granted, and records the grant in `<id>.post-merge.json` (`jobs`, `jobs_decision.granted`).
 - `hooks/reference-transaction` no longer refuses Git's automatic `pack-refs` (packing loose `refs/heads/main` /
   `refs/heads/dev` into `packed-refs` at their current OID and pruning the matching loose files) during agent
   sessions, while continuing to refuse creating, moving, or deleting protected branches—including `git branch -D` and

@@ -636,8 +636,11 @@ When Slotfather advertises `slot-range` via `slotfather capabilities --json` (fa
 maximum `--jobs` alongside `<slot_env>_MIN_JOBS` (`1`, or the highest selected `min_slots`) so the verifier can
 request `slotfather run -n MIN-MAX` (and `slots.wrap` issues `-n MIN-MAX`), then record the granted worker count from
 the verify report (`jobs`, `slots`, or `granted_jobs`) in the receipt (`jobs`, `jobs_decision.granted`) and run
-history (`history.py`). When Slotfather does not advertise `slot-range`, the command arguments and receipts stay
-unchanged.
+history (`history.py`). The post-merge smoke (`land`, `recheck`, `smoke --rerun`) does the same with a maximum of 3
+and a minimum of 1 (fathers#255), so a smoke launched while the machine is busy still takes the slots that are free
+when its lease is granted instead of the one slot `advise` named at launch; its `<id>.post-merge.json` records
+`jobs_decision.advised_jobs`, `min_jobs`, `max_jobs` and `granted`. When Slotfather does not advertise `slot-range`,
+the command arguments and receipts stay unchanged.
 
 During any quiet verify run (no complete output line for `LANEFATHER_VERIFY_HEARTBEAT` seconds, default `30`, `0` or
 `off` to disable), the shared verify runner emits bounded heartbeat lines naming the state (`queued` when waiting in
