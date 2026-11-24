@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 import os
 from pathlib import Path
+import re
 import subprocess
 from typing import Any, cast
 
@@ -23,6 +24,7 @@ from .state import Record
 
 Receipt = dict[str, Any]
 SEVERITIES: tuple[str, ...] = ("P1", "P2", "P3")
+OID_RE = re.compile(r"^[0-9a-f]{40,64}$")
 
 
 class ReceiptPhase(StrEnum):
@@ -375,25 +377,39 @@ class MarkResult:
         )
 
 
-def _resolve_fix_merge(store: state.Store, common: str, value: str) -> str:
-    """Resolve `fixed:<value>`: a landed lane's merge, an active lane's tip during a pre-land fix round, or a SHA."""
+def _resolve_fix_merge(
+    store: state.Store,
+    common: str,
+    value: str,
+    *,
+    marking_lane_id: str | None = None,
+) -> str:
+    """Resolve `fixed:<value>`: a landed lane's merge, the active lane's own tip during a pre-land review, or a SHA."""
     target = state.read_json(store.record_path(value)) if state.ID.match(value) else None
-    if target is not None:
+    if target is not None and target.get("common_dir") in (None, common):
         raw_landed: Any = target.get("landed")
         landed_info = cast(dict[str, Any], raw_landed) if isinstance(raw_landed, dict) else {}
-        if landed_info.get("merge"):
-            return str(landed_info["merge"])
-        if lifecycle.active(target) and ReviewRecord.load(store, value, record=target).pre_land_fix(target) is not None:
-            tip = gitops.git(
-                main_checkout(common),
-                "rev-parse",
-                "--verify",
-                "--quiet",
-                str(target["branch"]) + "^{commit}",
-                check=False,
-            )
-            if tip:
-                return tip
+        landed_merge = landed_info.get("merge")
+        if isinstance(landed_merge, str) and landed_merge:
+            return landed_merge
+        if lifecycle.active(target) and (marking_lane_id is None or value == marking_lane_id):
+            target_rev = ReviewRecord.load(store, value, record=target)
+            branch = target.get("branch")
+            if (
+                (target_rev.is_pre_land or target_rev.pre_land_fix(target) is not None)
+                and isinstance(branch, str)
+                and branch
+            ):
+                tip = gitops.git(
+                    main_checkout(common),
+                    "rev-parse",
+                    "--verify",
+                    "--quiet",
+                    f"refs/heads/{branch}^{{commit}}",
+                    check=False,
+                )
+                if tip:
+                    return tip
     sha = gitops.git(main_checkout(common), "rev-parse", "--verify", "--quiet", value + "^{commit}", check=False)
     if not value or not sha:
         raise LaneError(f"fixed:{value}: not a commit or a landed lane here; give the follow-up merge")
@@ -413,6 +429,24 @@ class ReviewRecord:
     @property
     def exists(self) -> bool:
         return self.raw is not None
+
+    @property
+    def is_pre_land(self) -> bool:
+        return self.raw is not None and self.raw.get("pre_land") is True
+
+    @property
+    def reviewed_tip(self) -> str:
+        if self.raw is None:
+            return ""
+        tip = self.raw.get("tip")
+        return tip if isinstance(tip, str) else ""
+
+    @property
+    def reviewed_tree(self) -> str:
+        if self.raw is None:
+            return ""
+        tree = self.raw.get("tree")
+        return tree if isinstance(tree, str) else ""
 
     @property
     def allows_promote(self) -> bool:
@@ -826,18 +860,32 @@ class ReviewRecord:
                     kind, _, detail = value.partition(":")
                     detail = detail.strip()
                     if kind == "fixed":
-                        fix_sha = _resolve_fix_merge(store, common, detail)
-                        reviewed_sha = pre_land.reviewed_sha if pre_land is not None else ""
-                        if reviewed_sha and (
-                            fix_sha == reviewed_sha
-                            or not git_ok(
-                                main_checkout(common), "merge-base", "--is-ancestor", reviewed_sha, fix_sha
+                        fix_sha = _resolve_fix_merge(store, common, detail, marking_lane_id=lane_id)
+                        reviewed_sha = (
+                            pre_land.reviewed_sha
+                            if pre_land is not None
+                            else (loaded.reviewed_tip if loaded.is_pre_land else "")
+                        )
+                        if reviewed_sha:
+                            main = main_checkout(common)
+                            if fix_sha == reviewed_sha or not git_ok(
+                                main, "merge-base", "--is-ancestor", reviewed_sha, fix_sha
+                            ):
+                                raise LaneError(
+                                    f"--mark {number} fixed:{detail}: commit {fix_sha[:10]} does not advance past "
+                                    f"the reviewed commit {reviewed_sha[:10]}; commit the fix on top of it first"
+                                )
+                            reviewed_tree = gitops.git(
+                                main, "rev-parse", "--verify", "--quiet", f"{reviewed_sha}^{{tree}}", check=False
                             )
-                        ):
-                            raise LaneError(
-                                f"--mark {number} fixed:{detail}: commit {fix_sha[:10]} does not advance past "
-                                f"the reviewed commit {reviewed_sha[:10]}; commit the fix on top of it first"
+                            fix_tree = gitops.git(
+                                main, "rev-parse", "--verify", "--quiet", f"{fix_sha}^{{tree}}", check=False
                             )
+                            if reviewed_tree and fix_tree == reviewed_tree:
+                                raise LaneError(
+                                    f"--mark {number} fixed:{detail}: commit {fix_sha[:10]} has the same tree as "
+                                    f"the reviewed commit {reviewed_sha[:10]}; commit a real fix first"
+                                )
                         applied.append(
                             MarkApplication(
                                 finding_n=int(finding["n"]),
@@ -950,3 +998,21 @@ class ReviewRecord:
             return updated
 
         return cls._transition(store, label, ReviewEvent.TICKET, _build)
+
+    @classmethod
+    def clear_stale(
+        cls,
+        store: state.Store,
+        label: str,
+        *,
+        lane_created: str | None = None,
+    ) -> bool:
+        """Remove a superseded pre-land `<label>.review.json` under the review lock so a fresh post-land review runs."""
+        with store.locked(f"review-{label}"):
+            path = store.receipt_path(label, "review")
+            raw = state.read_json(path)
+            if raw is None or not state.receipt_matches_lane(raw, lane_created):
+                return False
+            with contextlib.suppress(FileNotFoundError):
+                path.unlink()
+            return True

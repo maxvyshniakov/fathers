@@ -312,10 +312,10 @@ def parser(project: config.Config = config.DEFAULT) -> Parser:
             "or quota calls for it; or the [review] panel), its marks and its fix lane; --overall for promote "
             "--ship (lanefather.review).", prog=prog)
     p.add_argument("id", nargs="?")
-    p.add_argument("--mark", nargs=2, action="append", metavar=("N", "fixed:MERGE|rejected:REASON"),
-                   help="mark finding N fixed by a follow-up merge (or the fix lane's id) or rejected with a reason")
+    p.add_argument("--mark", nargs=2, action="append", metavar=("N", "fixed:COMMIT|rejected:REASON"),
+                   help="mark finding N fixed by a commit/merge (or lane id) or rejected with a reason")
     p.add_argument("--fix-lane", action="store_true",
-                   help="register <id>-review-fixes on the landed lane's worktree for the fix round")
+                   help="register <id>-review-fixes on a landed lane's worktree (or open a pre-land fix round)")
     p.add_argument("--reviewer", metavar="ALIAS|both",
                    help="run this reviewer (a model alias, provider/CLI name or model id of the models file, such as "
                         "sol, opus, neon, antigravity, google, agy or gemini-4-neon) whatever the Codex limit, or "

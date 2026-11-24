@@ -41,7 +41,7 @@ from . import (
     worktrees,
 )
 from .errors import LaneError
-from .gitops import common_dir, current_branch, git, git_ok, main_checkout
+from .gitops import common_dir, current_branch, dirty, git, git_ok, main_checkout
 from .state import Record
 from .verify import terminable
 
@@ -431,7 +431,7 @@ def review_lines(
             f"{pre_land.branch} ({pre_land.worktree})"
         )
     if raw.get("kind") == "lane" and rev.open_findings:
-        if pre_land is not None:
+        if pre_land is not None or (rev.is_pre_land and (record is None or lifecycle.active(record))):
             lines.append(
                 "Mark each finding: "
                 + review_record.mark_help(label, prog=cmd_prog).replace("<merge>", "<fix-commit>|" + label)
@@ -508,11 +508,15 @@ def _lane_review_fields(record: Record, **extra: Any) -> dict[str, Any]:
     }
 
 
-def start_lane_review(store: state.Store, record: Record) -> str:
+def start_lane_review(store: state.Store, record: Record, *, force_fresh: bool = False) -> str:
     """At land: an exempt receipt, or the review in the background. The line land prints."""
     lane_id = record["id"]
     rev = review_record.ReviewRecord.load(store, lane_id, record=record)
     verdict = rev.verdict
+    if force_fresh and rev.exists and not isinstance(verdict, review_record.Exempt):
+        review_record.ReviewRecord.clear_stale(store, lane_id, lane_created=state.lane_created_of(record))
+        rev = review_record.ReviewRecord.load(store, lane_id, record=record)
+        verdict = rev.verdict
     if isinstance(
         verdict,
         (
@@ -586,14 +590,30 @@ def review_lane(args: Any, store: state.Store) -> int:
         if already_finished:
             print(f"Lane {args.id} is already reviewed: one review per lane (--force-reason reviews again, logged)")
         return 0
-    if already_finished or incomplete_panel:
-        journal.override("review", record, args.force_reason, ["reviewed again"], audited=False, store=store)
+    if lifecycle.planned(record):
+        raise LaneError(f"review refused: lane {args.id} is planned; create its worktree and commit changes first")
+    is_pre_land = lifecycle.active(record)
+    if is_pre_land:
+        worktree = record.get("worktree")
+        if not isinstance(worktree, str) or not worktree or not os.path.isdir(worktree):
+            raise LaneError(f"review refused: lane {args.id} has no existing worktree ({worktree or 'none'})")
+        checked_out = current_branch(worktree)
+        if checked_out != record["branch"]:
+            raise LaneError(
+                f"review refused: {worktree} is on {checked_out or 'detached HEAD'}, not {record['branch']}"
+            )
+        if dirty(worktree):
+            raise LaneError(f"review refused: {worktree} has uncommitted changes; commit them before reviewing")
     exempt = review_exemption(record, store)
     if exempt and not args.force_reason:
         start_lane_review(store, record)
         print(f"Review of {args.id}: exempt ({exempt})")
         return 0
     tip, base = review_range(record)
+    if is_pre_land and tip == base:
+        raise LaneError(f"review refused: lane {args.id} has no commits beyond {record['base']}")
+    if already_finished or incomplete_panel:
+        journal.override("review", record, args.force_reason, ["reviewed again"], audited=False, store=store)
     # The accepted scope as the reviewer reads it, once for every panel member; the receipt keeps what was read.
     resolved = scope.resolve(record, base, store.project)
     completed = perform_review(
@@ -603,6 +623,7 @@ def review_lane(args: Any, store: state.Store) -> int:
             record,
             scope=[scope.receipt_entry(entry) for entry in resolved],
             scope_complete=scope.complete(resolved),
+            **({"pre_land": True} if is_pre_land else {}),
         ),
         main_checkout(record["common_dir"]),
         base,
@@ -1037,6 +1058,187 @@ def review(args: Any, store: state.Store) -> int:
     if args.fix_lane:
         return hand_over(args, store)
     return review_lane(args, store)
+
+
+def _is_clean_integration_merge(
+    main: str, commit: str, int_head: str, reviewed_tip: str
+) -> tuple[bool, str]:
+    """Whether `commit` is a two-parent merge of an integration commit (`int_head`) into a descendant of
+    `reviewed_tip` whose tree equals the clean merge of its parents (leaving the lane's own diff unchanged).
+    Returns `(is_clean, first_parent)`."""
+    if not int_head:
+        return False, ""
+    parents_proc = subprocess.run(
+        ["git", "rev-list", "--parents", "-n", "1", commit],
+        cwd=main,
+        capture_output=True,
+        text=True,
+    )
+    if parents_proc.returncode != 0:
+        return False, ""
+    parts = parents_proc.stdout.strip().split()
+    if len(parts) != 3:
+        return False, ""
+    _, p1, p2 = parts
+    if not git_ok(main, "merge-base", "--is-ancestor", p2, int_head):
+        return False, ""
+    if not git_ok(main, "merge-base", "--is-ancestor", reviewed_tip, p1):
+        return False, ""
+    commit_tree = git(main, "rev-parse", "--verify", "--quiet", f"{commit}^{{tree}}", check=False)
+    if not commit_tree:
+        return False, ""
+    merged = subprocess.run(
+        ["git", "merge-tree", "--write-tree", p1, p2],
+        cwd=main,
+        capture_output=True,
+        text=True,
+    )
+    if merged.returncode == 0:
+        first_line = merged.stdout.splitlines()[0].strip() if merged.stdout.splitlines() else ""
+        return (first_line == commit_tree, p1)
+    if merged.returncode == 1:
+        # Merge conflict was manually resolved: treat as unreviewed.
+        return False, ""
+    if merged.returncode != 129:
+        return False, ""
+    # Fallback only when `git merge-tree --write-tree` is unsupported (git < 2.38 usage error 129).
+    mb = git(main, "merge-base", p1, p2, check=False)
+    if not mb:
+        return False, ""
+    lane_before = git(main, "diff", "--no-ext-diff", mb, p1, check=False)
+    lane_after = git(main, "diff", "--no-ext-diff", p2, commit, check=False)
+    return (lane_before == lane_after, p1)
+
+
+def pre_land_review_problem(
+    store: state.Store,
+    record: Record,
+    main: str,
+    tip: str,
+    tree: str,
+    integration: str,
+    *,
+    prog: str = "lanefather",
+) -> str | None:
+    """Validate a lane's pre-land review before landing (fathers#242); None when no pre-land review blocks land."""
+    lane_id = str(record["id"])
+    rev = review_record.ReviewRecord.load(store, lane_id, record=record)
+    verdict = rev.verdict
+    if isinstance(verdict, (review_record.Absent, review_record.Exempt, review_record.Failed, review_record.Died)):
+        return None
+    if isinstance(verdict, review_record.Running):
+        return f"lane {lane_id}'s pre-land review is still running ({rev.summary(prog=prog)[1]})"
+    if isinstance(verdict, review_record.PartialPanel):
+        return f"lane {lane_id}'s pre-land review is incomplete ({rev.summary(prog=prog)[1]})"
+    if isinstance(verdict, review_record.Unmarked):
+        blocks = store.project.review_blocks
+        blocking = [f for f in verdict.unmarked if f.get("severity", "P2") in blocks]
+        if blocking:
+            nums = ", ".join(f"#{f['n']}" for f in blocking)
+            return (
+                f"lane {lane_id}'s pre-land review has unmarked {'/'.join(blocks)} findings ({nums}): "
+                f"mark each first ({review_record.mark_help(lane_id, prog=prog)})"
+            )
+    reviewed_tip = rev.reviewed_tip
+    if not reviewed_tip or not review_record.OID_RE.fullmatch(reviewed_tip):
+        return (
+            f"lane {lane_id}'s pre-land review receipt has no valid reviewed commit SHA; "
+            f"rerun {prog} review {lane_id} --force-reason <why>"
+        )
+    fixed_shas: set[str] = set()
+    for finding in rev.findings:
+        raw_mark: Any = finding.get("mark")
+        if not isinstance(raw_mark, dict):
+            continue
+        mark = cast(dict[str, Any], raw_mark)
+        if mark.get("kind") != "fixed":
+            continue
+        merge_sha: Any = mark.get("merge")
+        if not isinstance(merge_sha, str) or not review_record.OID_RE.fullmatch(merge_sha):
+            return (
+                f"lane {lane_id}'s pre-land review finding #{finding.get('n')} has an invalid fixed commit SHA; "
+                f"re-mark it or rerun {prog} review {lane_id} --force-reason <why>"
+            )
+        fixed_shas.add(merge_sha)
+    for fix_sha in sorted(fixed_shas):
+        if not git_ok(main, "merge-base", "--is-ancestor", fix_sha, tip):
+            return (
+                f"lane {lane_id} tip {tip[:10]} does not contain fix commit {fix_sha[:10]} from pre-land review; "
+                f"restore the fix or rerun {prog} review {lane_id} --force-reason <why>"
+            )
+    if not git_ok(main, "merge-base", "--is-ancestor", reviewed_tip, tip):
+        return (
+            f"lane {lane_id} tip {tip[:10]} does not contain pre-land reviewed commit {reviewed_tip[:10]}; "
+            f"rerun {prog} review {lane_id} --force-reason <why>"
+        )
+    reviewed_tree = rev.reviewed_tree or git(
+        main, "rev-parse", "--verify", "--quiet", f"{reviewed_tip}^{{tree}}", check=False
+    )
+    if fixed_shas and (tip == reviewed_tip or (reviewed_tree and tree == reviewed_tree)):
+        return (
+            f"lane {lane_id} tree at {tip[:10]} matches the unfixed pre-land reviewed commit "
+            f"{reviewed_tip[:10]} despite findings marked fixed; commit the fix or rerun "
+            f"{prog} review {lane_id} --force-reason <why>"
+        )
+    if not fixed_shas and (tip == reviewed_tip or (reviewed_tree and tree == reviewed_tree)):
+        return None
+    int_head = git(integration, "rev-parse", "--verify", "--quiet", "HEAD", check=False)
+    visited: set[str] = set()
+    queue: list[str] = [tip]
+    unreviewed: list[str] = []
+    non_integration_merges: list[str] = []
+    while queue:
+        sha = queue.pop(0)
+        if sha in visited:
+            continue
+        visited.add(sha)
+        if sha == reviewed_tip or git_ok(main, "merge-base", "--is-ancestor", sha, reviewed_tip):
+            continue
+        parents_proc = subprocess.run(
+            ["git", "rev-list", "--parents", "-n", "1", sha],
+            cwd=main,
+            capture_output=True,
+            text=True,
+        )
+        if parents_proc.returncode != 0:
+            return (
+                f"lane {lane_id}: could not inspect commit {sha[:10]} since pre-land review at "
+                f"{reviewed_tip[:10]}; rerun {prog} review {lane_id} --force-reason <why>"
+            )
+        parts = parents_proc.stdout.strip().split()
+        if not parts:
+            return (
+                f"lane {lane_id}: could not inspect commit {sha[:10]} since pre-land review at "
+                f"{reviewed_tip[:10]}; rerun {prog} review {lane_id} --force-reason <why>"
+            )
+        parents = parts[1:]
+        if len(parents) > 1:
+            is_clean, p1 = _is_clean_integration_merge(main, sha, int_head, reviewed_tip)
+            if is_clean:
+                queue.append(p1)
+            else:
+                non_integration_merges.append(sha)
+            continue
+        if not any(git_ok(main, "merge-base", "--is-ancestor", sha, fix_sha) for fix_sha in fixed_shas):
+            unreviewed.append(sha)
+        queue.extend(parents)
+    if non_integration_merges:
+        shown = ", ".join(sha[:10] for sha in non_integration_merges[:5]) + (
+            f" and {len(non_integration_merges) - 5} more" if len(non_integration_merges) > 5 else ""
+        )
+        return (
+            f"lane {lane_id} has unreviewed merge commits since pre-land review at {reviewed_tip[:10]} "
+            f"({shown}); rerun {prog} review {lane_id} --force-reason <why>"
+        )
+    if unreviewed:
+        shown = ", ".join(sha[:10] for sha in unreviewed[:5]) + (
+            f" and {len(unreviewed) - 5} more" if len(unreviewed) > 5 else ""
+        )
+        return (
+            f"lane {lane_id} has unreviewed commits since pre-land review at {reviewed_tip[:10]} "
+            f"({shown}); mark them as fixes or rerun {prog} review {lane_id} --force-reason <why>"
+        )
+    return None
 
 
 def landing_findings(record: Record, store: state.Store) -> tuple[list[LaneFinding], list[LaneFinding]]:

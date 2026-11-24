@@ -7,7 +7,7 @@ page), read-only.
                  "lanes": [{"id", "status", "ticket": {"number", "url"}, "tickets": [{"number", "url", "partial"}],
                             "branch", "base", "worktree", "claims",
                             "after", "created", "receipt": {"status", "tree_match", "path"},
-                            "post_merge": str | null, "review": {"status", "open", "findings"},
+                            "post_merge": str | null, "review": {"status", "open", "findings", ...},
                             "logs": {phase: path}, "outcome", "gone"}]}
                 | {"project", "state_dir", "error"}]}
 
@@ -155,9 +155,14 @@ def status(args: Any) -> int:
               + f"  {project['state_dir']}")
         for lane in project["lanes"]:
             post = f"  post-merge {lane['post_merge']}" if lane.get("post_merge") else ""
+            review_info = lane["review"]
+            review_text = (
+                review_info["summary"]
+                if isinstance(review_info.get("summary"), str) and review_info["summary"]
+                else f"review {review_info['status']}"
+            )
             print(f"    {lane['id']}  {lane['status']}  receipt {lane['receipt']['status']}"
-                  f"{post}  review {lane['review']['status']}"
-                  + (f"  gone: {admission.GONE}" if lane.get("gone") else ""))
+                  f"{post}  {review_text}" + (f"  gone: {admission.GONE}" if lane.get("gone") else ""))
         for row in project.get("damaged", []):
             print(f"    damaged {row['path']}: restore the record or remove the file; start, land, promote and gc "
                   "refuse until then")

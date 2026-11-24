@@ -580,6 +580,9 @@ class LaneView:
     findings_count: int
     open_findings_count: int
     logs: dict[str, str]
+    review_pre_land: bool = False
+    review_tip: str | None = None
+    review_pre_land_current: bool = True
 
     def _check_status_word(self, *, default: str) -> str:
         if isinstance(self.check, NoReceipt):
@@ -620,9 +623,20 @@ class LaneView:
             return "finished"
         return self.review.raw_status or "not started"
 
+    def pre_land_reviewed_text(self) -> str | None:
+        """Short summary for a lane with a completed pre-land review (fathers#242)."""
+        if self.review_pre_land and isinstance(self.review, review_record.Complete) and self.review_tip:
+            if self.is_active and not self.review_pre_land_current:
+                return f"reviewed before land at {self.review_tip[:10]} (stale)"
+            return f"reviewed before land at {self.review_tip[:10]}"
+        return None
+
     def list_receipt_text(self) -> str:
         """The `receipt` summary string rendered by `list` and `list --json`."""
+        pre_land_text = self.pre_land_reviewed_text()
         if isinstance(self.check, NoReceipt):
+            if self.is_active and pre_land_text:
+                return f"no receipt, {pre_land_text}"
             return "no receipt"
         text = self._check_status_word(default="?")
         if self.is_active and isinstance(self.check, StaleTree):
@@ -630,7 +644,9 @@ class LaneView:
         if self.post_merge_present:
             text += f", post-merge {self.post_merge_status}"
         if self.landed_present and not self.is_finished:
-            text += f", {self.review_words}"
+            text += f", {pre_land_text or self.review_words}"
+        elif self.is_active and pre_land_text:
+            text += f", {pre_land_text}"
         return text
 
     def for_list(self, record: Record) -> dict[str, Any]:
@@ -648,6 +664,18 @@ class LaneView:
             "tree_match": tree_match,
         }
         repo_url = f"https://github.com/{self.repository}" if self.repository else None
+        review_block: dict[str, Any] = {
+            "status": self._review_status_for_show(),
+            "findings": self.findings_count,
+            "unresolved": self.open_findings_count,
+        }
+        if self.review_pre_land:
+            review_block["pre_land"] = True
+            if self.review_tip:
+                review_block["tip"] = self.review_tip
+            pre_land_text = self.pre_land_reviewed_text()
+            if pre_land_text:
+                review_block["summary"] = pre_land_text
         return {
             "version": 1,
             "id": self.id,
@@ -663,15 +691,23 @@ class LaneView:
             "after": self.after,
             "checks": checks,
             "agents": self.agents,
-            "review": {
-                "status": self._review_status_for_show(),
-                "findings": self.findings_count,
-                "unresolved": self.open_findings_count,
-            },
+            "review": review_block,
         }
 
     def for_status(self) -> dict[str, Any]:
         """The per-lane entry rendered inside `status --json`."""
+        review_block: dict[str, Any] = {
+            "status": self._review_status_for_status(),
+            "open": self.open_findings_count,
+            "findings": self.findings_count,
+        }
+        if self.review_pre_land:
+            review_block["pre_land"] = True
+            if self.review_tip:
+                review_block["tip"] = self.review_tip
+            pre_land_text = self.pre_land_reviewed_text()
+            if pre_land_text:
+                review_block["summary"] = pre_land_text
         return {
             "id": self.id,
             "status": self.status,
@@ -689,11 +725,7 @@ class LaneView:
                 "path": self.check_receipt_path,
             },
             "post_merge": self.post_merge_status if self.post_merge_present else None,
-            "review": {
-                "status": self._review_status_for_status(),
-                "open": self.open_findings_count,
-                "findings": self.findings_count,
-            },
+            "review": review_block,
             "logs": self.logs,
             "outcome": self.outcome,
         }
@@ -740,6 +772,31 @@ def lane_view(
     _, words = rev.summary(prog=prog or store.project.command)
     findings = rev.findings
     open_count = len(rev.open_findings)
+    pre_land_current = True
+    if (
+        lifecycle.active(record)
+        and rev.is_pre_land
+        and isinstance(review_v, review_record.Complete)
+        and rev.reviewed_tip
+        and root
+        and branch_str
+    ):
+        branch_tip = _git_read(root, "rev-parse", "--verify", "--quiet", f"refs/heads/{branch_str}^{{commit}}")
+        if branch_tip and branch_tip != rev.reviewed_tip:
+            fixed_shas: set[str] = set()
+            for finding in findings:
+                raw_mark: Any = finding.get("mark")
+                if not isinstance(raw_mark, dict):
+                    continue
+                mark = cast(dict[str, Any], raw_mark)
+                merge_sha: Any = mark.get("merge")
+                if mark.get("kind") == "fixed" and isinstance(merge_sha, str) and merge_sha:
+                    fixed_shas.add(merge_sha)
+            if branch_tip in fixed_shas:
+                pre_land_current = True
+            else:
+                parents = _git_read(root, "rev-list", "--parents", "-n", "1", branch_tip).split()[1:]
+                pre_land_current = len(parents) == 2 and (parents[0] == rev.reviewed_tip or parents[0] in fixed_shas)
 
     raw_post = record.get("post_merge")
     post_dict = cast(dict[str, Any], raw_post) if isinstance(raw_post, dict) else None
@@ -800,4 +857,7 @@ def lane_view(
         findings_count=len(findings),
         open_findings_count=open_count,
         logs=dict(logs) if logs is not None else {},
+        review_pre_land=rev.is_pre_land,
+        review_tip=rev.reviewed_tip or None,
+        review_pre_land_current=pre_land_current,
     )
