@@ -13,8 +13,10 @@ import unittest
 from support import ROOT
 
 from lanefather import config, gate, promote, stamp, verify
+from lanefather.errors import LaneError
 
 PACKAGE = ROOT
+FIXTURE_LEDGER = ROOT / "tests" / "fixtures" / "verified-tree-ledger.py"
 
 
 def _run_git(cwd: Path, *args: str) -> str:
@@ -77,10 +79,10 @@ class StampUnitTests(unittest.TestCase):
         sha1, tree1 = _commit_files(self.repo, {"src/lib.py": "x = 1\n", "README.md": "v1\n"}, "base")
         stamp.add(self.common, tree1, sha1)
 
-        # Adding, editing, and deleting .md files only still counts as verified.
+        # Adding and editing lowercase .md files only still counts as verified.
         sha_md, tree_md = _commit_files(
             self.repo,
-            {"README.md": "v2\n", "docs/GUIDE.MD": "guide\n"},
+            {"README.md": "v2\n", "docs/guide.md": "guide\n"},
             "docs update",
         )
         self.assertNotEqual(tree_md, tree1)
@@ -88,7 +90,12 @@ class StampUnitTests(unittest.TestCase):
         self.assertTrue(md_result.verified)
         self.assertEqual(md_result.match, "md-only")
         self.assertEqual(md_result.matched_tree, tree1)
-        self.assertEqual(set(md_result.md_paths), {"README.md", "docs/GUIDE.MD"})
+        self.assertEqual(set(md_result.md_paths), {"README.md", "docs/guide.md"})
+
+        # Uppercase .MD is not matched (case-sensitive .md rule).
+        sha_upper_md, _ = _commit_files(self.repo, {"docs/NOTES.MD": "upper\n"}, "upper md")
+        self.assertFalse(stamp.check_tree(str(self.repo), self.common, sha_upper_md).verified)
+        _run_git(self.repo, "reset", "--hard", "-q", sha_md)
 
         # A non-.md change invalidates the stamp, even alongside a .md change.
         sha_code, _ = _commit_files(
@@ -169,6 +176,63 @@ class StampUnitTests(unittest.TestCase):
         self.assertEqual(
             verify.stamp_result(not_line + "\n", full=True),
             {"stamped": False, "reason": "tracked files changed during the run"},
+        )
+
+    def test_malformed_and_option_like_ledger_rows_cannot_inject_or_bypass(self) -> None:
+        _commit_files(self.repo, {"app.py": "1\n"}, "base")
+        pwned = self.tmp / "pwned-output"
+        ledger = self.common / "verified-trees"
+        ledger.write_text(
+            f"--output={pwned} - x\n"
+            "not-a-valid-sha - 2026-01-01T00:00:00Z\n"
+            "--stat - 2026-01-01T00:00:00Z\n",
+            encoding="utf-8",
+        )
+        self.assertEqual(stamp.read_entries(self.common), [])
+        result = stamp.check_tree(str(self.repo), self.common, "HEAD")
+        self.assertFalse(result.verified)
+        self.assertIsNone(result.match)
+        self.assertFalse(pwned.exists())
+
+    def test_config_rejects_stamp_file_path_traversal_and_dotfiles(self) -> None:
+        for bad in ("../../escaped", "sub/ledger", r"sub\ledger", ".hidden", "..", ""):
+            with self.subTest(stamp_file=bad), self.assertRaisesRegex(LaneError, "stamp_file"):
+                config.parse({"gate": {"stamp_file": bad}})
+
+    def test_differential_parity_with_fixture_ledger(self) -> None:
+        shipped_dir = self.tmp / "shipped"
+        fixture_dir = self.tmp / "fixture"
+        shipped_dir.mkdir()
+        fixture_dir.mkdir()
+
+        def apply(op: str, *args: str) -> None:
+            stamp.mutate(shipped_dir, op, list(args))
+            res = subprocess.run(
+                [sys.executable, str(FIXTURE_LEDGER), str(fixture_dir), op, *args],
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(res.returncode, 0, res.stderr)
+
+        for index in range(52):
+            apply("add", f"{index:040x}", f"{index:040x}", f"2026-01-01T00:00:{index % 60:02d}Z")
+        token_a = "1" * 32
+        token_b = "2" * 32
+        token_c = "3" * 32
+        apply("add", "a" * 40, "a" * 40, "2026-01-02T00:00:00Z", token_a)
+        apply("add", "b" * 40, "b" * 40, "2026-01-02T00:00:01Z", token_b)
+        apply("complete", token_b)
+        apply("add", "c" * 40, "c" * 40, "2026-01-02T00:00:02Z", token_c)
+        apply("abort", token_a)
+        apply("abort", token_c)
+
+        self.assertEqual(
+            (shipped_dir / "verified-trees").read_bytes(),
+            (fixture_dir / "verified-trees").read_bytes(),
+        )
+        self.assertEqual(
+            sorted(p.name for p in shipped_dir.glob("verified-tree-transaction-*.json")),
+            sorted(p.name for p in fixture_dir.glob("verified-tree-transaction-*.json")),
         )
 
     def test_gate_and_promote_support_builtin_stamp_tool(self) -> None:
@@ -272,6 +336,22 @@ class StampCLITests(unittest.TestCase):
         self.assertEqual(bad_token.returncode, 2)
         bad_flag = self.run_cli("stamp", "check", "--token", token)
         self.assertEqual(bad_flag.returncode, 2)
+        bad_file = self.run_cli("stamp", "check", "--file", "../../escaped")
+        self.assertEqual(bad_file.returncode, 2)
+        bad_dotfile = self.run_cli("stamp", "list", "--file", ".hidden")
+        self.assertEqual(bad_dotfile.returncode, 2)
+        bad_rev = self.run_cli("stamp", "check", "nonexistent-ref-xyz")
+        self.assertEqual(bad_rev.returncode, 2)
+        other_token = "fedcba9876543210fedcba9876543210"
+        conflict = self.run_cli("stamp", "abort", token, "--token", other_token)
+        self.assertEqual(conflict.returncode, 2)
+
+        # Ledger-state error (reused token) exits 1 (LaneError), not 2 (LaneUsageError).
+        first_rec = self.run_cli("stamp", "record", "--token", other_token)
+        self.assertEqual(first_rec.returncode, 0, first_rec.stderr)
+        dup_rec = self.run_cli("stamp", "record", "--token", other_token)
+        self.assertEqual(dup_rec.returncode, 1)
+        self.assertIn("already used", dup_rec.stderr)
 
         # Outside a git repo exits 1 cleanly.
         outside = self.tmp / "not-a-repo"

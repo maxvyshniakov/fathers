@@ -24,7 +24,8 @@ def stamped_trees(common: str, project: config.Config = config.DEFAULT) -> set[s
 
 
 def verified(cwd: str, common: str, sha: str, project: config.Config = config.DEFAULT) -> bool:
-    """Whether pre-push would take the SHA's tree: stamped, or differing only in `.md` files (builtin or hook)."""
+    """Whether the SHA's tree is verified: with `stamp_tool = "builtin"`, checks the ledger and `.md`-only
+    equivalence directly; otherwise checks the ledger and (with a custom `stamp_tool` + pre-push hook) delegates."""
     if project.stamp_tool == stamp.BUILTIN:
         return stamp.check_tree(cwd, common, sha, stamp_file=project.stamp_file).verified
     if git(cwd, "rev-parse", sha + "^{tree}") in stamped_trees(common, project):

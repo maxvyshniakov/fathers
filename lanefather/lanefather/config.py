@@ -380,6 +380,15 @@ def _patterns(table: dict[str, Any], key: str, default: tuple[str, ...], section
     return found
 
 
+def _stamp_file(gate: dict[str, Any], default: str) -> str:
+    value = _string(gate, "stamp_file", default)
+    if not value or "/" in value or "\\" in value or ".." in value or value.startswith("."):
+        raise LaneError(
+            f"{CONFIG_NAME}: [gate] stamp_file must be a plain filename without path separators, '..' or leading '.'"
+        )
+    return value
+
+
 def _promoted(table: dict[str, Any], default: tuple[str, ...]) -> tuple[str, ...]:
     found = _strings(table, "branches", default)
     if not found or any(not b.strip() or b.startswith("-") or any(c.isspace() for c in b) for b in found):
@@ -555,7 +564,7 @@ def parse(data: dict[str, Any], path: Path | None = None) -> Config:
         cache_partitions=_string(lane, "cache_partitions", default.cache_partitions),
         cache_depfiles=_patterns(lane, "cache_depfiles", default.cache_depfiles, "lane"),
         stamp_tool=_string(gate, "stamp_tool", default.stamp_tool),
-        stamp_file=_string(gate, "stamp_file", default.stamp_file),
+        stamp_file=_stamp_file(gate, default.stamp_file),
         pre_push_hook=_string(gate, "pre_push_hook", default.pre_push_hook),
         promoted=_promoted(promote, default.promoted),
         ship_refuses=_string(promote, "ship_refuses", default.ship_refuses),

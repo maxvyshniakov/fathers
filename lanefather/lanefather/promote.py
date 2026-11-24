@@ -29,6 +29,7 @@ from . import (
     review_record,
     scope,
     slots,
+    stamp,
     state,
     tickets,
     verify,
@@ -520,7 +521,7 @@ def step_review_gate(run: PromoteRun) -> None:
 def has_batch_gate(cwd: str, sha: str, cfg: config.Config) -> bool:
     if not cfg.stamp_tool or not git_ok(cwd, "cat-file", "-e", f"{sha}:{cfg.verify}"):
         return False
-    if cfg.stamp_tool == "builtin":
+    if cfg.stamp_tool == stamp.BUILTIN:
         return True
     return git_ok(cwd, "cat-file", "-e", f"{sha}:{cfg.stamp_tool}")
 

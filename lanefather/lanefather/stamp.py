@@ -36,6 +36,11 @@ BUILTIN = "builtin"
 DEFAULT_STAMP_FILE = "verified-trees"
 MAX_ENTRIES = 50
 TOKEN_RE = re.compile(r"^[0-9a-f]{32}$")
+TREE_RE = re.compile(r"^[0-9a-f]{40}(?:[0-9a-f]{24})?$")
+
+
+class StampStateError(ValueError):
+    """Raised when a ledger operation conflicts with current ledger state (e.g. reused token)."""
 
 
 @dataclass(frozen=True)
@@ -86,12 +91,21 @@ def not_stamped_line(reason: str) -> str:
     return f"Verified tree not stamped: {reason}."
 
 
+def validate_stamp_file(name: str) -> str:
+    """Validate that `name` is a plain filename within the Git common directory (no path traversal or dotfiles)."""
+    if not name or "/" in name or "\\" in name or ".." in name or name.startswith("."):
+        raise ValueError(
+            f"invalid stamp file {name!r}: must be a plain filename without path separators, '..' or leading '.'"
+        )
+    return name
+
+
 def ledger_path(common: Path | str, stamp_file: str = DEFAULT_STAMP_FILE) -> Path:
-    return Path(common) / stamp_file
+    return Path(common) / validate_stamp_file(stamp_file)
 
 
 def lock_path(common: Path | str, stamp_file: str = DEFAULT_STAMP_FILE) -> Path:
-    return Path(common) / f"{stamp_file}.lock"
+    return Path(common) / f"{validate_stamp_file(stamp_file)}.lock"
 
 
 def journal_path(common: Path | str, token: str) -> Path:
@@ -118,7 +132,7 @@ def read_entries(common: Path | str, *, stamp_file: str = DEFAULT_STAMP_FILE) ->
     entries: list[Entry] = []
     for line in lines:
         fields = line.split()
-        if not fields:
+        if not fields or not TREE_RE.fullmatch(fields[0]):
             continue
         tree = fields[0]
         commit = fields[1] if len(fields) > 1 else "-"
@@ -162,7 +176,7 @@ def mutate(
             keep = MAX_ENTRIES - 1
             if journal and token is not None:
                 if journal.exists() or any(_owned(row, token) for row in rows):
-                    raise ValueError("verification stamp token already used")
+                    raise StampStateError("verification stamp token already used")
                 # Record evictions BEFORE publication, so interruption after rename
                 # can remove only this run without losing its earlier stamps.
                 atomic_write(journal, json.dumps({"before": rows, "pruned": rows[:-keep]}) + "\n")
@@ -258,14 +272,16 @@ def finish(
 
 
 def is_md_path(path: str) -> bool:
-    """Whether `path` is a Markdown documentation file for `.md`-only stamp equivalence."""
-    return path.lower().endswith(".md")
+    """Whether `path` is a Markdown documentation file for `.md`-only stamp equivalence (case-sensitive)."""
+    return path.endswith(".md")
 
 
 def _diff_paths(cwd: str, tree_a: str, tree_b: str) -> list[str] | None:
     """Changed paths between two Git trees, or None if either tree is absent from the object store."""
+    if not TREE_RE.fullmatch(tree_a) or not TREE_RE.fullmatch(tree_b):
+        return None
     result = subprocess.run(
-        ["git", "diff-tree", "-r", "--name-only", "-z", tree_a, tree_b],
+        ["git", "diff-tree", "-r", "--name-only", "-z", "--end-of-options", tree_a, tree_b],
         cwd=cwd,
         capture_output=True,
         text=True,
@@ -285,18 +301,18 @@ def check_tree(
     """Check whether `rev`'s tree is stamped or differs from a stamped tree only in `.md` files."""
     tree = git(cwd, "rev-parse", "--verify", "--quiet", f"{rev}^{{tree}}", check=False)
     if not tree:
-        raise LaneError(f"stamp: {rev} names no tree here")
+        raise LaneUsageError(f"stamp: {rev} names no tree here")
     ledger = ledger_path(common, stamp_file)
     entries = read_entries(common, stamp_file=stamp_file)
     newest_first = list(dict.fromkeys(reversed([entry.tree for entry in entries])))
     if tree in newest_first:
         return CheckResult(verified=True, tree=tree, match="exact", matched_tree=tree, ledger=ledger)
     for candidate in newest_first:
-        paths = _diff_paths(cwd, candidate, tree)
-        if paths is None:
+        if not TREE_RE.fullmatch(candidate) or candidate == tree:
             continue
+        paths = _diff_paths(cwd, candidate, tree)
         if not paths:
-            return CheckResult(verified=True, tree=tree, match="exact", matched_tree=candidate, ledger=ledger)
+            continue
         if all(is_md_path(path) for path in paths):
             return CheckResult(
                 verified=True,
@@ -322,7 +338,11 @@ def command(args: Any, project: config.Config = config.DEFAULT) -> int:
     target: str | None = args.target
     token: str | None = args.token
     as_json: bool = bool(args.json)
-    stamp_file: str = args.file or project.stamp_file or DEFAULT_STAMP_FILE
+    raw_file: str = args.file if args.file is not None else (project.stamp_file or DEFAULT_STAMP_FILE)
+    try:
+        stamp_file = validate_stamp_file(raw_file)
+    except ValueError as error:
+        raise LaneUsageError(str(error)) from None
     cwd = os.getcwd()
 
     if action in ("check", "list", "start") and token is not None:
@@ -344,10 +364,12 @@ def command(args: Any, project: config.Config = config.DEFAULT) -> int:
         rev = target or "HEAD"
         tree = git(cwd, "rev-parse", "--verify", "--quiet", f"{rev}^{{tree}}", check=False)
         if not tree:
-            raise LaneError(f"stamp: {rev} names no tree here")
+            raise LaneUsageError(f"stamp: {rev} names no tree here")
         commit = resolve(cwd, rev) or "-"
         try:
             entry = add(common, tree, commit, token=token, stamp_file=stamp_file)
+        except StampStateError as error:
+            raise LaneError(str(error)) from None
         except ValueError as error:
             raise LaneUsageError(str(error)) from None
         line = stamp_line(entry.tree)
@@ -371,6 +393,8 @@ def command(args: Any, project: config.Config = config.DEFAULT) -> int:
             raise LaneUsageError("finish requires the snapshot printed by 'stamp start'")
         try:
             ok, reason, entry = finish(cwd, common, target, token=token, stamp_file=stamp_file)
+        except StampStateError as error:
+            raise LaneError(str(error)) from None
         except ValueError as error:
             raise LaneUsageError(str(error)) from None
         line = stamp_line(entry.tree) if ok and entry is not None else not_stamped_line(reason)
@@ -427,6 +451,8 @@ def command(args: Any, project: config.Config = config.DEFAULT) -> int:
         return 0
 
     if action in ("abort", "complete"):
+        if token is not None and target is not None and token != target:
+            raise LaneUsageError(f"{action}: positional token and --token differ")
         chosen_token = token if token is not None else target
         if not chosen_token:
             raise LaneUsageError(f"{action} requires a 32-hex verification stamp token")
@@ -435,6 +461,8 @@ def command(args: Any, project: config.Config = config.DEFAULT) -> int:
                 abort(common, chosen_token, stamp_file=stamp_file)
             else:
                 complete(common, chosen_token, stamp_file=stamp_file)
+        except StampStateError as error:
+            raise LaneError(str(error)) from None
         except ValueError as error:
             raise LaneUsageError(str(error)) from None
         if as_json:

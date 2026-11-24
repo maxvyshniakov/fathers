@@ -440,27 +440,29 @@ commit-message edits, amends, or rebases that leave the tree identical stay veri
   the journal.
 - **`.md`-only equivalence rule**: `lanefather stamp check [REV]` (and `gate.verified` with `stamp_tool = "builtin"`)
   exits 0 when `REV`'s tree is in the ledger (`match = "exact"`) **or** when `git diff-tree -r --name-only` against
-  any stamped tree in the ledger contains only `.md` paths (`match = "md-only"`). Any non-`.md` path change
-  invalidates the stamp (exit 1).
+  any stamped tree in the ledger contains only lowercase `.md` paths (`match = "md-only"`). Any non-`.md` path
+  change invalidates the stamp (exit 1). An unresolvable `REV` or invalid syntax/token exits 2.
 - **CLI subcommands**:
-  - `lanefather stamp record [REV] [--token HEX32] [--file NAME] [--json]`: records `REV`'s tree (default `HEAD`)
-    and prints `Verified tree <tree> stamped.` (the line `lanefather.verify` parses).
+  - `lanefather stamp record [REV] [--token HEX32] [--file NAME] [--json]`: trusts the caller, records `REV`'s tree
+    (default `HEAD`), and prints `Verified tree <tree> stamped.` (the line `lanefather.verify` parses). Use
+    `start`/`finish` for a guarded stamp that rejects dirty or changed worktrees.
   - `lanefather stamp check [REV] [--file NAME] [--json]`: exits 0 if `REV` (default `HEAD`) is verified (exact or
-    `.md`-only), 1 otherwise. `--json` prints `{"v": 1, "verified", "rev", "tree", "match", "matched_tree",
-    "md_paths", "ledger"}`.
+    `.md`-only), 1 if not stamped, 2 if `REV` cannot be resolved or arguments are invalid. `--json` prints `{"v": 1,
+    "verified", "rev", "tree", "match", "matched_tree", "md_paths", "ledger"}`.
   - `lanefather stamp list [--file NAME] [--json]`: lists stamped rows (`--json` prints `{"v": 1, "ledger",
     "entries"}`).
   - `lanefather stamp start` / `finish STATE [--token HEX32] [--json]`: captures `HEAD`'s tree and clean/dirty state
     before a full verification run and stamps only if tracked files stayed clean and `HEAD`'s tree stayed unchanged
     (otherwise printing `Verified tree not stamped: <reason>.`).
   - `lanefather stamp abort TOKEN` / `complete TOKEN`: rolls back or finalizes a tokenized stamp transaction.
-- **Project configuration & external adapters**: set `[gate] stamp_tool = "builtin"` in `.lanefather.toml` to use
-  Lanefather's built-in stamp check in `lanefather promote` and `gate.verified` without a repo-local shell script.
-  External adapters (such as Repo-Kit's `lanefather.mjs` or Straylight's `verify.sh`) run `lanefather stamp start`
-  before a full verification run and `lanefather stamp finish "$snapshot"` (or `lanefather stamp record`) on green
-  completion, emitting the standard stamp line for `lanefather.verify`. A repository's `.githooks/pre-push` hook
-  enforces the rule by running `lanefather stamp check "$local_sha"` for each pushed ref. Projects that configure a
-  custom script path in `[gate] stamp_tool` keep full backwards compatibility.
+- **Project configuration & external adapters**: set `[gate] stamp_tool = "builtin"` in `.lanefather.toml` so
+  `lanefather promote` and `gate.verified` apply the ledger and `.md`-only equivalence directly without a repo-local
+  shell script or `.githooks/pre-push`. `[gate] stamp_file` (and `--file`) must be a plain filename without path
+  separators, `..`, or a leading `.`. External adapters (such as Repo-Kit's `lanefather.mjs` or Straylight's
+  `verify.sh`) run `lanefather stamp start` before a full verification run and `lanefather stamp finish "$snapshot"`
+  (or `lanefather stamp record`) on green completion, emitting the standard stamp line for `lanefather.verify`. A
+  repository's `.githooks/pre-push` hook enforces the rule by running `lanefather stamp check "$local_sha"` for each
+  pushed ref. Projects that configure a custom script path in `[gate] stamp_tool` keep full backwards compatibility.
 
 ### Recorded promote runs
 
