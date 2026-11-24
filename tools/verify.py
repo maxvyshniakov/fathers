@@ -652,7 +652,9 @@ def lane_selection(arguments: Mapping[str, str | bool],
     """The checks a run selects (`catalog`: id -> step, in order) and its --jobs, or LaneError for a refusal."""
     if "--plan" in arguments:
         raise LaneError("a plan takes --changed --base REF --plan --json")
-    if any(name in arguments for name in ("--changed", "--base", "--json")):
+    if any(name in arguments for name in ("--changed", "--json")) or (
+        "--base" in arguments and "--checks" not in arguments
+    ):
         raise LaneError("plan flags require --plan")
     if "--checks" in arguments and "--suites" in arguments:
         raise LaneError("choose --checks or --suites")

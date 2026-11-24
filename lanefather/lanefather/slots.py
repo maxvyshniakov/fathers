@@ -23,6 +23,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 from typing import Any, cast
 
 from . import config, settings
@@ -56,8 +57,36 @@ def leased() -> bool:
 
 def lease_count() -> int | None:
     """The slots of the lease this process runs under, or None."""
-    value = os.environ.get("SLOTFATHER_COUNT", "")
-    return int(value) if leased() and value.isdigit() else None
+    if not leased():
+        return None
+    for var in ("SLOTFATHER_SLOTS", "SLOTFATHER_COUNT"):
+        value = os.environ.get(var, "")
+        if value.isdigit() and int(value) > 0:
+            return int(value)
+    return None
+
+
+def warn_outer_lease(command: str, wanted: int | None = None, *, prog: str = "lanefather") -> bool:
+    """Warn on stderr when a self-leasing command runs inside an outer Slotfather lease (fathers#253).
+    Returns True when a warning was emitted."""
+    if not leased():
+        return False
+    held = lease_count()
+    if held is not None:
+        slot_word = "slot" if held == 1 else "slots"
+        budget = f" (needed {wanted})" if wanted is not None and held < wanted else ""
+        detail = (
+            f"an outer Slotfather lease of {held} {slot_word}{budget}, which pins the whole {command} "
+            f"(and its verifier) to {held} {slot_word}"
+        )
+    else:
+        detail = f"an outer Slotfather lease, which pins the whole {command} (and its verifier) to that lease"
+    print(
+        f"lane: warning: `{prog} {command}` is running inside {detail}; `{prog} check`, `{prog} land` and "
+        f"`{prog} promote` lease for themselves and must not be wrapped in `slotfather run --`",
+        file=sys.stderr,
+    )
+    return True
 
 
 def priority_setting(phase: str) -> str:

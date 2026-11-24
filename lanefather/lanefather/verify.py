@@ -392,6 +392,7 @@ class Selection:
     kind: Literal["full", "suites", "checks"]
     items: tuple[str, ...] = ()
     only: tuple[str, ...] = ()
+    base: str | None = None
 
     @classmethod
     def full(cls) -> Selection:
@@ -402,15 +403,17 @@ class Selection:
         return cls("suites", tuple(names))
 
     @classmethod
-    def checks(cls, ids: Iterable[str], *, only: Iterable[str] = ()) -> Selection:
-        return cls("checks", tuple(ids), only=tuple(only))
+    def checks(cls, ids: Iterable[str], *, only: Iterable[str] = (), base: str | None = None) -> Selection:
+        return cls("checks", tuple(ids), only=tuple(only), base=base or None)
 
     def argv(self) -> tuple[str, ...]:
         if self.kind == "full":
             return ()
         if self.kind == "checks":
-            base: tuple[str, ...] = ("--checks", ",".join(self.items))
-            return (*base, "--only", ",".join(self.only)) if self.only else base
+            parts: tuple[str, ...] = ("--checks", ",".join(self.items))
+            if self.base:
+                parts = (*parts, "--base", self.base)
+            return (*parts, "--only", ",".join(self.only)) if self.only else parts
         return ("--suites", ",".join(self.items))
 
     def describe(self) -> str:
@@ -968,6 +971,7 @@ def run_smoke(
     decision = host.given_jobs(slots_override, "--slots") if slots_override else host.post_merge_jobs(
         host.host(store.project)
     )
+    slots.warn_outer_lease("land", decision["jobs"], prog=store.prog)
     ids = None if selected is None else [c for s in suites for c in selected[s]]
     selection = Selection.checks(ids) if ids is not None else Selection.suites(suites)
     run_type = (
@@ -1309,6 +1313,41 @@ def keep_run(store: state.Store, run: Path | None, label: str) -> Path | None:
     return kept
 
 
+_UNKNOWN_CHECK_MAX_LINES = 12
+_CLI_ERROR_PREFIX = r"^(?:[A-Za-z0-9_./-]+:\s*){0,2}"
+_UNKNOWN_CHECK_LINE_RE = re.compile(
+    _CLI_ERROR_PREFIX
+    + r"(?:"
+    r"(?:unknown|unrecognized)\s+(?:verification\s+)?(?:check|checks|step|steps)\b"
+    r"|no\s+such\s+(?:verification\s+)?(?:check|step)\b"
+    r"|check(?:s)?\s+not\s+found\b"
+    r")",
+    re.I,
+)
+_CRASH_OR_TRACEBACK_RE = re.compile(
+    r"^(?:Traceback \(most recent call last\):|File \".*\", line \d+|(?:ERROR|FAIL|FAILED)\b|[A-Za-z_]\w*Error:)",
+)
+
+
+def _unknown_check_log(log: Path | None) -> bool:
+    """Whether a short CLI-rejection base rerun log refused an unknown check/step name (fathers#253).
+
+    Logs that look like tracebacks, exceptions, or test output return False so real crashes stay unclassified.
+    """
+    if log is None:
+        return False
+    try:
+        text = log.read_text(errors="replace")
+    except OSError:
+        return False
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if not lines or len(lines) > _UNKNOWN_CHECK_MAX_LINES:
+        return False
+    if any(_CRASH_OR_TRACEBACK_RE.match(line) for line in lines):
+        return False
+    return any(_UNKNOWN_CHECK_LINE_RE.match(line) for line in lines)
+
+
 def run_rerun(
     store: state.Store,
     root: Any,
@@ -1321,13 +1360,14 @@ def run_rerun(
     ticket: str | None = None,
     toolchain: Any = UNRESOLVED,
     only: Iterable[str] = (),
+    base: str | None = None,
 ) -> tuple[str, dict[str, Any] | None, Path | None, Path | None, str | None]:
     """Execute one rerun via `verify.Run` and return `(run_id, report, log, run_dir, problem)`."""
     only_tuple = tuple(only)
     lease = Lease(wait=rerun_wait(store.project), kind="rerun") if queued else None
     run = Run(
         root,
-        Selection.checks(ids, only=only_tuple),
+        Selection.checks(ids, only=only_tuple, base=base),
         label,
         "rerun",
         jobs,
@@ -1562,7 +1602,12 @@ def evaluate_base_row(
     if not present:
         entry.update({
             "class": str(CheckClass.REGRESSION),
-            "base": {"sha": base, "status": "absent", "reason": "the base defines no such check"},
+            "base": {
+                "sha": base,
+                "status": "absent",
+                "reason": "the base defines no such check",
+                **({"log": str(base_log)} if base_log is not None else {}),
+            },
         })
         return entry
     actual_row = row or {"status": "not_run"}
@@ -1679,6 +1724,7 @@ def classify_failures(
 ) -> dict[str, Any] | None:
     """Rerun the red checks of a lane check (at most LANEFATHER_RERUNS) and classify each; None when nothing is red."""
     only_supported = plan.supports_only(worktree, lane_plan=lane_plan, report=report, project=store.project)
+    base_supported = plan.supports_base(worktree, lane_plan=lane_plan, report=report, project=store.project)
     planned = plan_classification(
         fresh, report, cap=rerun_cap(store.project), budget=rerun_budget, only_supported=only_supported,
     )
@@ -1695,10 +1741,11 @@ def classify_failures(
     if planned.active_rerun and not planned.first:
         alone_jobs = rerun_jobs(jobs, minimum=rerun_min_slots(planned.active_rerun, lane_plan, fresh,
                                                               project=store.project))
+        alone_base = base if base and not (lane_plan or {}).get("full") and base_supported else None
         alone_run_id, alone_report, log, _, problem = run_rerun(
             store, worktree, planned.active_rerun, f"lane-{record['id']}-alone", alone_jobs,
             meta=lane_meta(store, record), ticket=lane_ticket(record), toolchain=toolchain,
-            only=planned.alone_tests,
+            only=planned.alone_tests, base=alone_base,
         )
         candidate_runs.append(
             ComparisonRun("the alone rerun", alone_report, log=log, selected=planned.active_rerun),
@@ -1719,11 +1766,10 @@ def classify_failures(
     if still_red:
         # Only after the lane's rerun is red, never beside it (review of lanefather#4).
         present: list[str] = []
-        base_report: dict[str, Any] | None = None
-        base_log: Path | None = None
-        base_problem: str | None = None
-        kept: Path | None = None
-        base_tests: list[str] = []
+        base_outcomes: dict[
+            str,
+            tuple[dict[str, Any] | None, Path | None, Path | None, str | None, list[str], list[str]],
+        ] = {}
         with worktrees.base_checkout(record, worktree, base) as path:
             known = plan.known_checks(path, store.project)
             present = [c for c in still_red if known is None or c in known]
@@ -1742,14 +1788,71 @@ def classify_failures(
                 runs.append({"run": base_run_id, "rerun": "base",
                              **({"tests": base_tests} if base_tests else {})})
                 kept = keep_run(store, base_dir, base_label)
-        base_run = ComparisonRun("the base rerun", base_report, log=base_log, selected=present)
+                if known is None and base_report is None and _unknown_check_log(base_log):
+                    if len(present) == 1:
+                        # The single check does not exist on base (fathers#253).
+                        absent_id = present[0]
+                        present = []
+                        base_outcomes[absent_id] = (None, base_log, kept, None, [], [])
+                    else:
+                        # A multi-check selection failed because at least one check name is unknown on base;
+                        # probe each check individually so checks that do exist on base still get a verdict.
+                        still_present: list[str] = []
+                        for cid in present:
+                            cid_jobs = (
+                                1 if planned.first
+                                else rerun_jobs(jobs, minimum=rerun_min_slots([cid], lane_plan, fresh,
+                                                                              project=store.project))
+                            )
+                            cid_tests = (
+                                _ordered_subset_tests([cid], planned.failed_tests_by_check)
+                                if only_supported
+                                else []
+                            )
+                            cid_label = f"{base_label}-{cid}"
+                            cid_run_id, cid_report, cid_log, cid_dir, cid_problem = run_rerun(
+                                store, path, [cid], cid_label, cid_jobs, queued=not planned.first,
+                                meta={**lane_meta(store, record), "on": "base"}, ticket=lane_ticket(record),
+                                only=cid_tests,
+                            )
+                            runs.append({"run": cid_run_id, "rerun": "base",
+                                         **({"tests": cid_tests} if cid_tests else {})})
+                            cid_kept = keep_run(store, cid_dir, cid_label)
+                            if cid_report is None and _unknown_check_log(cid_log):
+                                base_outcomes[cid] = (None, cid_log, cid_kept, None, [], [])
+                            else:
+                                still_present.append(cid)
+                                base_outcomes[cid] = (cid_report, cid_log, cid_kept, cid_problem, cid_tests, [cid])
+                        present = still_present
+                else:
+                    reported_ids = (
+                        {row["id"] for row in _report_rows(base_report)}
+                        if base_report is not None and base_problem is None and not base_report.get("stopped")
+                        else None
+                    )
+                    if known is None and reported_ids is not None:
+                        kept_present: list[str] = []
+                        for cid in present:
+                            if cid in reported_ids:
+                                kept_present.append(cid)
+                                base_outcomes[cid] = (base_report, base_log, kept, base_problem, base_tests, present)
+                            else:
+                                base_outcomes[cid] = (None, base_log, kept, None, [], [])
+                        present = kept_present
+                    else:
+                        for cid in present:
+                            base_outcomes[cid] = (base_report, base_log, kept, base_problem, base_tests, present)
         for check_id in still_red:
             is_present = check_id in present
-            row = report_row(base_report, check_id) if is_present else None
-            check_tests = planned.failed_tests_by_check.get(check_id) if base_tests else None
+            c_report, c_log, c_kept, c_problem, c_tests, c_selected = base_outcomes.get(
+                check_id, (None, None, None, None, [], []),
+            )
+            base_run = ComparisonRun("the base rerun", c_report, log=c_log, selected=c_selected)
+            row = report_row(c_report, check_id) if is_present else None
+            check_tests = planned.failed_tests_by_check.get(check_id) if c_tests else None
             entries[check_id] = evaluate_base_row(
-                check_id, entries[check_id], base=base, present=is_present, row=row, base_log=base_log,
-                kept_dir=kept, problem=base_problem, check_tests=check_tests,
+                check_id, entries[check_id], base=base, present=is_present, row=row, base_log=c_log,
+                kept_dir=c_kept, problem=c_problem, check_tests=check_tests,
                 comparison_reports=[*candidate_runs, base_run], selected=planned.candidates,
             )
     return finalize_classification(base, planned, entries, load=load, runs=runs)

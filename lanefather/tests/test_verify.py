@@ -95,6 +95,55 @@ class VerifyUnitTests(unittest.TestCase):
         self.assertEqual(verify.Selection.full().argv(), ())
         self.assertEqual(verify.Selection.suites(["lib", "perf"]).argv(), ("--suites", "lib,perf"))
         self.assertEqual(verify.Selection.checks(["a", "b"]).argv(), ("--checks", "a,b"))
+        self.assertEqual(
+            verify.Selection.checks(["a", "b"], base="deadbeef").argv(),
+            ("--checks", "a,b", "--base", "deadbeef"),
+        )
+        self.assertEqual(
+            verify.Selection.checks(["a"], only=["t1"], base="deadbeef").argv(),
+            ("--checks", "a", "--base", "deadbeef", "--only", "t1"),
+        )
+
+    def test_outer_lease_warning_and_lease_count(self):
+        import io
+
+        from lanefather import slots
+        with unittest.mock.patch.dict(os.environ, {}, clear=True):
+            self.assertIsNone(slots.lease_count())
+            buf = io.StringIO()
+            with unittest.mock.patch("sys.stderr", buf):
+                self.assertFalse(slots.warn_outer_lease("check", 2))
+            self.assertEqual(buf.getvalue(), "")
+
+        # Outer lease without a slot count still warns.
+        with unittest.mock.patch.dict(os.environ, {"SLOTFATHER_LEASE": "/tmp/l"}, clear=True):
+            self.assertIsNone(slots.lease_count())
+            buf_unknown = io.StringIO()
+            with unittest.mock.patch("sys.stderr", buf_unknown):
+                self.assertTrue(slots.warn_outer_lease("check", 2))
+            self.assertIn("running inside an outer Slotfather lease,", buf_unknown.getvalue())
+
+        # Outer 1-slot lease via SLOTFATHER_SLOTS warns with slot count and needed budget.
+        with unittest.mock.patch.dict(os.environ, {"SLOTFATHER_LEASE": "/tmp/l", "SLOTFATHER_SLOTS": "1"}, clear=True):
+            self.assertEqual(slots.lease_count(), 1)
+            buf = io.StringIO()
+            with unittest.mock.patch("sys.stderr", buf):
+                self.assertTrue(slots.warn_outer_lease("check", 2))
+            self.assertIn("outer Slotfather lease of 1 slot (needed 2)", buf.getvalue())
+            self.assertIn("must not be wrapped in `slotfather run --`", buf.getvalue())
+
+        # Outer 2-slot lease warns both when smaller than needed (with needed) and when >= needed (without needed).
+        with unittest.mock.patch.dict(os.environ, {"SLOTFATHER_LEASE": "/tmp/l", "SLOTFATHER_COUNT": "2"}, clear=True):
+            self.assertEqual(slots.lease_count(), 2)
+            buf_small = io.StringIO()
+            with unittest.mock.patch("sys.stderr", buf_small):
+                self.assertTrue(slots.warn_outer_lease("land", 3))
+            self.assertIn("2 slots (needed 3)", buf_small.getvalue())
+            buf_ok = io.StringIO()
+            with unittest.mock.patch("sys.stderr", buf_ok):
+                self.assertTrue(slots.warn_outer_lease("check", 2))
+            self.assertIn("outer Slotfather lease of 2 slots,", buf_ok.getvalue())
+            self.assertNotIn("needed", buf_ok.getvalue())
 
     def test_terminable_restores_handler_and_exits_on_sigterm(self):
         from lanefather import verify
@@ -176,7 +225,7 @@ class VerifyCallSitePinTests(LaneCase):
     def test_pins_argv_and_slot_env_across_all_six_verify_call_sites(self):
         from lanefather import results
 
-        # 1. check (selected checks) + 2. post-merge smoke
+        # 1. check (selected checks) + 2. post-merge smoke (verifier without "base" capability gets no --base)
         wt = self.created("a", "lib/**")
         self.commit(wt, {"lib/api.txt": "foo\nbaz\n"})
         self.lane("check", "a")

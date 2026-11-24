@@ -322,6 +322,8 @@ class LaneTests(unittest.TestCase):
     def test_the_selection_by_ids_or_suite(self) -> None:
         self.assertEqual((["verify:b%20c"], None), ([i for i, _ in self.selection("--checks", "verify:b%20c")[0]],
                                                     None))
+        scoped_checks, scoped_jobs = self.selection("--checks", "verify:a", "--base", "main")
+        self.assertEqual((["verify:a"], None), ([i for i, _ in scoped_checks], scoped_jobs))
         self.assertEqual(2, len(self.selection("--suites", "verify")[0]))
         self.assertEqual(2, len(self.selection()[0]))
         self.assertEqual(3, self.selection("--jobs=3", "--keep-going")[1])
@@ -332,6 +334,7 @@ class LaneTests(unittest.TestCase):
                               (["--suites", "browser"], "unknown suite selection"),
                               (["--checks", "verify:a", "--suites", "verify"], "choose --checks or --suites"),
                               (["--base", "main"], "plan flags require --plan"),
+                              (["--suites", "verify", "--base", "main"], "plan flags require --plan"),
                               (["--changed"], "plan flags require --plan"),
                               (["--json"], "plan flags require --plan"),
                               (["--plan"], "a plan takes --changed --base REF --plan --json"),

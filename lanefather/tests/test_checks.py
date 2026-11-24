@@ -1910,5 +1910,209 @@ class MissingVerifierTests(LaneCase):
         self.assertIn("[checks].verify", output)
 
 
+class ScopedBaseAndOuterLeaseTests(LaneCase):
+    """fathers#253: --base alongside --checks on scoped runs, outer 1-slot lease warning, and renamed checks on base."""
+
+    def receipt(self, lane_id: str) -> dict[str, Any]:
+        return json.loads((self.state / f"{lane_id}.receipt.json").read_text())
+
+    def entries(self, lane_id: str) -> dict[str, dict[str, Any]]:
+        return {e["check"]: e for e in self.receipt(lane_id)["classification"]["checks"]}
+
+    def test_scoped_check_omits_base_without_capability_and_passes_base_with_capability(self):
+        calls_file = self.tmp / "scoped-base-calls.jsonl"
+        self.env["SCOPED_CALLS"] = str(calls_file)
+        snippet = (
+            'if args[:1] != ["--changed"] and os.environ.get("SCOPED_CALLS"):\n'
+            '    with open(os.environ["SCOPED_CALLS"], "a") as out:\n'
+            '        out.write(json.dumps({"label": os.environ.get("LANEFATHER_SLOT_LABEL", ""), "args": args}) + "\\n")\n'
+        )
+        verifier = (self.integration / "verify.sh").read_text().replace(
+            "args = sys.argv[1:]\n", "args = sys.argv[1:]\n" + snippet,
+        )
+        self.commit(self.integration, {"verify.sh": verifier}, "record verify args without base capability")
+
+        # 1. Without "base" capability: neither scoped check nor solo rerun receives --base.
+        wt_no_cap = self.created("nocap", "calls/**")
+        self.commit(wt_no_cap, {"calls/main.txt": "foo\nbar\n"})
+        self.lane("check", "nocap", ok=False)
+        nocap_calls = [json.loads(line) for line in calls_file.read_text().splitlines()]
+        self.assertGreaterEqual(len(nocap_calls), 2)
+        for call in nocap_calls:
+            self.assertNotIn("--base", call["args"], call)
+
+        # 2. Advertise "base" in plan capabilities: scoped check and solo rerun receive --base; full & base rerun omit.
+        calls_file.unlink()
+        cap_verifier = verifier.replace(
+            'plan = {"full": full, "paths": paths, "unowned": unowned, "checks": rows, "suites": suites, "reasons": reasons}',
+            'plan = {"full": full, "paths": paths, "unowned": unowned, "checks": rows, "suites": suites, '
+            '"reasons": reasons, "capabilities": ["base"]}',
+        )
+        self.commit(self.integration, {"verify.sh": cap_verifier}, "advertise base capability in plan")
+
+        wt_scoped = self.created("scoped", "native/**")
+        base_scoped = self.tip()
+        self.commit(wt_scoped, {"native/straylight-core/corpus.txt": "v2\n"})
+        self.lane("check", "scoped", ok=False)
+        scoped_calls = {
+            row["label"]: row["args"]
+            for row in (json.loads(line) for line in calls_file.read_text().splitlines())
+        }
+        self.assertIn("--base", scoped_calls["lane-scoped"])
+        self.assertEqual(scoped_calls["lane-scoped"][scoped_calls["lane-scoped"].index("--base") + 1], base_scoped)
+        self.assertIn("--base", scoped_calls["lane-scoped-alone"])
+        self.assertEqual(
+            scoped_calls["lane-scoped-alone"][scoped_calls["lane-scoped-alone"].index("--base") + 1],
+            base_scoped,
+        )
+        self.assertNotIn("--base", scoped_calls["lane-scoped-base"])
+
+        wt_full = self.created("fullplan", "tooling/**")
+        self.commit(wt_full, {"tooling/build.txt": "v2\n"})
+        self.lane("check", "fullplan")
+        full_args = json.loads(calls_file.read_text().splitlines()[-1])["args"]
+        self.assertIn("--checks", full_args)
+        self.assertNotIn("--base", full_args)
+
+    def test_outer_one_slot_lease_warns_on_check_only_when_running_checks(self):
+        self.env.update(SLOTFATHER_LEASE=str(self.tmp / "outer-one"), SLOTFATHER_SLOTS="1", SLOTFATHER_COUNT="1")
+        wt = self.created("pinned", "lib/**")
+        self.commit(wt, {"lib/api.txt": "foo\nbaz\n"})
+        output = self.lane("check", "pinned")
+        self.assertIn("lane: warning:", output)
+        self.assertIn("outer Slotfather lease of 1 slot", output)
+        self.assertIn("must not be wrapped in `slotfather run --`", output)
+        # Re-checking the same green tree short-circuits and emits no outer-lease warning.
+        again = self.lane("check", "pinned")
+        self.assertNotIn("lane: warning:", again)
+
+    def _verifier_without_plan_module(self, *, omit_unknown: bool = False) -> None:
+        config = (self.integration / ".lanefather.toml").read_text().replace(
+            'plan_module = "tools/verification_plan.py"\n', "",
+        )
+        self.commit(self.integration, {".lanefather.toml": config}, "remove plan_module like package-kit consumer")
+        if omit_unknown:
+            verifier = (self.integration / "verify.sh").read_text().replace(
+                '    if any(id not in CHECKS for id in ids):\n'
+                '        # Like verify.py, an unknown check id refuses the whole selection.\n'
+                '        print("Unknown verification check or empty selection", file=sys.stderr)\n'
+                '        sys.exit(64)\n'
+                '    run_checks = [(id, CHECKS[id][0]) for id in ids]\n',
+                '    run_checks = [(id, CHECKS[id][0]) for id in ids if id in CHECKS]\n',
+            )
+            self.commit(self.integration, {"verify.sh": verifier}, "verifier omits unknown checks from report")
+
+    def test_renamed_check_on_lane_without_plan_module_is_regression_absent_on_base(self):
+        self._verifier_without_plan_module()
+        wt = self.created("renamed", "native/**")
+        # Rename native-check -> native-check-v2 on the lane only (base still has native-check).
+        lane_verify = (pathlib.Path(wt) / "verify.sh").read_text().replace('"native-check"', '"native-check-v2"')
+        self.commit(
+            wt,
+            {
+                "verify.sh": lane_verify,
+                "native/straylight-core/corpus.txt": "v2\n",
+            },
+            "rename native check and break it",
+        )
+        output = self.lane("check", "renamed", ok=False)
+        receipt = self.receipt("renamed")
+        self.assertEqual(receipt["status"], "red")
+        entry = self.entries("renamed")["native-check-v2"]
+        self.assertEqual(entry["class"], "regression")
+        self.assertEqual(entry["base"]["status"], "absent")
+        self.assertEqual(entry["base"]["reason"], "the base defines no such check")
+        self.assertIn("native-check-v2: regression: the base defines no such check", output)
+
+    def test_multi_check_base_rerun_probes_individually_when_one_check_was_renamed(self):
+        self._verifier_without_plan_module()
+        wt = self.created("mixed", "calls/**", "native/**")
+        lane_verify = (pathlib.Path(wt) / "verify.sh").read_text().replace('"native-check"', '"native-check-v2"')
+        self.commit(
+            wt,
+            {
+                "verify.sh": lane_verify,
+                "calls/main.txt": "foo\nbar\n",
+                "native/straylight-core/corpus.txt": "v2\n",
+            },
+            "break existing lib-check and renamed native-check-v2",
+        )
+        output = self.lane("check", "mixed", ok=False)
+        receipt = self.receipt("mixed")
+        self.assertEqual(receipt["status"], "red")
+        entries = self.entries("mixed")
+        self.assertEqual(entries["lib-check"]["class"], "regression")
+        self.assertEqual(entries["lib-check"]["base"]["status"], "passed")
+        self.assertEqual(entries["native-check-v2"]["class"], "regression")
+        self.assertEqual(entries["native-check-v2"]["base"]["status"], "absent")
+        self.assertIn("native-check-v2: regression: the base defines no such check", output)
+
+    def test_renamed_check_omitted_from_valid_base_report_is_regression_absent(self):
+        self._verifier_without_plan_module(omit_unknown=True)
+        wt = self.created("omitted", "native/**")
+        lane_verify = (pathlib.Path(wt) / "verify.sh").read_text().replace('"native-check"', '"native-check-v2"')
+        self.commit(
+            wt,
+            {
+                "verify.sh": lane_verify,
+                "native/straylight-core/corpus.txt": "v2\n",
+            },
+            "rename native check with omitting base verifier",
+        )
+        self.lane("check", "omitted", ok=False)
+        receipt = self.receipt("omitted")
+        self.assertEqual(receipt["status"], "red")
+        entry = self.entries("omitted")["native-check-v2"]
+        self.assertEqual(entry["class"], "regression")
+        self.assertEqual(entry["base"]["status"], "absent")
+        self.assertEqual(entry["base"]["reason"], "the base defines no such check")
+
+    def test_base_crash_with_invalid_step_size_stays_unclassified_not_absent(self):
+        self._verifier_without_plan_module()
+        crash_snippet = (
+            'if os.environ.get("LANEFATHER_SLOT_LABEL", "").endswith("-base"):\n'
+            '    print("ValueError: invalid step size", file=sys.stderr)\n'
+            '    sys.exit(1)\n'
+        )
+        verifier = (self.integration / "verify.sh").read_text().replace(
+            "args = sys.argv[1:]\n", "args = sys.argv[1:]\n" + crash_snippet,
+        )
+        self.commit(self.integration, {"verify.sh": verifier}, "simulate real base crash mentioning invalid step")
+        wt = self.created("crash", "native/**")
+        self.commit(wt, {"native/straylight-core/corpus.txt": "v2\n"})
+        self.lane("check", "crash", ok=False)
+        receipt = self.receipt("crash")
+        self.assertEqual(receipt["status"], "red")
+        entry = self.entries("crash")["native-check"]
+        self.assertEqual(entry["class"], "unclassified")
+        self.assertNotEqual(entry["base"]["status"], "absent")
+        self.assertIn("wrote no verification report", entry["reason"])
+
+    def test_multi_check_base_rerun_with_absent_and_pre_existing_failure(self):
+        self.env["FIXTURE_FAILURE_EVIDENCE"] = "1"
+        self._verifier_without_plan_module()
+        # Break lib-check on base so it fails identically on both lane and base with comparable failure_evidence.
+        self.commit(self.integration, {"calls/main.txt": "foo\nbar\n"}, "pre-existing lib failure on base")
+        wt = self.created("premix", "calls/**", "native/**")
+        lane_verify = (pathlib.Path(wt) / "verify.sh").read_text().replace('"native-check"', '"native-check-v2"')
+        self.commit(
+            wt,
+            {
+                "verify.sh": lane_verify,
+                "calls/notes.txt": "foo\n",
+                "native/straylight-core/corpus.txt": "v2\n",
+            },
+            "touch lib and break renamed native-check-v2",
+        )
+        self.lane("check", "premix", ok=False)
+        receipt = self.receipt("premix")
+        self.assertEqual(receipt["status"], "red")
+        entries = self.entries("premix")
+        self.assertEqual(entries["native-check-v2"]["class"], "regression")
+        self.assertEqual(entries["native-check-v2"]["base"]["status"], "absent")
+        self.assertEqual(entries["lib-check"]["class"], "pre-existing")
+        self.assertIn("failure_comparison", entries["lib-check"])
+
+
 if __name__ == "__main__":
     unittest.main()

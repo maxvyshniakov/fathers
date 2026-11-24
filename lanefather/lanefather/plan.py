@@ -130,6 +130,18 @@ class Checkout:
         return bool(getattr(found, "SUPPORTS_ONLY", False)
                     or _has_only_capability(getattr(found, "CAPABILITIES", None)))
 
+    def supports_base(self, *, lane_plan: dict[str, Any] | None = None,
+                      report: dict[str, Any] | None = None) -> bool:
+        if report and _has_capability(report.get("capabilities"), "base"):
+            return True
+        if lane_plan and _has_capability(lane_plan.get("capabilities"), "base"):
+            return True
+        found = self.module()
+        if found is None:
+            return False
+        return bool(getattr(found, "SUPPORTS_BASE", False)
+                    or _has_capability(getattr(found, "CAPABILITIES", None), "base"))
+
     def plan_for(self, base: str) -> dict[str, Any]:
         return plan_for(self, base, self.project)
 
@@ -228,12 +240,16 @@ def required_min_slots(
     return floor, [name for name, count in needs.items() if count == floor]
 
 
-def _has_only_capability(value: Any) -> bool:
+def _has_capability(value: Any, name: str) -> bool:
     if isinstance(value, dict):
-        return bool(cast(dict[Any, Any], value).get("only"))
+        return bool(cast(dict[Any, Any], value).get(name))
     if isinstance(value, (list, tuple, set)):
-        return "only" in cast(Any, value)
+        return name in cast(Any, value)
     return False
+
+
+def _has_only_capability(value: Any) -> bool:
+    return _has_capability(value, "only")
 
 
 def supports_only(root: Any, *, lane_plan: dict[str, Any] | None = None,
@@ -241,6 +257,13 @@ def supports_only(root: Any, *, lane_plan: dict[str, Any] | None = None,
                   project: config.Config = config.DEFAULT) -> bool:
     """Whether the project's verifier advertises `--only <tests>` subset reruns (fathers#147)."""
     return _as_checkout(root, project).supports_only(lane_plan=lane_plan, report=report)
+
+
+def supports_base(root: Any, *, lane_plan: dict[str, Any] | None = None,
+                  report: dict[str, Any] | None = None,
+                  project: config.Config = config.DEFAULT) -> bool:
+    """Whether the project's verifier advertises `--base <ref>` alongside `--checks` (fathers#253)."""
+    return _as_checkout(root, project).supports_base(lane_plan=lane_plan, report=report)
 
 
 def plan_for(root: Any, base: str, project: config.Config = config.DEFAULT) -> dict[str, Any]:
