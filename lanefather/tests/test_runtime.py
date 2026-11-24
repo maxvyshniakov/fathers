@@ -173,6 +173,7 @@ class FreeDiskMinimumTests(unittest.TestCase):
             'cache_depfiles': ['debug/*.d', 'release/*.d'],
             'toolchain': False,
             'toolchain_name': 'Rust toolchain',
+            'min_slots': {},
         })
 
     def test_capabilities_report_configured_project_policy(self):
@@ -186,6 +187,7 @@ class FreeDiskMinimumTests(unittest.TestCase):
         cfg_file.write_text(
             '[checks]\ntoolchain = ["python3", "tools/tc.py"]\ntoolchain_pin = "tc.toml"\n'
             'toolchain_name = "Node toolchain"\n'
+            '[checks.min_slots]\nbrowser = 2\n'
             '[lane]\nworktrees_root = ".worktrees"\ntargets = ["{id}-build"]\n'
             'target_label = "Build dir"\ncache_partitions = "shared"\ncache_depfiles = ["*.d"]\n'
             '[promote]\nbranches = ["main"]\n'
@@ -204,6 +206,7 @@ class FreeDiskMinimumTests(unittest.TestCase):
             'cache_depfiles': ['*.d'],
             'toolchain': True,
             'toolchain_name': 'Node toolchain',
+            'min_slots': {'browser': 2},
         })
 
     def test_a_project_hook_reads_the_minimum_next_to_disk_free_gb(self):

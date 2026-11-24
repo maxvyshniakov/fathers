@@ -82,7 +82,7 @@ def minimum_gb(project: config.Config | None = None) -> float:
 
 
 def policy_summary(project: config.Config | None = None) -> dict[str, Any]:
-    """Effective project policy values reported by `capabilities --json` (fathers#131)."""
+    """Effective project policy values reported by `capabilities --json` (fathers#131, fathers#247)."""
     cfg = project or config.DEFAULT
     return {
         'promoted': list(cfg.promoted),
@@ -93,6 +93,7 @@ def policy_summary(project: config.Config | None = None) -> dict[str, Any]:
         'cache_depfiles': list(cfg.cache_depfiles),
         'toolchain': bool(cfg.toolchain and cfg.toolchain_pin),
         'toolchain_name': cfg.toolchain_name,
+        'min_slots': dict(cfg.min_slots),
     }
 
 

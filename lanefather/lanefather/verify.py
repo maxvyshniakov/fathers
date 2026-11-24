@@ -1019,18 +1019,28 @@ def rerun_min_slots(
     *,
     project: config.Config = config.DEFAULT,
 ) -> int:
-    """Minimum slots required for a rerun of `check_ids` (fathers#173)."""
+    """Minimum slots required for a rerun of `check_ids` (fathers#173, fathers#247)."""
     if lane_plan is not None and lane_plan.get("selection") is not None:
         return plan.required_min_slots(lane_plan, {"_": check_ids}, [], project=project)[0]
     floor = 1
     if lane_plan is not None:
         suites = [r["suite"] for r in fresh if r["status"] != "passed"]
         floor = max(floor, plan.required_min_slots(lane_plan, None, suites, project=project)[0])
-    patterns = project.min_slots
+    default_floor: int | None = None
+    patterns: list[tuple[str, int]] = []
+    for pattern, count in project.min_slots:
+        if pattern == "default":
+            default_floor = count
+        else:
+            patterns.append((pattern, count))
     for cid in check_ids:
+        matched = False
         for pattern, count in patterns:
             if fnmatch.fnmatchcase(cid, pattern):
                 floor = max(floor, count)
+                matched = True
+        if not matched and default_floor is not None:
+            floor = max(floor, default_floor)
     return floor
 
 
