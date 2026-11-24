@@ -7,21 +7,51 @@
 # the refusal names the lane command for each legal move (#666). It also refuses
 # writing ORIG_HEAD while main or dev is checked out, the first ref a merge or pull
 # writes, so a refused fast-forward leaves the worktree untouched.
-# Fetches (refs/remotes/*), other branches, tags and no-op updates pass; so does
-# everyone outside an agent session. The hook fails open: a lock it cannot parse
-# passes with a warning. This is the canonical hook; project and repo-kit copies
-# pin these bytes from a committed lanefather source. Historical test fixtures stay frozen.
+# Fetches (refs/remotes/*), other branches, tags, no-op updates and pack-refs
+# packing/pruning pass; so does everyone outside an agent session. The hook fails open:
+# a lock it cannot parse passes with a warning. This is the canonical hook; project and
+# repo-kit copies pin these bytes from a committed lanefather source. Historical test
+# fixtures stay frozen.
 
 # Fast path, builtins only: this runs for every ref transaction in every worktree.
 [[ "$1" == prepared ]] || exit 0
 [[ "${CLAUDECODE:-}" == 1 || -n "${!CODEX_@}" ]] || exit 0
 
 protected=()
+common=""
 while read -r old new ref; do
-  [[ "$old" == "$new" ]] && continue
   case "$ref" in
-    refs/heads/main | refs/heads/dev) protected+=("$ref") ;;
-    ORIG_HEAD) orig_head=1 ;;
+    refs/heads/main | refs/heads/dev)
+      if [[ "$new" =~ ^0+$ ]]; then
+        # pack-refs prunes a loose ref after packing it: old is non-zero, packed-refs is
+        # unlocked and already records the exact same OID, and the loose file still holds old.
+        # Real deletions (branch -D, update-ref -d) pass all-zero old, hold packed-refs.lock
+        # while removing the entry, or have no matching packed-refs line.
+        if [[ "$old" != "$new" && ! "$old" =~ ^0+$ ]]; then
+          [[ -n "$common" ]] || common="$(git rev-parse --git-common-dir 2>/dev/null)"
+          if [[ -n "$common" && ! -e "$common/packed-refs.lock" && -f "$common/$ref" ]]; then
+            loose=""
+            read -r loose <"$common/$ref" 2>/dev/null
+            if [[ "$loose" == "$old" ]] && grep -qxF -- "$old $ref" "$common/packed-refs" 2>/dev/null; then
+              continue
+            fi
+          fi
+        fi
+        protected+=("$ref")
+      elif [[ "$old" == "$new" ]]; then
+        continue
+      else
+        # pack-refs (and same-SHA update-ref without oldvalue) emits 000..000 -> <cur>;
+        # allow when the exact ref already resolves to new, which never creates or moves it.
+        cur="$(git show-ref --verify -s "$ref" 2>/dev/null)"
+        [[ -n "$cur" && "$cur" == "$new" ]] && continue
+        protected+=("$ref")
+      fi
+      ;;
+    ORIG_HEAD)
+      [[ "$old" == "$new" && ! "$new" =~ ^0+$ ]] && continue
+      orig_head=1
+      ;;
   esac
 done
 if [[ -n "${orig_head:-}" ]]; then
@@ -35,7 +65,7 @@ fi
 ttl=7200
 if [[ "${CLAUDECODE:-}" == 1 ]]; then agent="CLAUDECODE=1"; else agent="${!CODEX_@}"; agent="${agent%% *} set"; fi
 
-common="$(git rev-parse --git-common-dir 2>/dev/null)" || {
+[[ -n "$common" ]] || common="$(git rev-parse --git-common-dir 2>/dev/null)" || {
   echo "reference-transaction: warning: cannot find the Git directory; not checking the landing lock" >&2
   exit 0
 }
