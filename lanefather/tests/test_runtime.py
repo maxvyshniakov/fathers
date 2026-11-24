@@ -164,6 +164,7 @@ class FreeDiskMinimumTests(unittest.TestCase):
         self.assertGreaterEqual(report['host']['min_disk_gb'], host.DISK_RESERVE_GB)
         self.assertIn('host.min_disk_gb', report['capabilities'])
         self.assertIn('project.policy', report['capabilities'])
+        self.assertIn('checks.min_slots.default', report['capabilities'])
         self.assertEqual(report['policy'], {
             'promoted': ['dev', 'main'],
             'worktrees_root': '.claude/worktrees',

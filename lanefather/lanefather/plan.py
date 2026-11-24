@@ -198,7 +198,7 @@ def required_min_slots(
         if top is not None and suites:
             needs["plan"] = top
         for suite in suites:
-            matched = False
+            matched = top is not None
             for pattern, count in patterns:
                 if fnmatch.fnmatchcase(suite, pattern):
                     needs[suite] = max(needs.get(suite, 0), count)

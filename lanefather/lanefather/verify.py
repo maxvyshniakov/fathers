@@ -1033,10 +1033,19 @@ def rerun_min_slots(
             default_floor = count
         else:
             patterns.append((pattern, count))
+    check_suites: dict[str, str] = {}
+    for row in fresh:
+        suite = str(row.get("suite") or "")
+        if not suite:
+            continue
+        for failed_id in row.get("failed_checks") or ():
+            check_suites[str(failed_id)] = suite
+    plan_declared = lane_plan is not None and plan.declared_slots(lane_plan) is not None
     for cid in check_ids:
-        matched = False
+        suite = check_suites.get(cid, "")
+        matched = plan_declared
         for pattern, count in patterns:
-            if fnmatch.fnmatchcase(cid, pattern):
+            if fnmatch.fnmatchcase(cid, pattern) or (suite and fnmatch.fnmatchcase(suite, pattern)):
                 floor = max(floor, count)
                 matched = True
         if not matched and default_floor is not None:

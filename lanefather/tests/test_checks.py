@@ -1710,9 +1710,22 @@ class MinSlotsUnitTests(unittest.TestCase):
         # Suite-level fallback (no per-check selection) also honours default and specific patterns.
         self.assertEqual(plan.required_min_slots({}, None, ["lib"], project=cfg), (2, ["lib"]))
         self.assertEqual(plan.required_min_slots({}, None, ["structure"], project=cfg), (1, ["structure"]))
-        # Rerun floor honours default fallback when no selection is present.
+        # Plan-wide declared slots/min_slots suppresses default, while a higher explicit pattern still wins.
+        self.assertEqual(plan.required_min_slots({"min_slots": 1}, None, ["lib"], project=cfg), (1, ["plan"]))
+        self.assertEqual(plan.required_min_slots({"slots": 1}, None, ["browser"], project=cfg), (3, ["browser"]))
+        # Rerun floor honours default fallback when no selection is present, and matches suite patterns for checks
+        # whose id differs from their suite name.
         self.assertEqual(verify.rerun_min_slots(["lib-check"], None, [], project=cfg), 2)
         self.assertEqual(verify.rerun_min_slots(["structure"], None, [], project=cfg), 1)
+        suite_plan: dict[str, Any] = {"selection": None}
+        fresh_structure = [{"suite": "structure", "status": "failed", "failed_checks": ["structure-check"]}]
+        self.assertEqual(verify.rerun_min_slots(["structure-check"], suite_plan, fresh_structure, project=cfg), 1)
+        fresh_lib = [{"suite": "lib", "status": "failed", "failed_checks": ["lib-check"]}]
+        self.assertEqual(verify.rerun_min_slots(["lib-check"], suite_plan, fresh_lib, project=cfg), 2)
+        self.assertEqual(
+            verify.rerun_min_slots(["lib-check"], {"selection": None, "min_slots": 1}, fresh_lib, project=cfg),
+            1,
+        )
 
     def test_slots_wrap_formats_raised_min_count_range(self) -> None:
         from lanefather import slots

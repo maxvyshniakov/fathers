@@ -19,7 +19,8 @@ MANIFEST = 'INSTALL.json'
 CAPABILITIES = ('project.readiness', 'project.update_queue', 'project-hook', 'canonical-reference-transaction',
                 'promote.step-leases', 'tickets.lifecycle', 'slots.priority', 'dashboard.events',
                 'dashboard.status', 'dashboard.settings', 'host.min_disk_gb', 'lane.drop',
-                'post_merge.cleared', 'lane.wait', 'review.fix_of', 'lane.load_advisory', 'project.policy')
+                'post_merge.cleared', 'lane.wait', 'review.fix_of', 'lane.load_advisory', 'project.policy',
+                'checks.min_slots.default')
 # The dashboard contract versions Godfather reads (its SPEC.md, "Capabilities contract").
 DASHBOARD = 1
 
