@@ -11,6 +11,7 @@ from collections.abc import Callable, Iterable, Iterator, Sequence
 import contextlib
 from dataclasses import dataclass
 from enum import StrEnum
+import math
 import os
 from pathlib import Path
 import re
@@ -185,10 +186,10 @@ def alive(pid: Any) -> bool:
         return False
     try:
         os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
     except PermissionError:
         return True
+    except (ProcessLookupError, OverflowError):
+        return False
     return True
 
 
@@ -212,7 +213,11 @@ def _parse_start_identity(raw_start: Any) -> tuple[float | None, str | None, boo
     if isinstance(raw_start, bool):
         return None, None, False
     if isinstance(raw_start, (int, float)):
-        return float(raw_start), None, True
+        try:
+            value = float(raw_start)
+        except OverflowError:
+            return None, None, False
+        return (value, None, True) if math.isfinite(value) else (None, None, False)
     if isinstance(raw_start, str):
         if not raw_start.strip():
             return None, None, False
@@ -321,7 +326,9 @@ def live_checkout_info(store: state.Store, label: str) -> tuple[set[Path], dict[
         raw_pid = entry.get("pid")
         if not isinstance(raw_pid, int) or isinstance(raw_pid, bool) or raw_pid <= 0:
             return
-        is_live = run_alive(raw_pid, entry.get("start"))
+        raw_start = entry.get("start")
+        _, _, start_valid = _parse_start_identity(raw_start)
+        is_live = run_alive(raw_pid, raw_start) if start_valid else alive(raw_pid)
         pid_liveness[raw_pid] = pid_liveness.get(raw_pid, False) or is_live
         if is_live:
             raw_checkout = entry.get("checkout")

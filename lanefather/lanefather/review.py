@@ -450,7 +450,12 @@ def review_lines(
     if isinstance(verdict, review_record.Running):
         return [f"Review of {label}: running since {verdict.started} (pid {verdict.pid}, log {verdict.log})"]
     if isinstance(verdict, review_record.Died):
-        return [f"Review of {label}: died (pid {verdict.pid}, log {verdict.log}): rerun {cmd_prog} review {label}"]
+        if raw.get("kind") == "overall" or label.startswith(("ship-", "batch-")):
+            sha = raw.get("sha") or raw.get("tip")
+            target = f"--overall {sha[:10]}" if isinstance(sha, str) and sha else f"--overall {label}"
+        else:
+            target = label
+        return [f"Review of {label}: died (pid {verdict.pid}, log {verdict.log}): rerun {cmd_prog} review {target}"]
     left = raw.get("codex_left")
     raw_forced: Any = raw.get("forced")
     forced = cast(dict[str, Any], raw_forced) if isinstance(raw_forced, dict) else {}

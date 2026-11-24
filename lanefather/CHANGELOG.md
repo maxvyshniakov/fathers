@@ -11,9 +11,9 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
 - Review run lifecycle under one lock with `(pid, start)` process identity (fathers#60): primary and delta review runs
   now record `start` (UTC `lstart` via `fathers_common.proc`) and their checkout path on `<label>.review.json`.
   Recycled PIDs with a mismatched start time read as `Died` (with bare-PID fallback preserved for legacy receipts
-  without `start`), `show` reports `"stopped"` rather than raw `"running"` for dead reviews, and a forced rerun
-  (`--force-reason`) while another review is live records the earlier run as `superseded`, leaves its checkout intact
-  until its process exits, and fences out the superseded worker by `(pid, start)`.
+  without `start`), and a forced rerun (`--force-reason`) while another review is live records the earlier run as
+  `superseded`, leaves its checkout intact until its process exits, and fences out the superseded worker by
+  `(pid, start)`.
 - Stale review verdict and delta reviews (fathers#53): `ReviewRecord` / `derive_verdict` now binds finished lane
   reviews to the reviewed tip/tree and returns `Stale(reviewed_tip, landed_tip)` when a landed or active lane's own
   diff changed after the reviewed commit (ignoring clean integration-branch merges and valid marked pre-land fixes).
@@ -282,6 +282,9 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
   shows the category, and receipts without it read as before.
 
 ### Changed
+
+- `lanefather show` (`show --json`) now reports `review.status = "stopped"` for a dead review instead of raw
+  `"running"`, matching `lanefather status` (fathers#60).
 
 - `lanefather land` post-merge `plan` mode now reuses passing whole-suite results from the lane's green check receipt
   instead of re-running every suite when the merge tree equals the lane's verified tree or when the diff between the

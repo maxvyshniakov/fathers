@@ -1429,6 +1429,77 @@ class StaleReviewAndDeltaTests(LaneCase):
                 owner_start=first_start,
             )
 
+    def test_review_checkout_protects_custom_named_live_checkout_and_cleans_recycled_pid_checkout(self):
+        # fathers#60: (1) a recorded `checkout` path whose name does not embed the PID is still protected via
+        # realpath matching while its process is alive; (2) a live PID with a mismatched `start` (recycled PID)
+        # has its stale checkout removed; (3) an overflowing numeric suffix does not crash cleanup.
+        from lanefather import config, review_record, state, worktrees
+
+        wt = self.created("a", "lib/**")
+        self.commit(wt, {"lib/api.txt": "foo\ncheckouts\n"})
+        self.lane("check", "a")
+        self.lane("land", "a", "--keep")
+        rec = self.record("a")
+        tip = rec["landed"]["tip"]
+
+        sleeper_live = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+        self.addCleanup(close_process, sleeper_live)
+        live_pid = sleeper_live.pid
+        live_start = review_record.process_start(live_pid)
+        self.assertIsInstance(live_start, str)
+
+        sleeper_recycled = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+        self.addCleanup(close_process, sleeper_recycled)
+        recycled_pid = sleeper_recycled.pid
+
+        reviews_dir = self.state / "reviews"
+        reviews_dir.mkdir(parents=True, exist_ok=True)
+        # Non-PID-suffixed checkout directory protected purely by its recorded `checkout` realpath.
+        custom_live_checkout = reviews_dir / "a-checkout-custom-slot"
+        custom_live_checkout.mkdir(parents=True, exist_ok=True)
+        (custom_live_checkout / "marker.txt").write_text("alive\n")
+
+        # Checkout whose PID is live, but whose recorded `start` does not match (recycled PID) -> stale.
+        recycled_checkout = reviews_dir / f"a-checkout-{recycled_pid}"
+        recycled_checkout.mkdir(parents=True, exist_ok=True)
+        (recycled_checkout / "stale.txt").write_text("recycled\n")
+
+        # Absurd numeric suffix that would overflow C pid_t in os.kill().
+        overflow_checkout = reviews_dir / "a-checkout-99999999999999999999"
+        overflow_checkout.mkdir(parents=True, exist_ok=True)
+
+        cfg = config.load(self.integration / ".lanefather.toml")
+        store = state.Store(cfg, directory=self.state)
+        state.write_json(
+            store.receipt_path("a", "review"),
+            {
+                "version": 1,
+                "label": "a",
+                "kind": "lane",
+                "lane": "a",
+                "lane_created": rec["created"],
+                "status": "running",
+                "pid": recycled_pid,
+                "start": "Mon Jan 01 00:00:00 2020",
+                "checkout": str(recycled_checkout),
+                "superseded": [
+                    {
+                        "pid": live_pid,
+                        "start": live_start,
+                        "checkout": str(custom_live_checkout),
+                        "status": "superseded",
+                    }
+                ],
+            },
+        )
+
+        with worktrees.review_checkout(store, str(self.repo), "a", tip) as checkout:
+            self.assertTrue(pathlib.Path(checkout).is_dir())
+            self.assertTrue(custom_live_checkout.is_dir(), "custom-named live checkout must be protected")
+            self.assertEqual((custom_live_checkout / "marker.txt").read_text(), "alive\n")
+            self.assertFalse(recycled_checkout.exists(), "recycled-PID checkout must be cleaned up")
+            self.assertFalse(overflow_checkout.exists(), "overflowing-PID suffix checkout must be cleaned up")
+
 
 if __name__ == "__main__":
     unittest.main()

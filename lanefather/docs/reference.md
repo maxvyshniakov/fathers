@@ -190,8 +190,9 @@ review verdict is `Stale(reviewed_tip, landed_tip)`:
 
 ### Review run lifecycle and process identity
 
-Every review receipt write (`start`, `finish`, `fail`, `exempt`, `record`, `mark`, `delta_*`, and stale-receipt
-clearing) is serialized under the `review-<label>` lock through `ReviewRecord._transition` (fathers#60, fathers#74):
+Every review receipt write (`start`, `finish`, `fail`, `exempt`, `record`, `mark`, `delta_*`) goes through
+`ReviewRecord._transition`, and stale-receipt clearing (`clear_stale`) takes the same `review-<label>` lock directly
+(fathers#60, fathers#74):
 
 - Running primary and delta review receipts record `(pid, start)` process identity (UTC `lstart` via
   `fathers_common.proc`) and their detached checkout path. Readers verify `(pid, start)` so a recycled PID with a

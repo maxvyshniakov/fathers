@@ -672,8 +672,8 @@ class ProcessIdentityAndSupersededRunTests(unittest.TestCase):
         assert isinstance(died_v, Died)
         self.assertEqual(died_v.start, stale_start)
 
-        # Malformed start values fail closed to Died (strict JSON boundary typing).
-        bad_starts: tuple[Any, ...] = ("", "   ", True, False, [], {})
+        # Malformed or non-finite start values fail closed to Died (strict JSON boundary typing).
+        bad_starts: tuple[Any, ...] = ("", "   ", True, False, [], {}, float("nan"), float("inf"), float("-inf"))
         for bad_start in bad_starts:
             with self.subTest(bad_start=bad_start):
                 self.assertIsInstance(
@@ -682,6 +682,43 @@ class ProcessIdentityAndSupersededRunTests(unittest.TestCase):
                     ),
                     Died,
                 )
+
+        # Overflowing PIDs never crash `alive()`.
+        self.assertFalse(review_record.alive(99_999_999_999_999_999_999))
+
+        # Corrupted start in `live_checkout_info` falls back to `alive(pid)` so a live review keeps its checkout.
+        corrupt_checkout = self.tmp / "reviews" / "a-checkout-corrupt"
+        state.write_json(
+            self.store.receipt_path("a", "review"),
+            {
+                "version": 1,
+                "label": "a",
+                "status": "running",
+                "pid": live_pid,
+                "start": float("nan"),
+                "checkout": str(corrupt_checkout),
+            },
+        )
+        protected, pid_liveness = review_record.live_checkout_info(self.store, "a")
+        self.assertIn(pathlib.Path(os.path.realpath(corrupt_checkout)), protected)
+        self.assertIs(pid_liveness.get(live_pid), True)
+
+        # Overall review Died hint names `--overall <sha>`, not `review ship-...`.
+        dead_overall = ReviewRecord.from_raw(
+            "ship-abcdef123456",
+            {
+                "version": 1,
+                "label": "ship-abcdef123456",
+                "kind": "overall",
+                "sha": "abcdef1234567890abcdef1234567890abcdef12",
+                "status": "running",
+                "pid": 999_999_999,
+                "started": "t0",
+                "log": "/tmp/o.log",
+            },
+        )
+        overall_lines = review.review_lines(dead_overall, prog="lanefather")
+        self.assertIn("rerun lanefather review --overall abcdef1234", overall_lines[0])
 
         # Legacy receipt without `start` falls back to PID liveness.
         self.assertIsInstance(
