@@ -217,11 +217,13 @@ def perform_review(
     `finalize` completes a finished receipt before anyone can read it as finished."""
     runner = reviewer.Reviewer(project_override or store.project)
     pid = os.getpid()
+    pid_start = review_record.process_start(pid)
     started_rev = review_record.ReviewRecord.begin(
         store,
         label,
         {**fields, "base": base, "tip": tip, "tree": git(main, "rev-parse", tip + "^{tree}")},
         pid=pid,
+        pid_start=pid_start,
         log=store.project.env("REVIEW_LOG"),
         effort=runner.effort,
         force=force,
@@ -255,7 +257,7 @@ def perform_review(
         }
         if finalize:
             latest_raw = review_record.ReviewRecord.load(store, label).raw
-            if latest_raw is None or latest_raw.get("pid") != pid:
+            if latest_raw is None or not review_record.matches_run_owner(latest_raw, pid, pid_start):
                 raise review_record.StaleReviewRunError(
                     f"review {label!r} is owned by pid {latest_raw.get('pid') if latest_raw else None}, not {pid}"
                 )
@@ -274,6 +276,7 @@ def perform_review(
             label,
             {**finished_payload, "seconds": seconds, "finished": finished_at},
             owner_pid=pid,
+            owner_start=pid_start,
             finished=finished_at,
         )
     else:
@@ -284,6 +287,7 @@ def perform_review(
             error_text,
             extra={**evidence, "output": str(output), "seconds": seconds, "finished": finished_at},
             owner_pid=pid,
+            owner_start=pid_start,
             finished=finished_at,
         )
     raw = completed.raw or {}
@@ -443,8 +447,10 @@ def review_lines(
     verdict = rev.verdict
     if isinstance(verdict, review_record.Exempt):
         return [f"Review of {label}: exempt ({verdict.reason})"]
-    if isinstance(verdict, (review_record.Running, review_record.Died)):
+    if isinstance(verdict, review_record.Running):
         return [f"Review of {label}: running since {verdict.started} (pid {verdict.pid}, log {verdict.log})"]
+    if isinstance(verdict, review_record.Died):
+        return [f"Review of {label}: died (pid {verdict.pid}, log {verdict.log}): rerun {cmd_prog} review {label}"]
     left = raw.get("codex_left")
     raw_forced: Any = raw.get("forced")
     forced = cast(dict[str, Any], raw_forced) if isinstance(raw_forced, dict) else {}
@@ -659,6 +665,7 @@ def perform_delta_review(
     )
     runner = reviewer.Reviewer(store.project)
     pid = os.getpid()
+    pid_start = review_record.process_start(pid)
     review_record.ReviewRecord.begin_delta(
         store,
         lane_id,
@@ -670,6 +677,7 @@ def perform_delta_review(
         tip=landed_tip,
         tree=tree,
         pid=pid,
+        pid_start=pid_start,
         log=store.project.env("REVIEW_LOG"),
         effort=runner.effort,
         force=force,
@@ -716,6 +724,7 @@ def perform_delta_review(
             lane_id,
             {**evidence, "output": str(output), "seconds": seconds, "finished": finished_at},
             owner_pid=pid,
+            owner_start=pid_start,
             finished=finished_at,
             record=record,
         )
@@ -727,6 +736,7 @@ def perform_delta_review(
             error_text,
             extra={**evidence, "output": str(output), "seconds": seconds, "finished": finished_at},
             owner_pid=pid,
+            owner_start=pid_start,
             finished=finished_at,
             record=record,
         )

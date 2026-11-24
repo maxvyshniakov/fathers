@@ -17,6 +17,8 @@ import re
 import subprocess
 from typing import Any, cast
 
+from fathers_common import proc
+
 from . import gitops, journal, lifecycle, state
 from .errors import LaneError
 from .gitops import git_ok, main_checkout
@@ -98,6 +100,7 @@ class Running:
     pid: Any = None
     started: str | None = None
     log: str | None = None
+    start: Any = None
 
 
 @dataclass(frozen=True)
@@ -107,6 +110,7 @@ class Died:
     pid: Any = None
     started: str | None = None
     log: str | None = None
+    start: Any = None
 
 
 @dataclass(frozen=True)
@@ -188,6 +192,166 @@ def alive(pid: Any) -> bool:
     return True
 
 
+def process_start(pid: int | None = None) -> str | None:
+    """Return the UTC `lstart` identity of `pid` (default current process) via `fathers_common.proc`."""
+    actual_pid = os.getpid() if pid is None else pid
+    if isinstance(actual_pid, bool) or actual_pid <= 0:
+        return None
+    try:
+        found = proc.identities([actual_pid], clock="utc", timeout=5, strict=True)
+    except proc.ProcTableError:
+        return None
+    entry = found.get(actual_pid)
+    return entry.start if entry is not None else None
+
+
+def _parse_start_identity(raw_start: Any) -> tuple[float | None, str | None, bool]:
+    """Parse a persisted process start value into `(epoch, unparsed_text, valid)` without loose coercion."""
+    if raw_start is None:
+        return None, None, True
+    if isinstance(raw_start, bool):
+        return None, None, False
+    if isinstance(raw_start, (int, float)):
+        return float(raw_start), None, True
+    if isinstance(raw_start, str):
+        if not raw_start.strip():
+            return None, None, False
+        parsed = proc.parse_lstart(raw_start, "utc")
+        if parsed is not None:
+            return float(parsed), None, True
+        return None, raw_start, True
+    return None, None, False
+
+
+def run_alive(pid: Any, start: Any = None) -> bool:
+    """Whether the review process `(pid, start)` is still alive (fathers#60).
+
+    When `start` is recorded (UTC `lstart` string or epoch seconds), verifies process identity via
+    `fathers_common.proc.same_process` so a recycled PID reads as dead. Legacy receipts with `start is None` fall
+    back to bare `alive(pid)`.
+    """
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
+        return False
+    if start is None:
+        return alive(pid)
+    started_epoch, unparsed_start, valid = _parse_start_identity(start)
+    if not valid:
+        return False
+    try:
+        live = proc.identities([pid], clock="utc", timeout=5, strict=True)
+    except proc.ProcTableError:
+        # Fail-closed (fathers#121): fall back to os.kill(pid, 0) when ps cannot be read.
+        return alive(pid)
+    entry = live.get(pid)
+    if entry is None:
+        return False
+    if started_epoch is not None:
+        return proc.same_process(started_epoch, None, entry)
+    return unparsed_start is not None and proc.norm(unparsed_start) == entry.start
+
+
+def matches_run_owner(raw: Receipt | None, owner_pid: int, owner_start: Any = None) -> bool:
+    """Whether `raw` is owned by `(owner_pid, owner_start)` for stale-worker fencing and self-handoff."""
+    if raw is None:
+        return False
+    raw_pid = raw.get("pid")
+    if not isinstance(raw_pid, int) or isinstance(raw_pid, bool) or raw_pid != owner_pid:
+        return False
+    raw_start = raw.get("start")
+    if owner_start is None or raw_start is None:
+        return True
+    rec_epoch, rec_unparsed, rec_valid = _parse_start_identity(raw_start)
+    own_epoch, own_unparsed, own_valid = _parse_start_identity(owner_start)
+    if not rec_valid or not own_valid:
+        return False
+    if rec_epoch is not None and own_epoch is not None:
+        return abs(rec_epoch - own_epoch) <= proc.EPOCH_SLACK
+    if rec_unparsed is not None and own_unparsed is not None:
+        return proc.norm(rec_unparsed) == proc.norm(own_unparsed)
+    return False
+
+
+def _superseded_runs(
+    existing: Receipt | None,
+    *,
+    new_pid: int,
+    new_start: Any,
+    superseded_at: str,
+) -> list[dict[str, Any]]:
+    """Collect still-live superseded runs from `existing`, appending `existing` if it is a different live run."""
+    if existing is None:
+        return []
+    kept: list[dict[str, Any]] = []
+    raw_prev: Any = existing.get("superseded")
+    if isinstance(raw_prev, list):
+        for item in cast(list[Any], raw_prev):
+            if not isinstance(item, dict):
+                continue
+            entry = cast(dict[str, Any], item)
+            if run_alive(entry.get("pid"), entry.get("start")):
+                kept.append(dict(entry))
+    if receipt_phase(existing) is ReceiptPhase.RUNNING and not matches_run_owner(existing, new_pid, new_start):
+        kept.append({
+            "pid": existing.get("pid"),
+            "start": existing.get("start"),
+            "started": existing.get("started"),
+            "log": existing.get("log"),
+            "checkout": existing.get("checkout"),
+            "superseded_at": superseded_at,
+            "status": "superseded",
+        })
+    return kept
+
+
+def live_checkout_info(store: state.Store, label: str) -> tuple[set[Path], dict[int, bool]]:
+    """Return `(protected_paths, pid_liveness)` for review checkouts of `label` without creating directories or locks.
+
+    `protected_paths` holds resolved checkout paths owned by currently live runs (active or superseded).
+    `pid_liveness` maps each recorded PID to `run_alive(pid, start)` so recycled PIDs are recognized as dead.
+    """
+    protected: set[Path] = set()
+    pid_liveness: dict[int, bool] = {}
+    candidate_labels = [label]
+    if label.endswith("-delta"):
+        base_label = label.removesuffix("-delta")
+        if base_label:
+            candidate_labels.append(base_label)
+
+    def _inspect_entry(entry: dict[str, Any]) -> None:
+        raw_pid = entry.get("pid")
+        if not isinstance(raw_pid, int) or isinstance(raw_pid, bool) or raw_pid <= 0:
+            return
+        is_live = run_alive(raw_pid, entry.get("start"))
+        pid_liveness[raw_pid] = pid_liveness.get(raw_pid, False) or is_live
+        if is_live:
+            raw_checkout = entry.get("checkout")
+            if isinstance(raw_checkout, str) and raw_checkout:
+                protected.add(Path(os.path.realpath(raw_checkout)))
+
+    for cand in dict.fromkeys(candidate_labels):
+        raw = state.read_json(store.receipt_path(cand, "review"))
+        if raw is None:
+            continue
+        if raw.get("status") == ReceiptPhase.RUNNING.value:
+            _inspect_entry(raw)
+        raw_sup: Any = raw.get("superseded")
+        if isinstance(raw_sup, list):
+            for item in cast(list[Any], raw_sup):
+                if isinstance(item, dict):
+                    _inspect_entry(cast(dict[str, Any], item))
+        raw_delta: Any = raw.get("delta")
+        if isinstance(raw_delta, dict):
+            delta = cast(dict[str, Any], raw_delta)
+            if delta.get("status") == ReceiptPhase.RUNNING.value:
+                _inspect_entry(delta)
+            raw_delta_sup: Any = delta.get("superseded")
+            if isinstance(raw_delta_sup, list):
+                for item in cast(list[Any], raw_delta_sup):
+                    if isinstance(item, dict):
+                        _inspect_entry(cast(dict[str, Any], item))
+    return protected, pid_liveness
+
+
 def extract_findings(raw: Receipt | None) -> list[dict[str, Any]]:
     """Normalized finding dictionaries on `raw`."""
     if not raw:
@@ -220,7 +384,7 @@ def receipt_phase(raw: Receipt | None) -> ReceiptPhase:
     if raw_status == "exempt":
         return ReceiptPhase.EXEMPT
     if raw_status == "running":
-        return ReceiptPhase.RUNNING if alive(raw.get("pid")) else ReceiptPhase.DIED
+        return ReceiptPhase.RUNNING if run_alive(raw.get("pid"), raw.get("start")) else ReceiptPhase.DIED
     if raw_status == "finished":
         return ReceiptPhase.FINISHED
     return ReceiptPhase.FAILED
@@ -608,9 +772,10 @@ def derive_verdict(
         pid = raw.get("pid")
         started = str(raw["started"]) if raw.get("started") is not None else None
         log = str(raw["log"]) if raw.get("log") is not None else None
+        start = raw.get("start")
         if phase is ReceiptPhase.RUNNING:
-            return Running(pid=pid, started=started, log=log)
-        return Died(pid=pid, started=started, log=log)
+            return Running(pid=pid, started=started, log=log, start=start)
+        return Died(pid=pid, started=started, log=log, start=start)
     if phase is ReceiptPhase.FAILED:
         raw_status = raw.get("status")
         status_str = str(raw_status) if isinstance(raw_status, str) else None
@@ -1141,6 +1306,7 @@ class ReviewRecord:
         *,
         force: bool = False,
         owner_pid: int | None = None,
+        owner_start: Any = None,
         lane_created: str | None = None,
         record: Record | None = None,
     ) -> ReviewRecord:
@@ -1151,7 +1317,7 @@ class ReviewRecord:
                 event in (ReviewEvent.FINISH, ReviewEvent.FAIL)
                 and owner_pid is not None
                 and raw_existing is not None
-                and raw_existing.get("pid") != owner_pid
+                and not matches_run_owner(raw_existing, owner_pid, owner_start)
             ):
                 raise StaleReviewRunError(
                     f"review {label}: stale worker pid {owner_pid} cannot {event.value} receipt owned by "
@@ -1159,8 +1325,9 @@ class ReviewRecord:
                 )
             if event in (ReviewEvent.DELTA_FINISH, ReviewEvent.DELTA_FAIL) and owner_pid is not None:
                 raw_delta: Any = raw_existing.get("delta") if isinstance(raw_existing, dict) else None
-                delta_pid = cast(dict[str, Any], raw_delta).get("pid") if isinstance(raw_delta, dict) else None
-                if delta_pid != owner_pid:
+                delta_dict = cast(Receipt, raw_delta) if isinstance(raw_delta, dict) else None
+                if delta_dict is None or not matches_run_owner(delta_dict, owner_pid, owner_start):
+                    delta_pid = delta_dict.get("pid") if delta_dict is not None else None
                     raise StaleReviewRunError(
                         f"delta review {label}: stale worker pid {owner_pid} cannot {event.value} delta owned by "
                         f"pid {delta_pid}"
@@ -1176,7 +1343,7 @@ class ReviewRecord:
                 and event is ReviewEvent.START
                 and owner_pid is not None
                 and existing is not None
-                and existing.get("pid") == owner_pid
+                and matches_run_owner(existing, owner_pid, owner_start)
             ):
                 target = ReceiptPhase.RUNNING
             elif force and event is ReviewEvent.RECORD:
@@ -1212,27 +1379,42 @@ class ReviewRecord:
         log: str | None,
         effort: str,
         started: str | None = None,
+        pid_start: str | None = None,
+        checkout: str | None = None,
         force: bool = False,
     ) -> ReviewRecord:
         started_at = started or journal.now()
+        resolved_start = process_start(pid) if pid_start is None else pid_start
+        resolved_checkout = checkout or str(store.reviews_dir / f"{label}-checkout-{pid}")
         raw_created = fields.get("lane_created")
         lane_created = raw_created if isinstance(raw_created, str) and raw_created else None
-        return cls._transition(
-            store,
-            label,
-            ReviewEvent.START,
-            lambda _existing: {
+
+        def _build(existing: Receipt | None) -> Receipt:
+            superseded = _superseded_runs(
+                existing, new_pid=pid, new_start=resolved_start, superseded_at=started_at
+            )
+            return {
                 "version": 1,
                 "label": label,
                 **fields,
                 "status": ReceiptPhase.RUNNING.value,
                 "pid": pid,
+                "start": resolved_start,
+                "checkout": resolved_checkout,
                 "log": log,
                 "started": started_at,
                 "effort": effort,
-            },
+                **({"superseded": superseded} if superseded else {}),
+            }
+
+        return cls._transition(
+            store,
+            label,
+            ReviewEvent.START,
+            _build,
             force=force,
             owner_pid=pid,
+            owner_start=resolved_start,
             lane_created=lane_created,
         )
 
@@ -1250,7 +1432,7 @@ class ReviewRecord:
         effort: str,
         started: str | None = None,
     ) -> ReviewRecord:
-        def _build(_existing: Receipt | None) -> Receipt:
+        def _build(existing: Receipt | None) -> Receipt:
             log.parent.mkdir(parents=True, exist_ok=True)
             with open(log, "w", encoding="utf-8") as out:
                 child = subprocess.Popen(
@@ -1262,15 +1444,23 @@ class ReviewRecord:
                     start_new_session=True,
                     env=env,
                 )
+            child_start = process_start(child.pid)
+            started_at = started or journal.now()
+            superseded = _superseded_runs(
+                existing, new_pid=child.pid, new_start=child_start, superseded_at=started_at
+            )
             return {
                 "version": 1,
                 "label": label,
                 **fields,
                 "status": ReceiptPhase.RUNNING.value,
                 "pid": child.pid,
+                "start": child_start,
+                "checkout": str(store.reviews_dir / f"{label}-checkout-{child.pid}"),
                 "log": str(log),
-                "started": started or journal.now(),
+                "started": started_at,
                 "effort": effort,
+                **({"superseded": superseded} if superseded else {}),
             }
 
         raw_created = fields.get("lane_created")
@@ -1285,6 +1475,7 @@ class ReviewRecord:
         payload: dict[str, Any],
         *,
         owner_pid: int | None = None,
+        owner_start: Any = None,
         finished: str | None = None,
     ) -> ReviewRecord:
         def _build(existing: Receipt | None) -> Receipt:
@@ -1298,7 +1489,9 @@ class ReviewRecord:
                 merged["finished"] = finished or journal.now()
             return merged
 
-        return cls._transition(store, label, ReviewEvent.FINISH, _build, owner_pid=owner_pid)
+        return cls._transition(
+            store, label, ReviewEvent.FINISH, _build, owner_pid=owner_pid, owner_start=owner_start
+        )
 
     @classmethod
     def fail(
@@ -1309,6 +1502,7 @@ class ReviewRecord:
         *,
         extra: dict[str, Any] | None = None,
         owner_pid: int | None = None,
+        owner_start: Any = None,
         finished: str | None = None,
     ) -> ReviewRecord:
         def _build(existing: Receipt | None) -> Receipt:
@@ -1323,7 +1517,9 @@ class ReviewRecord:
                 merged["finished"] = finished or journal.now()
             return merged
 
-        return cls._transition(store, label, ReviewEvent.FAIL, _build, owner_pid=owner_pid)
+        return cls._transition(
+            store, label, ReviewEvent.FAIL, _build, owner_pid=owner_pid, owner_start=owner_start
+        )
 
     @classmethod
     def exempt(
@@ -1463,19 +1659,27 @@ class ReviewRecord:
         log: str | None,
         effort: str,
         started: str | None = None,
+        pid_start: str | None = None,
+        checkout: str | None = None,
         force: bool = False,
         record: Record | None = None,
     ) -> ReviewRecord:
         started_at = started or journal.now()
+        resolved_start = process_start(pid) if pid_start is None else pid_start
+        resolved_checkout = checkout or str(store.reviews_dir / f"{label}-delta-checkout-{pid}")
         lane_created = state.lane_created_of(record)
 
         def _build(existing: Receipt | None) -> Receipt:
             assert existing is not None
             prev_delta: Any = existing.get("delta")
-            if isinstance(prev_delta, dict):
-                prev_dict = cast(Receipt, prev_delta)
+            prev_dict = cast(Receipt, prev_delta) if isinstance(prev_delta, dict) else None
+            if prev_dict is not None:
                 prev_phase = receipt_phase(prev_dict)
-                if prev_phase is ReceiptPhase.RUNNING and prev_dict.get("pid") != pid and not force:
+                if (
+                    prev_phase is ReceiptPhase.RUNNING
+                    and not matches_run_owner(prev_dict, pid, resolved_start)
+                    and not force
+                ):
                     raise LaneError(
                         f"delta review {label}: already running (pid {prev_dict.get('pid')})"
                     )
@@ -1488,6 +1692,9 @@ class ReviewRecord:
                     raise LaneError(
                         f"delta review {label}: already finished for {base[:10]}..{tip[:10]}"
                     )
+            superseded = _superseded_runs(
+                prev_dict, new_pid=pid, new_start=resolved_start, superseded_at=started_at
+            )
             delta_entry: Receipt = {
                 "kind": "delta",
                 "base": base,
@@ -1496,9 +1703,12 @@ class ReviewRecord:
                 **fields,
                 "status": ReceiptPhase.RUNNING.value,
                 "pid": pid,
+                "start": resolved_start,
+                "checkout": resolved_checkout,
                 "log": log,
                 "started": started_at,
                 "effort": effort,
+                **({"superseded": superseded} if superseded else {}),
             }
             return {**existing, "delta": delta_entry}
 
@@ -1508,6 +1718,7 @@ class ReviewRecord:
             ReviewEvent.DELTA_START,
             _build,
             owner_pid=pid,
+            owner_start=resolved_start,
             lane_created=lane_created,
             record=record,
         )
@@ -1535,8 +1746,8 @@ class ReviewRecord:
         def _build(existing: Receipt | None) -> Receipt:
             assert existing is not None
             prev_delta: Any = existing.get("delta")
-            if isinstance(prev_delta, dict):
-                prev_dict = cast(Receipt, prev_delta)
+            prev_dict = cast(Receipt, prev_delta) if isinstance(prev_delta, dict) else None
+            if prev_dict is not None:
                 prev_phase = receipt_phase(prev_dict)
                 if prev_phase is ReceiptPhase.RUNNING:
                     raise LaneError(
@@ -1561,6 +1772,11 @@ class ReviewRecord:
                     start_new_session=True,
                     env=env,
                 )
+            child_start = process_start(child.pid)
+            started_at = started or journal.now()
+            superseded = _superseded_runs(
+                prev_dict, new_pid=child.pid, new_start=child_start, superseded_at=started_at
+            )
             delta_entry: Receipt = {
                 "kind": "delta",
                 "base": base,
@@ -1569,9 +1785,12 @@ class ReviewRecord:
                 **fields,
                 "status": ReceiptPhase.RUNNING.value,
                 "pid": child.pid,
+                "start": child_start,
+                "checkout": str(store.reviews_dir / f"{label}-delta-checkout-{child.pid}"),
                 "log": str(log),
-                "started": started or journal.now(),
+                "started": started_at,
                 "effort": effort,
+                **({"superseded": superseded} if superseded else {}),
             }
             return {**existing, "delta": delta_entry}
 
@@ -1592,6 +1811,7 @@ class ReviewRecord:
         payload: dict[str, Any],
         *,
         owner_pid: int | None = None,
+        owner_start: Any = None,
         finished: str | None = None,
         record: Record | None = None,
     ) -> ReviewRecord:
@@ -1649,6 +1869,7 @@ class ReviewRecord:
             ReviewEvent.DELTA_FINISH,
             _build,
             owner_pid=owner_pid,
+            owner_start=owner_start,
             lane_created=lane_created,
             record=record,
         )
@@ -1662,6 +1883,7 @@ class ReviewRecord:
         *,
         extra: dict[str, Any] | None = None,
         owner_pid: int | None = None,
+        owner_start: Any = None,
         finished: str | None = None,
         record: Record | None = None,
     ) -> ReviewRecord:
@@ -1689,6 +1911,7 @@ class ReviewRecord:
             ReviewEvent.DELTA_FAIL,
             _build,
             owner_pid=owner_pid,
+            owner_start=owner_start,
             lane_created=lane_created,
             record=record,
         )
