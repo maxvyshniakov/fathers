@@ -939,6 +939,129 @@ class ParkAndAbandonTests(LaneCase):
         self.assertIn("park unlanded", out)
         self.assertIn("abandon unlanded", out)
 
+    def test_abandon_keep_branch_refuses_existing_protected_and_reflog_refs(self):
+        wt = pathlib.Path(self.created("kb", "lib/**"))
+        tip = self.commit(wt, {"lib/api.txt": "foo\nkeep-branch work\n"})
+        base_head = self.git(self.repo, "rev-parse", "integrate/q")
+        self.git(self.repo, "branch", "precious", base_head)
+
+        # Reflog syntax, existing branch pointing elsewhere, own branch, and base branch are all refused.
+        for bad_ref, expected in (
+            ("@{-1}", "invalid branch name"),
+            ("precious", "already exists"),
+            ("lane/kb", "lane's own branch"),
+            ("integrate/q", "base branch"),
+            ("main", "promoted branch"),
+        ):
+            with self.subTest(bad_ref=bad_ref):
+                out = self.lane("abandon", "kb", "--reason", "done", "--keep-branch", bad_ref, ok=False)
+                self.assertIn(expected, out)
+        # Existing branch was not moved and lane is still active.
+        self.assertEqual(self.git(self.repo, "rev-parse", "refs/heads/precious"), base_head)
+        self.assertEqual(self.record("kb")["status"], "active")
+        self.assertTrue(wt.exists())
+        # A fresh ref succeeds.
+        self.lane("abandon", "kb", "--reason", "done", "--keep-branch", "park/kb")
+        self.assertEqual(self.git(self.repo, "rev-parse", "refs/heads/park/kb"), tip)
+
+    def test_park_refuses_diverged_existing_park_branch_and_start_refuses_parked_id(self):
+        wt = pathlib.Path(self.created("pk", "lib/**"))
+        tip = self.commit(wt, {"lib/api.txt": "foo\nnew work\n"})
+        # Seed a diverged park/pk branch on an unrelated commit.
+        other_wt = pathlib.Path(self.created("other", "calls/**"))
+        other_tip = self.commit(other_wt, {"calls/other.txt": "diverged\n"})
+        self.git(self.repo, "branch", "park/pk", other_tip)
+
+        out = self.lane("park", "pk", "--reason", "pause", ok=False)
+        self.assertIn("already exists", out)
+        self.assertIn("not an ancestor", out)
+        self.assertEqual(self.git(self.repo, "rev-parse", "refs/heads/park/pk"), other_tip)
+        self.assertEqual(self.record("pk")["status"], "active")
+
+        # After removing the conflicting park/pk, park succeeds.
+        self.git(self.repo, "branch", "-D", "park/pk")
+        self.lane("park", "pk", "--reason", "pause")
+        self.assertEqual(self.git(self.repo, "rev-parse", "refs/heads/park/pk"), tip)
+
+        # start on a parked id refuses and points to unpark.
+        start_out = self.lane("start", "pk", "--ticket", "404", "--base", "integrate/q",
+                              "--claims", "lib/**", "--create", ok=False)
+        self.assertIn("exists (parked)", start_out)
+        self.assertIn("unpark pk", start_out)
+        self.assertEqual(self.record("pk")["outcome"], "parked")
+
+    def test_abandon_keep_branch_refuses_unmerged_detached_head(self):
+        wt = pathlib.Path(self.created("dh", "lib/**"))
+        self.commit(wt, {"lib/api.txt": "foo\nbranch commit\n"})
+        self.git(wt, "checkout", "-q", "--detach", "HEAD")
+        self.commit(wt, {"lib/api.txt": "foo\ndetached commit\n"})
+
+        refused = self.lane("abandon", "dh", "--reason", "drop it", "--keep-branch", "park/dh", ok=False)
+        self.assertIn("abandon refused", refused)
+        self.assertIn("not merged anywhere", refused)
+        self.assertTrue(wt.exists())
+
+        # With --force-reason it proceeds and audits the override.
+        self.lane("abandon", "dh", "--reason", "drop it", "--keep-branch", "park/dh",
+                  "--force-reason", "discard detached commit")
+        self.assertFalse(wt.exists())
+        self.assertEqual(self.record("dh")["outcome"], "abandoned")
+
+    def test_park_and_abandon_refuse_unmarked_review_findings(self):
+        wt = pathlib.Path(self.created("rf", "lib/**"))
+        self.commit(wt, {"lib/api.txt": "foo\nreviewed\n"})
+        rec = self.record("rf")
+        (self.state / "rf.review.json").write_text(json.dumps({
+            "version": 1, "lane": "rf", "status": "finished", "lane_created": rec["created"],
+            "findings": [{"n": 1, "severity": "P1", "title": "bug", "location": "lib/api.txt:1"}],
+        }))
+        park_out = self.lane("park", "rf", "--reason", "pause", ok=False)
+        self.assertIn("park refused", park_out)
+        self.assertIn("unmarked finding", park_out)
+        ab_out = self.lane("abandon", "rf", "--reason", "drop", "--keep-branch", "park/rf", ok=False)
+        self.assertIn("abandon refused", ab_out)
+        self.assertIn("unmarked finding", ab_out)
+        self.assertEqual(self.record("rf")["status"], "active")
+
+    def test_after_satisfied_by_dropped_and_land_or_unpark_override_for_abandoned(self):
+        # 1. Dropped dependency satisfies --after so dependant can land without --force-reason.
+        self.created("d0", "lib/a.txt")
+        self.start("dep-on-drop", "lib/a.txt", extra=("--after", "d0", "--create"))
+        wt_a = pathlib.Path(self.record("dep-on-drop")["worktree"])
+        self.commit(wt_a, {"lib/a.txt": "after dropped\n"})
+        self.lane("check", "dep-on-drop")
+        self.lane("drop", "d0")
+        self.lane("land", "dep-on-drop")
+        self.assertIn(self.record("dep-on-drop")["status"], ("landed", "done"))
+
+        # 2. Abandoned dependency blocks land unless --force-reason overrides (audited).
+        self.created("ab0", "calls/x.txt")
+        self.start("dep-on-ab", "calls/x.txt", extra=("--after", "ab0", "--create"))
+        wt_b = pathlib.Path(self.record("dep-on-ab")["worktree"])
+        self.commit(wt_b, {"calls/x.txt": "foo\n"})
+        self.lane("check", "dep-on-ab")
+        self.lane("abandon", "ab0", "--reason", "superseded")
+        self.assertIn("ab0 (abandoned)", self.lane("land", "dep-on-ab", ok=False))
+        self.lane("land", "dep-on-ab", "--force-reason", "ab0 no longer needed")
+        self.assertIn("override land dep-on-ab: ab0 no longer needed", (self.state / "ledger.log").read_text())
+
+        # 3. unpark refuses abandoned --after without --force-reason, succeeds with --force-reason,
+        # and sets base_sha to merge-base(park_tip, base) even after integration moves on.
+        self.created("ab1", "tooling/y.txt")
+        self.start("pk-ab", "tooling/y.txt", extra=("--after", "ab1", "--create"))
+        wt_c = pathlib.Path(self.record("pk-ab")["worktree"])
+        original_base = self.record("pk-ab")["base_sha"]
+        self.commit(wt_c, {"tooling/y.txt": "parked work\n"})
+        self.lane("park", "pk-ab", "--reason", "pause")
+        self.lane("abandon", "ab1", "--reason", "dropped plan")
+        self.commit(self.integration, {"notes.txt": "integration moved forward\n"}, "move integration")
+
+        self.assertIn("abandoned", self.lane("unpark", "pk-ab", ok=False))
+        self.lane("unpark", "pk-ab", "--force-reason", "ab1 not needed")
+        resumed = self.record("pk-ab")
+        self.assertEqual(resumed["after"], [])
+        self.assertEqual(resumed["base_sha"], original_base)
+
 
 if __name__ == "__main__":
     unittest.main()

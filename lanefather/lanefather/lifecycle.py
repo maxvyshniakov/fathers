@@ -113,7 +113,17 @@ def landed(record: Record | None) -> bool:
     return False
 
 
-is_landed = landed
+def dropped(record: Record | None) -> bool:
+    """Whether `record` is done because it was dropped (added nothing to its base)."""
+    if not record or not finished(record):
+        return False
+    raw: Any = record.get("dropped")
+    return isinstance(raw, dict) and bool(cast(dict[str, Any], raw))
+
+
+def after_satisfied(record: Record | None) -> bool:
+    """Whether `record` satisfies an `--after` dependency (`landed`, or `dropped` since it added nothing)."""
+    return landed(record) or dropped(record)
 
 
 def parked(record: Record | None) -> bool:

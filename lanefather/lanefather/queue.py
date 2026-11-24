@@ -97,7 +97,7 @@ def queue_states(entries: list[dict[str, Any]], records: list[Record],
                 reason += f"; run {project.command} start {entry['id']} --create once ready"
         else:
             waiting = [f"{name} ({lifecycle.display_state(by_id.get(name), missing='not started')})"
-                       for name in entry.get("after", []) if not lifecycle.landed(by_id.get(name))]
+                       for name in entry.get("after", []) if not lifecycle.after_satisfied(by_id.get(name))]
             if waiting:
                 reason = "waits for " + ", ".join(waiting)
             for other in [] if waiting else active:

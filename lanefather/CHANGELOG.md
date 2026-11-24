@@ -15,9 +15,10 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
   `lanefather abandon <id> --reason REASON [--keep-branch REF] [--force-reason REASON]` transitions `planned|active
   -> done` with `outcome = "abandoned"` (event `lane.abandoned`), refusing unmerged commits unless `--keep-branch`
   or an audited `--force-reason` is given. `lifecycle.landed` checks `outcome` / `landed` metadata rather than
-  `status == "done"` alone, so parked and abandoned lanes never satisfy `--after` (`next` reports `waits for X
-  (parked)` / `waits for X (abandoned)`), `done` on an unlanded lane names `park` and `abandon`, and `list --all`
-  shows `done (parked)` / `done (abandoned)`.
+  `status == "done"` alone, so parked, abandoned, and legacy forced-`done` lanes never satisfy `--after` without
+  `--force-reason` (dropped lanes still satisfy `--after`; `next` reports `waits for X (parked)` / `waits for X
+  (abandoned)`), `done` on an unlanded lane names `park` and `abandon`, and `list --all` shows `done (parked)` /
+  `done (abandoned)`.
 - Post-merge smoke lifecycle and `lanefather smoke` command (fathers#56): `land` now records `post_merge.status =
   "running"` (`pid`, `start`, `checkout`, `lane_created`) before the post-merge smoke starts; a `running` smoke whose
   holder process has exited reads as `killed` via `fathers_common.proc`. `lanefather smoke <id> [--rerun | --accept

@@ -117,7 +117,9 @@ def fix_parent(store: state.Store, record: Record) -> str | None:
 
 
 def existing_lane_error(prog: str, lane_id: str, existing: Record) -> LaneError:
-    """Refusal when registering an id that already exists and is not done, with a hint that fits its status."""
+    """Refusal when registering an id that already exists and is not done (or is parked), with a fitting hint."""
+    if lifecycle.parked(existing):
+        return LaneError(f"lane {lane_id} exists (parked); resume it with {prog} unpark {lane_id}")
     if lifecycle.planned(existing):
         return LaneError(
             f"lane {lane_id} exists (planned); activate it with {prog} start {lane_id} --create "
@@ -132,12 +134,12 @@ def existing_lane_error(prog: str, lane_id: str, existing: Record) -> LaneError:
 
 
 def admit(store: state.Store, record: Record, force_reason: str | None,
-          repaired: str | None) -> tuple[admission.Decision, list[str]]:
+          repaired: str | None, *, allow_parked: bool = False) -> tuple[admission.Decision, list[str]]:
     """Under the state lock: the existing-lane, dependency, cap, disk and claim rules for registration."""
     prog = store.prog
     lane_id, lane_claims, after = record["id"], record["claims"], record["after"]
     existing = state.read_json(store.record_path(lane_id))
-    if existing and not lifecycle.finished(existing):
+    if existing and (not lifecycle.finished(existing) or (lifecycle.parked(existing) and not allow_parked)):
         raise existing_lane_error(prog, lane_id, existing)
     others = [r for r in store.lanes(strict=True) if r["id"] != lane_id]
     others_by_id = {r["id"]: r for r in others}
@@ -173,12 +175,12 @@ def admit(store: state.Store, record: Record, force_reason: str | None,
 
 def register(store: state.Store, record: Record, rules: list[dict[str, Any]], force_reason: str | None,
              create: bool, *, agent: str | None = None, start_point: str | None = None,
-             extra_ledger_details: dict[str, Any] | None = None) -> None:
+             extra_ledger_details: dict[str, Any] | None = None, allow_parked: bool = False) -> None:
     """Enforce the cap, disk and claims, save the record and print its brief header."""
     repaired: str | None = None
     while True:
         with store.locked("state"):
-            decision, refusals = admit(store, record, force_reason, repaired)
+            decision, refusals = admit(store, record, force_reason, repaired, allow_parked=allow_parked)
             if not refusals or force_reason or repaired is not None:
                 if refusals and not force_reason:
                     raise LaneError("refused:\n- " + "\n- ".join(refusals))
@@ -223,24 +225,33 @@ def register_admitted(store: state.Store, record: Record, decision: admission.De
                          store=store)
     worktree: str | None = record.get("worktree")
     status = "planned"
+    created_main: str | None = None
+    created_path: Path | None = None
     if create:
-        main = main_checkout(record["common_dir"])
-        path = str(worktrees.worktrees_root(record["common_dir"], store.project) / f"lane-{lane_id}")
-        git(main, "worktree", "add", "-q", "-b", record["branch"], path, start_point or record["base_sha"])
-        worktree = os.path.realpath(path)
+        created_main = main_checkout(record["common_dir"])
+        created_path = worktrees.worktrees_root(record["common_dir"], store.project) / f"lane-{lane_id}"
+        git(created_main, "worktree", "add", "-q", "-b", record["branch"], str(created_path),
+            start_point or record["base_sha"])
+        worktree = os.path.realpath(str(created_path))
         status = "active"
-    lifecycle.register(
-        store, record, status=status, worktree=worktree,
-        agent=events.agent_context(agent), now=journal.now(),
-        ledger_message=(f"start {lane_id} ticket={record['ticket']} branch={record['branch']} "
-                        f"base={record['base']}@{record['base_sha'][:10]} claims={' '.join(lane_claims)} "
-                        f"after={','.join(after) or '-'} cap={cap} ({source}) {host.host_fields(info)}"),
-        ledger_details={"status": status, "branch": record["branch"], "base": record["base"],
-                        "base_sha": record["base_sha"], "claims": lane_claims, "after": after,
-                        "worktree": worktree, "cap": cap, "cap_source": source,
-                        **({"scope": record["scope"]} if "scope" in record else {}),
-                        **(extra_ledger_details or {})},
-    )
+    try:
+        lifecycle.register(
+            store, record, status=status, worktree=worktree,
+            agent=events.agent_context(agent), now=journal.now(),
+            ledger_message=(f"start {lane_id} ticket={record['ticket']} branch={record['branch']} "
+                            f"base={record['base']}@{record['base_sha'][:10]} claims={' '.join(lane_claims)} "
+                            f"after={','.join(after) or '-'} cap={cap} ({source}) {host.host_fields(info)}"),
+            ledger_details={"status": status, "branch": record["branch"], "base": record["base"],
+                            "base_sha": record["base_sha"], "claims": lane_claims, "after": after,
+                            "worktree": worktree, "cap": cap, "cap_source": source,
+                            **({"scope": record["scope"]} if "scope" in record else {}),
+                            **(extra_ledger_details or {})},
+        )
+    except BaseException:
+        if created_main is not None and created_path is not None:
+            worktrees.remove_checkout(created_main, created_path)
+            git(created_main, "branch", "-D", record["branch"], check=False)
+        raise
     # fathers#171: the lane owns its worktree, scratch and build directories through Spawnfather; a fix lane takes
     # its parent's worktree by hand-over (hand_over_fix_lane).
     lifetimes.register_quietly(store, store.load(lane_id), "start", skip=("worktree",) if parent is not None else ())
@@ -358,9 +369,15 @@ def activate_planned(store: state.Store, lane_id: str, *, base: str | None = Non
             waiting = [
                 f"{name} ({lifecycle.display_state(by_id.get(name), missing='missing')})"
                 for name in after_ids
-                if not lifecycle.landed(by_id.get(name))
+                if not lifecycle.after_satisfied(by_id.get(name))
             ]
             if waiting:
+                has_abandoned = any(lifecycle.abandoned(by_id.get(name)) for name in after_ids)
+                if has_abandoned:
+                    raise LaneError(
+                        f"lane {lane_id} is planned after {', '.join(waiting)}; abandoned dependencies will not land "
+                        f"(drop with {prog} drop {lane_id} or abandon with {prog} abandon {lane_id} --reason REASON)"
+                    )
                 raise LaneError(
                     f"lane {lane_id} is planned after {', '.join(waiting)}; "
                     f"wait for them to land, then run {prog} start {lane_id} --create "
@@ -442,7 +459,7 @@ def activate_planned(store: state.Store, lane_id: str, *, base: str | None = Non
 
 def start(args: Any, store: state.Store) -> int:
     existing = state.read_json(store.record_path(args.id))
-    if existing and not lifecycle.finished(existing):
+    if existing and (not lifecycle.finished(existing) or lifecycle.parked(existing)):
         if args.create and lifecycle.planned(existing):
             activate_planned(store, args.id, base=args.base, branch=args.branch,
                              force_reason=args.force_reason, agent=getattr(args, "agent", None), args=args)
@@ -506,6 +523,8 @@ def unpark_lane(store: state.Store, lane_id: str, *, base: str | None = None,
     chosen_base = base or (raw_base if isinstance(raw_base, str) and raw_base else None)
     raw_branch = old.get("branch")
     chosen_branch = raw_branch if isinstance(raw_branch, str) and raw_branch else f"lane/{lane_id}"
+    if git_ok(main, "rev-parse", "--verify", "--quiet", f"refs/heads/{chosen_branch}"):
+        raise LaneError(f"unpark refused: branch {chosen_branch} already exists in {main}; remove or rename it first")
     raw_scratch: Any = old.get("scratch")
     extra_scratch = (
         [s for s in cast(list[Any], raw_scratch)[1:] if isinstance(s, str) and s]
@@ -519,16 +538,45 @@ def unpark_lane(store: state.Store, lane_id: str, *, base: str | None = None,
         else []
     )
     by_id = {r["id"]: r for r in store.lanes(strict=True)}
-    remaining_after = [name for name in old_after if not lifecycle.landed(by_id.get(name))]
+    remaining_after: list[str] = []
+    abandoned_after: list[str] = []
+    for name in old_after:
+        dep = by_id.get(name)
+        if lifecycle.after_satisfied(dep):
+            continue
+        if lifecycle.abandoned(dep):
+            abandoned_after.append(name)
+        else:
+            remaining_after.append(name)
+    if abandoned_after and not force_reason:
+        joined = ", ".join(abandoned_after)
+        raise LaneError(
+            f"unpark refused: lane {lane_id} had --after {joined}, which is abandoned and will not land; "
+            "pass --force-reason to unpark without that dependency"
+        )
     items = scope.of(old)
     record, rules = prepare(
         store, main, lane_id, scope.primary(items), lane_claims, chosen_base, remaining_after,
         branch=chosen_branch, scratch=extra_scratch,
         parents=state.fix_parents(old), batch_fix=state.batch_fix(old), items=items,
     )
+    mb = git(main, "merge-base", park_tip, record["base_sha"], check=False)
+    if mb:
+        record["base_sha"] = mb
+    elif isinstance(old.get("base_sha"), str) and old["base_sha"] and git_ok(
+        main, "rev-parse", "--verify", "--quiet", old["base_sha"] + "^{commit}"
+    ):
+        record["base_sha"] = old["base_sha"]
+    if abandoned_after:
+        journal.override(
+            "unpark", record, force_reason,
+            [f"dropped abandoned --after: {', '.join(abandoned_after)}"],
+            store=store,
+        )
     register(
         store, record, rules, force_reason, create=True, agent=agent,
         start_point=park_tip, extra_ledger_details={"unparked_from": park_ref, "park_tip": park_tip},
+        allow_parked=True,
     )
     git(main, "branch", "-D", park_ref, check=False)
     return store.load(lane_id)

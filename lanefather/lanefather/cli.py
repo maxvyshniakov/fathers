@@ -102,9 +102,11 @@ COMMANDS: dict[str, Command] = {
     "drop": Command("remove a lane that adds nothing to its base", "<id> [<id> ...]", "fix-login"),
     "park": Command("park a lane on park/<id>; frees cap, claims, worktree",
                     "<id> --reason REASON", "fix-login --reason 'waiting on API'"),
-    "unpark": Command("resume a parked lane from park/<id>", "<id> [--base REF]", "fix-login"),
+    "unpark": Command("resume a parked lane from park/<id>",
+                      "<id> [--base REF] [--agent KIND] [--force-reason REASON]", "fix-login"),
     "abandon": Command("abandon an unlanded lane and remove its worktree and claims",
-                       "<id> --reason REASON [--keep-branch REF]", "fix-login --reason 'superseded'"),
+                       "<id> --reason REASON [--keep-branch REF] [--force-reason REASON]",
+                       "fix-login --reason 'superseded'"),
     "recheck": Command("rerun a landed lane's red post-merge smoke", "<id> [--slots N]", "fix-login"),
     "smoke": Command("post-merge smoke status, rerun or accept",
                      "<id> [--rerun [--slots N] | --accept REASON]", "fix-login --rerun"),
@@ -359,14 +361,14 @@ def parser(project: config.Config = config.DEFAULT) -> Parser:
             "keeps its receipts, and marks it done with outcome parked (does not satisfy --after).", prog=prog)
     p.add_argument("id")
     p.add_argument("--reason", required=True, help="why the lane is parked")
-    p.set_defaults(run=done.park)
+    p.set_defaults(run=_run_park)
     p = add(root, commands, "unpark", "Re-registers a parked lane from park/<id>, preserving its scope, claims and "
             "base, and creates a fresh worktree.", prog=prog)
     p.add_argument("id")
     p.add_argument("--base", help="integration branch or commit (default: the parked lane's base)")
     p.add_argument("--agent", type=agent_kind,
                    help="the agent unparking the lane (e.g. claude-code, codex, antigravity, t3-code)")
-    p.add_argument("--force-reason", help="unpark despite the lane cap or disk floor; logged")
+    p.add_argument("--force-reason", help="unpark despite the lane cap, disk floor, or abandoned --after; logged")
     p.set_defaults(run=lanes.unpark)
     p = add(root, commands, "abandon", "Marks a planned or active lane done with outcome abandoned and removes its "
             "worktree, branch, scratch and claims. Refuses when the branch has commits not merged anywhere unless "
@@ -376,7 +378,7 @@ def parser(project: config.Config = config.DEFAULT) -> Parser:
     p.add_argument("--keep-branch", metavar="REF",
                    help="save the lane's branch tip at REF (e.g. park/<id>) before removing it")
     p.add_argument("--force-reason", help="discard unmerged commits or uncommitted changes; logged")
-    p.set_defaults(run=done.abandon)
+    p.set_defaults(run=_run_abandon)
     p = add(root, commands, "recheck", "On the integration tip that holds its merge; green replaces the red result "
             "(lanefather.land).", prog=prog)
     p.add_argument("id")
@@ -580,6 +582,18 @@ def _rerun_unrecorded_smoke(store: state.Store, record: state.Record, slots: int
     )
     smoke_result = land.post_merge(store, landed_obj, slots)
     return land.after_land(store, landed_obj, smoke_result)
+
+
+def _run_park(args: Any, store: state.Store) -> int:
+    """`lanefather park <id> --reason REASON`."""
+    done.park_lane(args.id, args.reason, store)
+    return 0
+
+
+def _run_abandon(args: Any, store: state.Store) -> int:
+    """`lanefather abandon <id> --reason REASON [--keep-branch REF] [--force-reason REASON]`."""
+    done.abandon_lane(args.id, args.reason, store, keep_branch=args.keep_branch, force_reason=args.force_reason)
+    return 0
 
 
 def _run_smoke(args: Any, store: state.Store) -> int:

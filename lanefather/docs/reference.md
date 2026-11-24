@@ -21,8 +21,8 @@ lanefather done <id>
 lanefather done --finished [--dry-run]    done on every finished lane of the registered projects
 lanefather drop <id> [<id> ...]           remove an active lane that adds nothing to its base
 lanefather park <id> --reason REASON      park a lane on park/<id> and free its cap, claims and worktree
-lanefather unpark <id> [--base REF]       resume a parked lane from park/<id>
-lanefather abandon <id> --reason REASON [--keep-branch REF]   abandon an unlanded lane
+lanefather unpark <id> [--base REF] [--agent KIND] [--force-reason REASON]   resume a parked lane from park/<id>
+lanefather abandon <id> --reason REASON [--keep-branch REF] [--force-reason REASON]   abandon an unlanded lane
 lanefather recheck <id> [--slots N]       rerun a red post-merge smoke on the integration tip
 lanefather smoke <id> [--rerun [--slots N] | --accept REASON]   post-merge smoke status, rerun or accept
 lanefather keep <id> [--off]              auto-done and done --finished leave the lane
@@ -772,7 +772,7 @@ scope in order, with `partial` for one it does only part of (`show --json` carri
 `receipt.tree_match` compares the receipt's tree with the lane branch's, null when
 either is unknown; `review.status` is the review receipt's, `stopped` for a running review whose process is gone;
 `logs` holds the newest run log of each phase (`check`, `rerun`, `base`, `post-merge`, `review`); `gate` is the newest
-batch gate; `outcome` is `"landed"`, `"parked"`, `"abandoned"`, or null while live. `checkout` is the project's main
+batch gate; `outcome` is null on the live lanes `status --json` lists, and `"landed"`, `"parked"`, or `"abandoned"` on done lanes in `list --all --json`. `checkout` is the project's main
 checkout (its real path), the project a lane owner names in Spawnfather (`lane:<checkout>/<id>`, fathers#171). `cap` is the project's lifetime admission answer,
 or its derived cap with the reason when admission is unavailable. A project that cannot be read gives
 `{"project", "state_dir", "error"}`, never a failed snapshot; one whose configuration file is missing and that no
