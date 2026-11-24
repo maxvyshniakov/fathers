@@ -564,6 +564,10 @@ def spawnfather_shown(kind: str, details: dict[str, Any]) -> Optional[Shown]:
     if kind == "entry.exited":
         code = details.get("exit")
         return Shown("exited", ((f"exit {code}" if code is not None else "", "warn" if code else "dim"),))
+    if kind == "entry.gone":
+        lines = details.get("log_lines")
+        note = f"{lines} log lines" if isinstance(lines, int) and not isinstance(lines, bool) and lines > 0 else ""
+        return Shown("gone", ((note, "dim"),))
     if kind == "entry.handed":
         to: Any = details.get("to")
         owner = cast(dict[str, Any], to) if isinstance(to, dict) else {}

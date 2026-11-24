@@ -6,6 +6,8 @@ Versions and release rules: [README.md](README.md#versions).
 
 ### Added
 
+- EVENTS formats Spawnfather's `entry.gone` event (`gone`, with log line count when present; fathers#245).
+
 - LANE DETAILS lists everything a lane owns through Spawnfather (fathers#171): its worktree, scratch and build
   folders, wherever they are, first, then what its agents started inside its worktree. On SPAWNS their `lane`
   column names the lane and SPAWN DETAILS links it. A lane is matched by its project and its id, so a lane of the

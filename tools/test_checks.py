@@ -43,6 +43,8 @@ class SelectionTests(unittest.TestCase):
         self.assertEqual(package("slotfather") | {"godfather tests", "common tests"} | ALWAYS,
                          self.selected("slotfather/src/slotfather/state.py"))
         self.assertEqual(package("slotfather") | ALWAYS, self.selected("slotfather/tests/test_usage.py"))
+        self.assertEqual(package("spawnfather") | {"godfather tests", "common tests"} | ALWAYS,
+                         self.selected("spawnfather/spawnfather/events.py"))
 
     def test_common_selects_every_package(self) -> None:
         every = set().union(*(package(name) for name in checks.PACKAGES))

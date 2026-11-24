@@ -92,6 +92,8 @@ def owners(path: str) -> set[str] | None:
         chosen = {f"{first} lint", f"{first} tests"}
         if first == "slotfather" and (rest == "slotfather" or rest.startswith("src/")):
             chosen.add("godfather tests")  # its contract tests run ../slotfather
+        if first == "spawnfather" and rest == "spawnfather/events.py":
+            chosen.add("godfather tests")  # godfather/tests/test_procs.py checks every Spawnfather event kind
         if (first == "slotfather" and rest.startswith("src/")) or (
             first == "spawnfather" and rest.startswith("spawnfather/")
         ):
