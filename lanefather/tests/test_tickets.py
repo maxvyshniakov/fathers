@@ -615,18 +615,220 @@ class ForeignTicketLandTests(TicketCase):
         self.assertEqual([call[2] for call in self.calls_on("fixture/straylight", "comment")], ["404"])
 
 
+class UmbrellaAndPartialLandTests(TicketCase):
+    """[tickets] umbrella and `lanefather land --partial [--remaining TEXT]` (fathers#64)."""
+
+    def test_umbrella_ticket_never_fixes_or_labels_at_land_and_skips_release_comments(self):
+        self.commit(
+            self.integration,
+            {".lanefather.toml": FIXTURE_CONFIG + ALL_ON + f'umbrella = [404, "{SID_KIT}#97"]\n'},
+            "mark umbrella tickets",
+        )
+        base = self.tip()
+        self.scoped("a", "--ticket", "404", "--ticket", "405", "--ticket", f"{SID_KIT}#97")
+        worktree = pathlib.Path(self.record("a")["worktree"])
+        self.commit(worktree, {"lib/api.txt": "foo\nbaz\n"}, "work toward umbrella\n\nRefs #404")
+        self.lane("check", "a")
+        output = self.lane("land", "a")
+        self.assertEqual(
+            self.git(self.integration, "log", "-1", "--format=%B").splitlines(),
+            [f"Merge lane/a (#404, #405, {SID_KIT}#97)", "", "Refs #404", "Fixes #405", f"Refs {SID_KIT}#97"],
+        )
+        self.assertNotIn("ticket.trailer_conflict", [e["kind"] for e in self.events_of("ticket.trailer_conflict")])
+        self.assertNotIn("warning:", output)
+        self.assertEqual(self.issue("404")["labels"], [], "umbrella ticket must not be labelled integrated")
+        self.assertEqual(self.issue("97")["labels"], [], "foreign umbrella ticket must not be labelled integrated")
+        self.assertEqual(self.issue("405")["labels"], ["integrated"])
+        self.assertIn("#404 commented in fixture/straylight (umbrella: not labelled)", output)
+        [umbrella_comment] = self.land_comments("404")
+        self.assertIn("Umbrella ticket:", umbrella_comment)
+        self.assertIn("`Refs #404`", umbrella_comment)
+        self.assertIn("stays open", umbrella_comment)
+        self.assertNotIn("Labelled `integrated`", umbrella_comment)
+        [foreign_umbrella] = self.land_comments("97")
+        self.assertIn("Umbrella ticket:", foreign_umbrella)
+        # Even if a commit manually mentions Fixes #404, shipped skips umbrella tickets.
+        self.commit(self.integration, {"docs/notes.md": "x\n"}, "Manual note\n\nFixes #404\nFixes #77")
+        shipped_out = self.lane("shipped", "v1.6.0", "--since", base)
+        self.assertIn("release v1.6.0: commented on 2 of 2 issues it fixes (#405, #77)", shipped_out)
+        self.assertEqual(len(self.land_comments("404")), 1, "umbrella ticket gets no release comment")
+        removals = [call[2] for call in self.gh_calls() if "--remove-label" in call]
+        self.assertEqual(removals, ["405", "77"])
+
+    def test_umbrella_ticket_is_skipped_by_promote_ship_and_warns_on_manual_fixes(self):
+        self.git(self.repo, "branch", "dev")
+        remote = self.tmp / "remote.git"
+        self.git(self.tmp, "init", "-q", "--bare", str(remote))
+        (self.tmp / "no-hooks").mkdir()
+        self.git(self.repo, "config", "core.hooksPath", str(self.tmp / "no-hooks"))
+        self.git(self.repo, "remote", "set-url", "origin", str(remote))
+        self.git(self.repo, "push", "-q", "origin", "main", "dev")
+        self.commit(
+            self.integration,
+            {".lanefather.toml": FIXTURE_CONFIG + ALL_ON + 'repo = "fixture/straylight"\numbrella = [404]\n'},
+            "configure umbrella",
+        )
+        worktree = pathlib.Path(self.created("a", "lib/**"))
+        self.commit(worktree, {"lib/api.txt": "foo\nbaz\n"}, "oops\n\nFixes #404")
+        self.lane("check", "a")
+        land_out = self.lane("land", "a")
+        self.assertIn("says Fixes #404, which is an umbrella ticket", land_out)
+        self.lane("review", "a")
+        tip = self.tip()
+        promote_out = self.lane("promote", tip, "--ship", "--wait", "0")
+        self.assertNotIn("commented on", promote_out)
+        self.assertEqual(len(self.land_comments("404")), 1, "only the land comment, no ship comment")
+        self.assertEqual(self.issue("404")["labels"], [])
+
+    def test_land_partial_with_remaining_emits_refs_skips_label_and_records_landed_metadata(self):
+        worktree = pathlib.Path(self.created("a", "lib/**"))
+        self.commit(worktree, {"lib/api.txt": "foo\nbaz\n"}, "part one\n\nRefs #404")
+        self.lane("check", "a")
+        output = self.lane("land", "a", "--partial", "--remaining", "wire CLI flags and docs")
+        self.assertNotIn("warning:", output)
+        self.assertEqual(self.events_of("ticket.trailer_conflict"), [])
+        self.assertEqual(
+            self.git(self.integration, "log", "-1", "--format=%B").splitlines(),
+            ["Merge lane/a (#404)", "", "Refs #404"],
+        )
+        self.assertEqual(self.issue("404")["labels"], [])
+        self.assertIn("#404 commented in fixture/straylight (partial: not labelled)", output)
+        [comment] = self.land_comments("404")
+        self.assertIn("Partial:", comment)
+        self.assertIn("remaining: wire CLI flags and docs", comment)
+        self.assertIn("stays open", comment)
+        self.assertNotIn("Fixes #404", comment)
+        self.assertNotIn("Labelled `integrated`", comment)
+        landed = self.record("a")["landed"]
+        self.assertIs(landed.get("partial"), True)
+        self.assertEqual(landed.get("remaining"), "wire CLI flags and docs")
+
+    def test_umbrella_fixes_outside_lane_scope_warns_and_leading_zeros_match(self):
+        self.commit(
+            self.integration,
+            {".lanefather.toml": FIXTURE_CONFIG + ALL_ON + "umbrella = [347, 5]\n"},
+            "configure umbrella 347 and 5",
+        )
+        self.scoped("a", "--ticket", "05")
+        worktree = pathlib.Path(self.record("a")["worktree"])
+        self.commit(worktree, {"lib/api.txt": "foo\nbaz\n"}, "unrelated change\n\nFixes #347")
+        self.lane("check", "a")
+        output = self.lane("land", "a")
+        self.assertIn("says Fixes #347, which is an umbrella ticket", output)
+        self.assertEqual(
+            self.git(self.integration, "log", "-1", "--format=%B").splitlines(),
+            ["Merge lane/a (#05)", "", "Refs #05"],
+            "leading zeros on #05 match umbrella = [5]",
+        )
+        self.assertEqual(self.issue("05")["labels"], [])
+
+    def test_release_comments_keeps_ticket_closed_by_external_commit_alongside_partial_lane(self):
+        base = self.tip()
+        self.scoped("a", "--ticket", "200")
+        worktree = pathlib.Path(self.record("a")["worktree"])
+        self.commit(worktree, {"lib/api.txt": "foo\nbaz\n"}, "partial work\n\nFixes #200")
+        self.lane("check", "a")
+        self.lane("land", "a", "--partial")
+        # A separate commit outside the partial lane genuinely closes #200.
+        self.commit(self.integration, {"docs/notes.md": "done\n"}, "finish #200\n\nFixes #200")
+        shipped_out = self.lane("shipped", "v1.8.0", "--since", base)
+        self.assertIn("release v1.8.0: commented on 1 of 1 issues it fixes (#200)", shipped_out)
+        self.assertTrue(self.land_comments("200")[-1].startswith("Released in `v1.8.0`"))
+
+    def test_repair_derives_partial_from_refs_merge_and_refuses_mismatch(self):
+        worktree = pathlib.Path(self.created("a", "lib/**"))
+        self.commit(worktree, {"lib/api.txt": "foo\nbaz\n"}, "part one")
+        self.lane("check", "a")
+        self.git(self.integration, "merge", "--no-ff", "-m", "Merge lane/a (#404)\n\nRefs #404", "lane/a")
+        self.lane("land", "a", "--repair", "--keep")
+        self.assertIs(self.record("a")["landed"].get("partial"), True)
+        self.assertEqual(self.issue("404")["labels"], [])
+
+        worktree2 = pathlib.Path(self.created("b", "calls/**"))
+        self.commit(worktree2, {"calls/main.txt": "foo\nbaz\n"}, "complete")
+        self.lane("check", "b")
+        self.git(self.integration, "merge", "--no-ff", "-m", "Merge lane/b (#404)\n\nFixes #404", "lane/b")
+        refused = self.lane("land", "b", "--repair", "--partial", ok=False)
+        self.assertIn("land --repair --partial refused", refused)
+
+    def test_land_partial_without_remaining_and_validation_of_remaining_option(self):
+        worktree = pathlib.Path(self.created("a", "lib/**"))
+        self.commit(worktree, {"lib/api.txt": "foo\nbaz\n"}, "part one\n\nFixes #404")
+        self.lane("check", "a")
+        bad = self.lane("land", "a", "--remaining", "more work", ok=False)
+        self.assertIn("--remaining goes with --partial", bad)
+        empty = self.lane("land", "a", "--partial", "--remaining", "   ", ok=False)
+        self.assertIn("--remaining must be non-empty", empty)
+        base = self.tip()
+        output = self.lane("land", "a", "--partial")
+        self.assertIn("says Fixes #404, which is partial", output)
+        self.assertEqual(self.issue("404")["labels"], [])
+        [comment] = self.land_comments("404")
+        self.assertIn("Partial: this merge does part of #404 (`Refs #404`); the issue stays open", comment)
+        self.assertNotIn("remaining:", comment)
+        self.assertIs(self.record("a")["landed"].get("partial"), True)
+        self.assertNotIn("remaining", self.record("a")["landed"])
+        # Even though a lane commit said Fixes #404, shipped skips #404 because it only landed partially.
+        shipped_out = self.lane("shipped", "v1.7.0", "--since", base)
+        self.assertNotIn("commented on", shipped_out)
+        self.assertEqual(len(self.land_comments("404")), 1)
+
+    def test_fix_of_lane_inherits_partial_scope_from_partially_landed_parent(self):
+        self.review_text.write_text(TWO_FINDINGS)
+        self.checked()
+        self.lane("land", "a", "--partial", "--remaining", "follow-up cleanup")
+        self.lane("review", "a")
+        start_out = self.lane(
+            "start", "fix-a", "--fix-of", "a", "--ticket", "404", "--base", "integrate/q",
+            "--claims", "lib/**", "--create",
+        )
+        self.assertIn("inherited partial scope from a for #404", start_out)
+        fix = self.record("fix-a")
+        self.assertEqual(fix["scope"], [{"issue": "404", "partial": True}])
+        fix_wt = pathlib.Path(fix["worktree"])
+        self.commit(fix_wt, {"lib/api.txt": "foo\nbaz\nqux\n"}, "fix(review): follow-up\n\nRefs #404")
+        self.lane("check", "fix-a", cwd=fix_wt)
+        output = self.lane("land", "fix-a")
+        self.assertNotIn("warning:", output)
+        self.assertEqual(
+            self.git(self.integration, "log", "-1", "--format=%B").splitlines(),
+            ["Merge lane/fix-a (#404)", "", "Refs #404"],
+        )
+        self.assertEqual(self.issue("404")["labels"], [], "fix lane of partial parent must not label integrated")
+
+
 class ConfigTests(unittest.TestCase):
     def test_the_table_is_checked(self):
         from lanefather import config
         from lanefather.errors import LaneError
         self.assertEqual(config.parse({}).tickets, config.Tickets())
         self.assertFalse(config.parse({}).tickets.enabled())
-        parsed = config.parse({"tickets": {"land_comment": True, "preview": "https://x/{sha}"}}).tickets
+        parsed = config.parse({
+            "tickets": {
+                "land_comment": True,
+                "preview": "https://x/{sha}",
+                "umbrella": [347, "294", "#294", f"{SID_KIT}#97", f"https://github.com/{SID_KIT}/issues/97"],
+            }
+        }).tickets
         self.assertEqual((parsed.land_comment, parsed.integrated_label, parsed.preview),
                          (True, False, "https://x/{sha}"))
+        self.assertEqual(parsed.umbrella, ("347", "294", f"{SID_KIT}#97"))
+        self.assertFalse(config.parse({"tickets": {"umbrella": [347]}}).tickets.enabled())
         for table, words in (({"land_coment": True}, "[tickets] has unknown keys land_coment"),
                              ({"fixes_trailer": "yes"}, "fixes_trailer must be a boolean"),
-                             ({"repo": "straylight"}, "repo must be owner/name")):
+                             ({"repo": "straylight"}, "repo must be owner/name"),
+                             ({"umbrella": 347}, "umbrella must be a list"),
+                             ({"umbrella": "347"}, "umbrella must be a list"),
+                             ({"umbrella": [True]}, "umbrella entry True"),
+                             ({"umbrella": [False]}, "umbrella entry False"),
+                             ({"umbrella": [0]}, "umbrella entry 0"),
+                             ({"umbrella": [-5]}, "umbrella entry -5"),
+                             ({"umbrella": [3.14]}, "umbrella entry 3.14"),
+                             ({"umbrella": ["none"]}, "umbrella entry 'none'"),
+                             ({"umbrella": ["#0"]}, "umbrella entry '#0'"),
+                             ({"umbrella": ["abc"]}, "umbrella entry 'abc'"),
+                             ({"umbrella": [f"{SID_KIT}#x"]}, "umbrella entry"),
+                             ({"umbrella": ["o/..#1"]}, "umbrella entry")):
             with self.subTest(table=table), self.assertRaises(LaneError) as caught:
                 config.parse({"tickets": table})
             self.assertIn(words, str(caught.exception))

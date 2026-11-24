@@ -8,6 +8,16 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
 
 ### Added
 
+- Umbrella tickets and partial land flags in the ticket lifecycle (fathers#64):
+  - `[tickets] umbrella = [...]` accepts positive integer issue numbers or `owner/repo#N` / GitHub issue URL strings
+    with strict type validation. Umbrella tickets never get `Fixes #N` in `merge_message` (using `Refs #N` instead),
+    never get the `integrated` label in `after_land` (while still receiving a land comment noting they stay open),
+    warn on manual `Fixes #N` commits (`ticket.trailer_conflict`), and are skipped by `promote --ship` / `shipped`
+    release comments and label removal.
+  - `lanefather land <id> --partial [--remaining TEXT]` treats all tickets of the lane as partial for that land:
+    emits `Refs #N` instead of `Fixes #N`, skips the `integrated` label, includes `partial:` and `remaining: <TEXT>`
+    in the land comment, records `partial: true` (and `remaining`) on `record["landed"]`, skips release comments for
+    tickets that only landed partially, and causes follow-up `--fix-of` lanes to inherit partial scope.
 - Stale review verdict and delta reviews (fathers#53): `ReviewRecord` / `derive_verdict` now binds finished lane
   reviews to the reviewed tip/tree and returns `Stale(reviewed_tip, landed_tip)` when a landed or active lane's own
   diff changed after the reviewed commit (ignoring clean integration-branch merges and valid marked pre-land fixes).

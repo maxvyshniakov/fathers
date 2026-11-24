@@ -90,7 +90,7 @@ COMMANDS: dict[str, Command] = {
                     "<id> --for registered|landed|done [--timeout S] [--json]",
                     "fix-login --for landed --timeout 3600"),
     "land": Command("merge a green lane, smoke it, start its review",
-                    "<id> [--into WORKTREE] [--keep] [--slots N] [-m MESSAGE]",
+                    "<id> [--into WORKTREE] [--keep] [--partial [--remaining TEXT]] [--slots N] [-m MESSAGE]",
                     "fix-login --into .claude/worktrees/integrate"),
     "review": Command("a lane's review, its marks and its fix lane",
                       "<id> [--mark N fixed:<merge>|rejected:<reason>] [--fix-lane] [--compare] "
@@ -324,6 +324,11 @@ def parser(project: config.Config = config.DEFAULT) -> Parser:
                         "(default: slotfather advise --max 3)")
     p.add_argument("--keep", action="store_true",
                    help="leave the landed lane for done (another lane needs its artifacts)")
+    p.add_argument("--partial", action="store_true",
+                   help="treat this land as partial for every ticket of the lane: emit Refs #N and skip the "
+                        "integrated label")
+    p.add_argument("--remaining", metavar="TEXT",
+                   help="with --partial: note what work remains open on the ticket in the land comment")
     p.add_argument("--repair", action="store_true",
                    help="finish landing an active lane whose branch is already merged into the integration worktree")
     p.add_argument("--force-reason", help="override a missing green receipt or a review hold, with a logged reason")

@@ -81,7 +81,7 @@ KINDS: dict[str, str] = {
     "ticket.skipped": "the lane's issue was not marked: its smoke is not green",
     "ticket.release_commented": "a release commented on the issues it fixes",
     "ticket.failed": "a ticket rule failed; the action went on (warn)",
-    "ticket.trailer_conflict": "a lane commit or the merge says Fixes for a ticket the lane does only part of (warn)",
+    "ticket.trailer_conflict": "a lane commit or the merge says Fixes for a partial or umbrella ticket (warn)",
     "queue.updated": "a project policy rewrote the queue",
     "override": "a --force-reason overrode a refusal (warn)",
 }
