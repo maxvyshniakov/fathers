@@ -17,12 +17,16 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable, Iterator, Sequence
 import dataclasses
 import hashlib
+import json
 import os
 from pathlib import Path
 import posixpath
+import re
+import shlex
 import subprocess
 import sys
 import time
+import tomllib
 from typing import Any, cast
 
 from . import (
@@ -212,6 +216,7 @@ def perform_review(
     *,
     force: bool = False,
     project_override: config.Config | None = None,
+    paths: Sequence[str] = (),
 ) -> review_record.ReviewRecord:
     """Review base...tip with Sol, or Opus when Sol may not or cannot run; write and return the ReviewRecord.
     `finalize` completes a finished receipt before anyone can read it as finished."""
@@ -242,7 +247,7 @@ def perform_review(
             answer = runner.run(
                 label,
                 checkout,
-                reviewer.Request(standards, subject, base, tip, family, reviewers),
+                reviewer.Request(standards, subject, base, tip, family, reviewers, tuple(paths)),
                 output,
                 log,
             )
@@ -435,6 +440,20 @@ def _delta_review_lines(
     return [head, *_format_finding_lines(delta_findings)]
 
 
+def _overall_recovery_target(raw: dict[str, Any], label: str, *, for_rerun: bool = False) -> str:
+    """CLI target for recovering a died overall review or retrying its ticket filing."""
+    sha = raw.get("sha") or raw.get("tip")
+    base = f"--overall {sha[:10]}" if isinstance(sha, str) and sha else f"--overall {label}"
+    raw_area = raw.get("area")
+    if isinstance(raw_area, str) and raw_area:
+        return f"{base} --areas <file>" if for_rerun else f"{base} --area {raw_area}"
+    raw_paths: Any = raw.get("paths")
+    if isinstance(raw_paths, list) and raw_paths:
+        path_args = " ".join(f"--paths {shlex.quote(str(p))}" for p in cast(list[Any], raw_paths))
+        return f"{base} {path_args}"
+    return base
+
+
 def review_lines(
     rev: review_record.ReviewRecord,
     *,
@@ -450,9 +469,8 @@ def review_lines(
     if isinstance(verdict, review_record.Running):
         return [f"Review of {label}: running since {verdict.started} (pid {verdict.pid}, log {verdict.log})"]
     if isinstance(verdict, review_record.Died):
-        if raw.get("kind") == "overall" or label.startswith(("ship-", "batch-")):
-            sha = raw.get("sha") or raw.get("tip")
-            target = f"--overall {sha[:10]}" if isinstance(sha, str) and sha else f"--overall {label}"
+        if raw.get("kind") == "overall" or label.startswith(("ship-", "batch-", "paths-")):
+            target = _overall_recovery_target(raw, label, for_rerun=True)
         else:
             target = label
         return [f"Review of {label}: died (pid {verdict.pid}, log {verdict.log}): rerun {cmd_prog} review {target}"]
@@ -468,6 +486,15 @@ def review_lines(
         + f", {raw.get('seconds', 0):.0f} s"
     )
     scoped = scope_lines(raw, record, label, cmd_prog)
+    raw_area = raw.get("area")
+    raw_paths: Any = raw.get("paths")
+    path_globs = [str(p) for p in cast(list[Any], raw_paths)] if isinstance(raw_paths, list) else []
+    if isinstance(raw_area, str) and raw_area:
+        scoped.append(
+            f"Area: {raw_area}" + (f" (paths: {', '.join(path_globs)})" if path_globs else "")
+        )
+    elif path_globs:
+        scoped.append(f"Paths: {', '.join(path_globs)}")
     if not rev.has_finished_receipt:
         error = verdict.error if isinstance(verdict, review_record.Failed) else None
         return [head, *scoped, f"review failed: {error}"]
@@ -504,8 +531,8 @@ def review_lines(
         lines.append(f"Ticket: {raw['issue']}")
     elif raw.get("issue_error"):
         lines.append(
-            f"Ticket not filed: {raw['issue_error']}; {cmd_prog} review --overall "
-            f"{str(raw.get('tip', ''))[:10]} files it again"
+            f"Ticket not filed: {raw['issue_error']}; {cmd_prog} review "
+            f"{_overall_recovery_target(raw, label)} files it again"
         )
     pre_land = rev.pre_land_fix(record)
     if pre_land is not None:
@@ -1616,6 +1643,20 @@ def hand_over(args: Any, store: state.Store) -> int:
     return 0
 
 
+# GitHub caps label names at 50 chars; `area:<name>` leaves 45 chars for `<name>`.
+AREA_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,44}$")
+AREA_LABEL_COLOR = "1D76DB"
+
+
+def _validate_area_name(name: str, *, context: str) -> str:
+    if not AREA_NAME_RE.fullmatch(name) or name in (".", ".."):
+        raise LaneError(
+            f"{context}: invalid area name {name!r} "
+            "(1-45 chars of letters, digits, '.', '_' or '-', starting with a letter or digit)"
+        )
+    return name
+
+
 def ship_review_label(sha: str) -> str:
     return f"ship-{sha[:12]}"
 
@@ -1624,6 +1665,89 @@ def batch_review_label(sha: str, covered_ids: Sequence[str]) -> str:
     """Distinct receipt label for a batch `--overall --lanes` review so it never collides with `ship-<sha>`."""
     digest = hashlib.sha256(",".join(sorted(covered_ids)).encode()).hexdigest()[:8]
     return f"batch-{sha[:12]}-{digest}"
+
+
+def area_review_label(sha: str, area: str) -> str:
+    """Distinct deterministic receipt label for an `--overall --areas` area review (fathers#155)."""
+    return f"ship-{sha[:12]}-{area}"
+
+
+def paths_review_label(sha: str, globs: Sequence[str]) -> str:
+    """Distinct deterministic receipt label for an `--overall --paths` review (fathers#155)."""
+    digest = hashlib.sha256("\0".join(sorted(set(globs))).encode()).hexdigest()[:8]
+    return f"paths-{sha[:12]}-{digest}"
+
+
+def _normalize_path_globs(raw: Any, *, context: str) -> list[str]:
+    """Validate and deduplicate a non-empty sequence of path globs."""
+    if not isinstance(raw, list) or not raw:
+        raise LaneError(f"{context}: expected a non-empty list of path globs")
+    cleaned: list[str] = []
+    for item in cast(list[Any], raw):
+        if not isinstance(item, str) or not item.strip() or "\n" in item or "\r" in item or "\x00" in item:
+            raise LaneError(f"{context}: invalid path glob {item!r}")
+        cleaned.append(item.strip())
+    return list(dict.fromkeys(cleaned))
+
+
+def _load_areas(path_str: str) -> list[tuple[str, list[str]]]:
+    """Read named path groups from a TOML (`[areas]` table or top-level) or JSON file (fathers#155)."""
+    path = Path(path_str)
+    if not path.is_file():
+        raise LaneError(f"--areas {path_str}: file does not exist")
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as error:
+        raise LaneError(f"--areas {path_str}: could not read UTF-8 file ({error})") from None
+    if not text.strip():
+        raise LaneError(f"--areas {path_str}: areas file is empty")
+    if path.suffix.lower() == ".json":
+        try:
+            parsed: Any = json.loads(text)
+        except ValueError as error:
+            raise LaneError(f"--areas {path_str}: invalid JSON ({error})") from None
+        if not isinstance(parsed, dict):
+            raise LaneError(f"--areas {path_str}: JSON areas file must be an object mapping area names to glob lists")
+        data = cast(dict[str, Any], parsed)
+    else:
+        try:
+            data = tomllib.loads(text)
+        except tomllib.TOMLDecodeError as error:
+            raise LaneError(f"--areas {path_str}: invalid TOML ({error})") from None
+    if "areas" in data and isinstance(data["areas"], dict):
+        extra = [k for k in data if k != "areas"]
+        if extra:
+            raise LaneError(
+                f"--areas {path_str}: unexpected top-level keys beside [areas]: {', '.join(extra)}"
+            )
+        table = cast(dict[str, Any], data["areas"])
+    else:
+        table = data
+    if not table:
+        raise LaneError(f"--areas {path_str}: areas file defines no areas")
+    result: list[tuple[str, list[str]]] = []
+    seen_lower: set[str] = set()
+    for raw_name, raw_globs in table.items():
+        name = _validate_area_name(str(raw_name), context=f"--areas {path_str}")
+        lowered = name.lower()
+        if lowered in seen_lower:
+            raise LaneError(f"--areas {path_str}: duplicate area name {name!r} (case-insensitive)")
+        seen_lower.add(lowered)
+        globs = _normalize_path_globs(raw_globs, context=f"--areas {path_str} area {name!r}")
+        result.append((name, globs))
+    return result
+
+
+def _matching_diff_paths(
+    main: str, base: str, tip: str, globs: Sequence[str], project: config.Config
+) -> list[str]:
+    """Changed repo-relative paths in `base...tip` matching at least one glob in `globs`."""
+    out = git(main, "diff", "--name-only", "-z", "--no-renames", f"{base}...{tip}")
+    changed = [line for line in out.split("\x00") if line]
+    if not changed:
+        return []
+    claims.prefetch_kinds(globs, root=main, project=project)
+    return [p for p in changed if any(claims.matches(g, p, root=main, project=project) for g in globs)]
 
 
 def start_overall_review(store: state.Store, cwd: str, sha: str, base: str) -> str:
@@ -1663,6 +1787,10 @@ def file_ticket(store: state.Store, payload: dict[str, Any], common: str) -> Non
     findings = payload.get("findings", [])
     if not findings or payload.get("issue"):
         return
+    raw_area = payload.get("area")
+    area = raw_area if isinstance(raw_area, str) and raw_area else None
+    raw_paths: Any = payload.get("paths")
+    path_globs = [str(p) for p in cast(list[Any], raw_paths)] if isinstance(raw_paths, list) else []
     items: list[str] = []
     for f in findings:
         where = (
@@ -1675,20 +1803,54 @@ def file_ticket(store: state.Store, payload: dict[str, Any], common: str) -> Non
         category = f" `{f['category']}`" if f.get("category") else ""
         items.append(f"- [ ] **{f['severity']}**{category}{where} {f['title']}")
         items += [f"  {line}" for line in f.get("detail", "").splitlines() if line.strip()]
+    scope_note = ""
+    if area:
+        globs_text = f" (`{', '.join(path_globs)}`)" if path_globs else ""
+        scope_note = f" Area: `{area}`{globs_text}."
+    elif path_globs:
+        scope_note = f" Paths: `{', '.join(path_globs)}`."
     body = (
         f"Found by the overall review before main (`{store.prog} promote --ship`) of "
         f"{payload['base'][:10]}..{payload['tip'][:10]}, by {payload.get('model')} at {payload.get('effort')} "
-        f"effort. For {store.project.queue_name}: split what holds into tickets there, and tick each item "
+        f"effort.{scope_note} For {store.project.queue_name}: split what holds into tickets there, and tick each item "
         f"once it is fixed or rejected.\n\n" + "\n".join(items) + "\n"
     )
+    title = (
+        f"Overall review of {payload['tip'][:10]} ({area}): {len(findings)} findings"
+        if area
+        else f"Overall review of {payload['tip'][:10]}: {len(findings)} findings"
+    )
+    area_label = f"area:{area}" if area else None
+    labels = (area_label,) if area_label else ()
     issue_url, issue_error = github.issue_create(
-        f"Overall review of {payload['tip'][:10]}: {len(findings)} findings",
+        title,
         body,
+        labels=labels,
         common=common,
         project=store.project,
     )
+    if not issue_url and area_label and issue_error and "not found" in issue_error.lower():
+        repo = github.repository(common, store.project.tickets)
+        created = github.label_create(
+            repo,
+            area_label,
+            color=AREA_LABEL_COLOR,
+            description=f"Overall review findings for area {area}",
+            common=common,
+            project=store.project,
+        )
+        if created is None or "already exists" in created:
+            issue_url, issue_error = github.issue_create(
+                title,
+                body,
+                labels=labels,
+                common=common,
+                project=store.project,
+            )
     if issue_url:
         payload["issue"] = issue_url
+        if area_label:
+            payload["issue_label"] = area_label
         payload.pop("issue_error", None)
     else:
         payload["issue_error"] = issue_error
@@ -1698,7 +1860,11 @@ def file_ticket(store: state.Store, payload: dict[str, Any], common: str) -> Non
         kind="review.ticket_filed",
         level="info" if payload.get("issue") else "warn",
         subject={"type": "review", "id": payload["label"]},
-        details={"issue": payload.get("issue"), "error": payload.get("issue_error")},
+        details={
+            "issue": payload.get("issue"),
+            "error": payload.get("issue_error"),
+            **({"area": area, "label": area_label} if area_label else {}),
+        },
         store=store,
     )
 
@@ -1726,9 +1892,20 @@ def ticket_state(rev: review_record.ReviewRecord) -> str:
     return f"ticket {raw['issue']}" if raw.get("issue") else f"the ticket is not filed ({raw.get('issue_error')})"
 
 
-def _resolve_overall_mark_label(store: state.Store, sha: str, covered_ids: list[str]) -> str:
+def _resolve_overall_mark_label(
+    store: state.Store,
+    sha: str,
+    covered_ids: list[str],
+    *,
+    paths: Sequence[str] = (),
+    area: str | None = None,
+) -> str:
     if covered_ids:
         return batch_review_label(sha, covered_ids)
+    if area:
+        return area_review_label(sha, area)
+    if paths:
+        return paths_review_label(sha, paths)
     ship_lbl = ship_review_label(sha)
     if review_record.ReviewRecord.load(store, ship_lbl).exists:
         return ship_lbl
@@ -1743,15 +1920,148 @@ def _resolve_overall_mark_label(store: state.Store, sha: str, covered_ids: list[
     return ship_lbl
 
 
-def overall_review(args: Any, store: state.Store) -> int:
+def _existing_overall_result(
+    args: Any,
+    store: state.Store,
+    existing: review_record.ReviewRecord,
+    *,
+    label: str,
+    common: str,
+    covered_ids: list[str],
+    path_globs: Sequence[str] = (),
+    area: str | None = None,
+) -> int | None:
+    """Return an exit code when `existing` already handles the request without starting a new review, else None."""
+    if args.force_reason:
+        return None
+    prog = store.prog
+    verdict = existing.verdict
+    if isinstance(verdict, (review_record.Unmarked, review_record.Complete)):
+        if area and path_globs:
+            raw_recorded: Any = (existing.raw or {}).get("paths")
+            recorded_paths = [str(p) for p in cast(list[Any], raw_recorded)] if isinstance(raw_recorded, list) else []
+            if recorded_paths and recorded_paths != list(path_globs):
+                raise LaneError(
+                    f"area {area!r} ({label}) was already reviewed with different paths "
+                    f"({', '.join(recorded_paths)} vs {', '.join(path_globs)}); "
+                    "pass --force-reason <why> to review it again"
+                )
+        if not covered_ids:
+            retried = retry_ticket(store, label, common)
+            print("\n".join(review_lines(retried, prog=prog)))
+            return 1 if (retried.raw or {}).get("issue_error") else 0
+        print("\n".join(review_lines(existing, prog=prog)))
+        return 0
+    if isinstance(verdict, review_record.PartialPanel):
+        print("\n".join(review_lines(existing, prog=prog)))
+        print(f"Overall review {label}: {existing.summary()[1]}")
+        return 1
+    if isinstance(verdict, review_record.Running) and verdict.pid != os.getpid():
+        print("\n".join(review_lines(existing, prog=prog)))
+        return 0
+    return None
+
+
+def _run_overall_target(
+    args: Any,
+    store: state.Store,
+    *,
+    label: str,
+    common: str,
+    sha: str,
+    base: str,
+    covered_ids: list[str],
+    path_globs: Sequence[str] = (),
+    matched_paths: Sequence[str] = (),
+    area: str | None = None,
+) -> int:
     prog = store.prog
     panel_required = store.project.review_panel_required
+    fields: dict[str, Any] = {
+        "kind": "overall",
+        "sha": sha,
+        **({"covers": covered_ids} if covered_ids else {}),
+        **({"area": area} if area else {}),
+        **({"paths": list(path_globs)} if path_globs else {}),
+    }
+    record_file = getattr(args, "record", None)
+    if record_file:
+        alias = getattr(args, "reviewer", None)
+        if not alias:
+            raise LaneError("--record requires --reviewer <alias>")
+        main = main_checkout(common)
+        tree = git(main, "rev-parse", sha + "^{tree}")
+        completed = _record_external_review(
+            store, label, fields, base=base, tip=sha, tree=tree,
+            report_path=record_file, alias=alias, force=bool(args.force_reason),
+        )
+        print("\n".join(review_lines(completed, prog=prog)))
+        return 0
+    if covered_ids:
+        subject = (
+            f"Batch review covering lanes {', '.join(covered_ids)}: every change from {base[:10]} to "
+            f"{sha[:10]}. Review each covered lane's changes and the seams between them."
+        )
+    elif area:
+        subject = (
+            f"Area review '{area}' (paths: {', '.join(path_globs)}) of the overall change from {base[:10]} to "
+            f"{sha[:10]}. Look for seams between changes in this area as well as bugs in each."
+        )
+    elif path_globs:
+        subject = (
+            f"Path-filtered overall review (paths: {', '.join(path_globs)}) from {base[:10]} to "
+            f"{sha[:10]}. Look for seams between changes in these paths as well as bugs in each."
+        )
+    else:
+        subject = (
+            f"The overall review before main ({prog} promote --ship): every change from {base[:10]} to "
+            f"{sha[:10]}, many lanes at once. Look for seams between them as well as bugs in each."
+        )
+
+    def _finalize_overall(finished: dict[str, Any]) -> None:
+        if not covered_ids and isinstance(
+            review_record.derive_verdict(finished, panel_required=panel_required),
+            (review_record.Unmarked, review_record.Complete),
+        ):
+            file_ticket(store, finished, common)
+
+    completed = perform_review(
+        store,
+        label,
+        fields,
+        main_checkout(common),
+        base,
+        sha,
+        subject,
+        finalize=_finalize_overall,
+        reviewers=asked_reviewers(args, store.project),
+        force=bool(args.force_reason),
+        paths=matched_paths,
+    )
+    print("\n".join(review_lines(completed, prog=prog)))
+    if isinstance(completed.verdict, review_record.PartialPanel):
+        print(f"Overall review {label}: {completed.summary()[1]}")
+        return 1
+    finished_ok = isinstance(completed.verdict, (review_record.Unmarked, review_record.Complete))
+    return 0 if finished_ok and not (completed.raw or {}).get("issue_error") else 1
+
+
+def overall_review(args: Any, store: state.Store) -> int:
+    prog = store.prog
     cwd = os.getcwd()
     common = common_dir(cwd)
+    main = main_checkout(common)
     sha = git(cwd, "rev-parse", "--verify", args.overall + "^{commit}")
     covered_ids = _parse_lanes_option(getattr(args, "lanes", None))
+    raw_paths = getattr(args, "paths", None)
+    path_globs = _normalize_path_globs(raw_paths, context="--paths") if raw_paths else []
+    areas_file = getattr(args, "areas", None)
+    areas = _load_areas(areas_file) if areas_file else []
+    raw_area_flag = getattr(args, "area", None)
+    area_flag = _validate_area_name(raw_area_flag, context="--area") if raw_area_flag else None
+
     if args.mark:
-        label = _resolve_overall_mark_label(store, sha, covered_ids)
+        label = _resolve_overall_mark_label(store, sha, covered_ids, paths=path_globs, area=area_flag)
         result = review_record.ReviewRecord.mark_label(store, label, common, args.mark)
         for app in result.applied:
             journal.ledger(
@@ -1775,7 +2085,84 @@ def overall_review(args: Any, store: state.Store) -> int:
         else:
             print(f"Overall review {label}: {words}")
         return 0
-    label = batch_review_label(sha, covered_ids) if covered_ids else ship_review_label(sha)
+
+    if area_flag:
+        label = area_review_label(sha, area_flag)
+        existing = review_record.ReviewRecord.load(store, label)
+        rc = _existing_overall_result(args, store, existing, label=label, common=common, covered_ids=[])
+        if rc is not None:
+            return rc
+        raise LaneError(
+            f"no finished or running area review for {area_flag!r} at {sha[:10]}; "
+            f"run {prog} review --overall {sha[:10]} --since <base> --areas <file>"
+        )
+
+    if areas:
+        saved_base: str | None = None
+        if not args.since:
+            for area_name, _ in areas:
+                existing_area = review_record.ReviewRecord.load(store, area_review_label(sha, area_name))
+                if existing_area.raw and existing_area.raw.get("base"):
+                    saved_base = str(existing_area.raw["base"])
+                    break
+        since = args.since or saved_base
+        if not since:
+            raise LaneError(
+                "give --since <base>: the overall review covers <base>..<sha> (promote --ship gives origin/main)"
+            )
+        base = git(cwd, "merge-base", git(cwd, "rev-parse", "--verify", since + "^{commit}"), sha)
+        had_error = False
+        reviewed_any = False
+        for area_name, area_globs in areas:
+            matched = _matching_diff_paths(main, base, sha, area_globs, store.project)
+            if not matched:
+                print(
+                    f"Area {area_name}: no matching changes in {base[:10]}..{sha[:10]} "
+                    f"(paths: {', '.join(area_globs)}); skipped."
+                )
+                continue
+            reviewed_any = True
+            area_label = area_review_label(sha, area_name)
+            existing_area = review_record.ReviewRecord.load(store, area_label)
+            existing_rc = _existing_overall_result(
+                args,
+                store,
+                existing_area,
+                label=area_label,
+                common=common,
+                covered_ids=[],
+                path_globs=area_globs,
+                area=area_name,
+            )
+            if existing_rc is not None:
+                if existing_rc != 0:
+                    had_error = True
+                continue
+            rc = _run_overall_target(
+                args,
+                store,
+                label=area_label,
+                common=common,
+                sha=sha,
+                base=base,
+                covered_ids=[],
+                path_globs=area_globs,
+                matched_paths=matched,
+                area=area_name,
+            )
+            if rc != 0:
+                had_error = True
+        if not reviewed_any:
+            print(f"No areas matched any changes in {base[:10]}..{sha[:10]}.")
+        return 1 if had_error else 0
+
+    label = (
+        batch_review_label(sha, covered_ids)
+        if covered_ids
+        else paths_review_label(sha, path_globs)
+        if path_globs
+        else ship_review_label(sha)
+    )
     covered_records: list[Record] = []
     for lane_id in covered_ids:
         rec = store.load(lane_id)
@@ -1790,21 +2177,11 @@ def overall_review(args: Any, store: state.Store) -> int:
             raise LaneError(f"--lanes {lane_id}: landed merge {merge_sha[:10]} is not an ancestor of {sha[:10]}")
         covered_records.append(rec)
     existing = review_record.ReviewRecord.load(store, label)
-    verdict = existing.verdict
-    if isinstance(verdict, (review_record.Unmarked, review_record.Complete)) and not args.force_reason:
-        if not covered_ids:
-            retried = retry_ticket(store, label, common)
-            print("\n".join(review_lines(retried, prog=prog)))
-            return 1 if (retried.raw or {}).get("issue_error") else 0
-        print("\n".join(review_lines(existing, prog=prog)))
-        return 0
-    if isinstance(verdict, review_record.PartialPanel) and not args.force_reason:
-        print("\n".join(review_lines(existing, prog=prog)))
-        print(f"Overall review {label}: {existing.summary()[1]}")
-        return 1
-    if isinstance(verdict, review_record.Running) and verdict.pid != os.getpid() and not args.force_reason:
-        print("\n".join(review_lines(existing, prog=prog)))
-        return 0
+    existing_rc = _existing_overall_result(
+        args, store, existing, label=label, common=common, covered_ids=covered_ids
+    )
+    if existing_rc is not None:
+        return existing_rc
     # A rerun of a failed or killed review keeps its base.
     saved_base = str(existing.raw["base"]) if existing.raw and existing.raw.get("base") else None
     since = args.since or saved_base
@@ -1841,60 +2218,25 @@ def overall_review(args: Any, store: state.Store) -> int:
                 f"--lanes {rec['id']}: --since base {base[:10]} is not an ancestor of lane's pre-merge commit "
                 f"{str(prev_sha or '')[:10]}; give an earlier --since base"
             )
-    fields: dict[str, Any] = {
-        "kind": "overall",
-        "sha": sha,
-        **({"covers": covered_ids} if covered_ids else {}),
-    }
-    record_file = getattr(args, "record", None)
-    if record_file:
-        alias = getattr(args, "reviewer", None)
-        if not alias:
-            raise LaneError("--record requires --reviewer <alias>")
-        main = main_checkout(common)
-        tree = git(main, "rev-parse", sha + "^{tree}")
-        completed = _record_external_review(
-            store, label, fields, base=base, tip=sha, tree=tree,
-            report_path=record_file, alias=alias, force=bool(args.force_reason),
-        )
-        print("\n".join(review_lines(completed, prog=prog)))
-        return 0
-    if covered_ids:
-        subject = (
-            f"Batch review covering lanes {', '.join(covered_ids)}: every change from {base[:10]} to "
-            f"{sha[:10]}. Review each covered lane's changes and the seams between them."
-        )
-    else:
-        subject = (
-            f"The overall review before main ({prog} promote --ship): every change from {base[:10]} to "
-            f"{sha[:10]}, many lanes at once. Look for seams between them as well as bugs in each."
-        )
-
-    def _finalize_overall(finished: dict[str, Any]) -> None:
-        if not covered_ids and isinstance(
-            review_record.derive_verdict(finished, panel_required=panel_required),
-            (review_record.Unmarked, review_record.Complete),
-        ):
-            file_ticket(store, finished, common)
-
-    completed = perform_review(
+    matched_paths: list[str] = []
+    if path_globs:
+        matched_paths = _matching_diff_paths(main, base, sha, path_globs, store.project)
+        if not matched_paths:
+            print(
+                f"No changes in {base[:10]}..{sha[:10]} match --paths {', '.join(path_globs)}; skipping review."
+            )
+            return 0
+    return _run_overall_target(
+        args,
         store,
-        label,
-        fields,
-        main_checkout(common),
-        base,
-        sha,
-        subject,
-        finalize=_finalize_overall,
-        reviewers=asked_reviewers(args, store.project),
-        force=bool(args.force_reason),
+        label=label,
+        common=common,
+        sha=sha,
+        base=base,
+        covered_ids=covered_ids,
+        path_globs=path_globs,
+        matched_paths=matched_paths,
     )
-    print("\n".join(review_lines(completed, prog=prog)))
-    if isinstance(completed.verdict, review_record.PartialPanel):
-        print(f"Overall review {label}: {completed.summary()[1]}")
-        return 1
-    finished_ok = isinstance(completed.verdict, (review_record.Unmarked, review_record.Complete))
-    return 0 if finished_ok and not (completed.raw or {}).get("issue_error") else 1
 
 
 def review(args: Any, store: state.Store) -> int:
@@ -1902,13 +2244,34 @@ def review(args: Any, store: state.Store) -> int:
     is_audit = bool(getattr(args, "audit", False))
     reviewer_flag = getattr(args, "reviewer", None)
     has_lanes = bool(getattr(args, "lanes", None))
+    has_paths = bool(getattr(args, "paths", None))
+    areas_file = getattr(args, "areas", None)
+    area_flag = getattr(args, "area", None)
     if has_lanes and not args.overall:
         raise LaneError("--lanes goes with --overall <sha>")
+    if has_paths and not args.overall:
+        raise LaneError("--paths goes with --overall <sha>")
+    if areas_file and not args.overall:
+        raise LaneError("--areas goes with --overall <sha>")
+    if area_flag and not args.overall:
+        raise LaneError("--area goes with --overall <sha>")
+    if has_paths and areas_file:
+        raise LaneError("--paths and --areas do not combine")
+    if area_flag and (has_paths or areas_file or has_lanes):
+        raise LaneError("--area does not combine with --paths, --areas or --lanes")
+    if (has_paths or areas_file) and has_lanes:
+        raise LaneError("--lanes does not combine with --paths or --areas")
     if args.overall:
         if args.id:
             raise LaneError("--overall does not take a lane id")
         if getattr(args, "compare", False) or args.fix_lane or is_audit:
             raise LaneError("--overall does not combine with --compare, --fix-lane or --audit")
+        if areas_file and record_file:
+            raise LaneError("--areas does not combine with --record")
+        if areas_file and args.mark:
+            raise LaneError("--areas does not combine with --mark")
+        if area_flag and record_file:
+            raise LaneError("--area does not combine with --record")
         if record_file and args.mark:
             raise LaneError("--record does not combine with --mark")
         return overall_review(args, store)

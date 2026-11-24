@@ -41,6 +41,7 @@ ROLE_TIMEOUT = LIMIT_TIMEOUT + 15
 REVIEW_TIMEOUT = 30 * 60
 OPUS_TOOLS = "Read,Grep,Glob,Bash(git diff:*),Bash(git log:*),Bash(git show:*)"
 MAX_INLINE_DIFF = 400_000
+DIFF_PATH_BATCH = 500
 MAX_FINDINGS = 8
 SEVERITIES = ("P1", "P2", "P3")
 # package-misuse: a use of a dependency package against its documented API; the friction journal counts these.
@@ -81,6 +82,8 @@ class Request:
     family: str | None = None
     # `review --reviewer` (fathers#155): the reviewers this review must run, whatever the Codex limit; () chooses.
     reviewers: tuple[str, ...] = ()
+    # `review --overall --paths/--areas` (fathers#155): restrict the diff to matched repo-relative file paths.
+    paths: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -756,6 +759,28 @@ def _restore_checkout(checkout: str) -> None:
 
 def _inline_diff(checkout: str, request: Request) -> str:
     """The diff itself, for a reviewer without a shell beyond git (Claude, Antigravity) and for every panel member."""
+    if request.paths:
+        chunks: list[str] = []
+        total = 0
+        truncated = False
+        batch_size = max(1, DIFF_PATH_BATCH)
+        for offset in range(0, len(request.paths), batch_size):
+            batch = request.paths[offset : offset + batch_size]
+            pathspecs = [f":(literal){p}" for p in batch]
+            part = git(checkout, "diff", "--no-renames", f"{request.base}...{request.tip}", "--", *pathspecs)
+            if part:
+                if chunks and not chunks[-1].endswith("\n"):
+                    chunks.append("\n")
+                    total += 1
+                chunks.append(part)
+                total += len(part)
+                if total > MAX_INLINE_DIFF:
+                    truncated = True
+                    break
+        diff = "".join(chunks)
+        if truncated or len(diff) > MAX_INLINE_DIFF:
+            diff = diff[:MAX_INLINE_DIFF] + "\n[diff truncated: read the rest with git diff]"
+        return diff
     diff = git(checkout, "diff", f"{request.base}...{request.tip}")
     if len(diff) > MAX_INLINE_DIFF:
         diff = diff[:MAX_INLINE_DIFF] + "\n[diff truncated: read the rest with git diff]"
@@ -1089,6 +1114,21 @@ def _t3_antigravity(home: Path) -> str | None:
 def _review_prompt(cfg: Config, request: Request, diff: str | None) -> str:
     """The reviewer gets the diff, the accepted scope and the coding standards; never the lane's report."""
     standards, subject, base, tip = request.standards, request.subject, request.base, request.tip
+    if request.paths:
+        shown = ", ".join(request.paths[:30]) + (
+            f" (+{len(request.paths) - 30} more)" if len(request.paths) > 30 else ""
+        )
+        change_lines = [
+            f"The change is `git diff {base}...{tip} -- <paths>` in this checkout (HEAD is {tip}), restricted to "
+            f"{len(request.paths)} matching file(s): {shown}.",
+            "Review only these paths and the code around them; do not modify files.",
+        ]
+    else:
+        change_lines = [
+            f"The change is `git diff {base}...{tip}` in this checkout (HEAD is {tip}). Read it and the code "
+            "around it;",
+            "do not modify files.",
+        ]
     lines = [
         f"You review one change to the {cfg.project} repository before it reaches the owner's machine. Report",
         "correctness bugs and breaks of the coding standards below; no style nits and no praise.",
@@ -1103,8 +1143,7 @@ def _review_prompt(cfg: Config, request: Request, diff: str | None) -> str:
         "",
         "## The change",
         "",
-        f"The change is `git diff {base}...{tip}` in this checkout (HEAD is {tip}). Read it and the code around it;",
-        "do not modify files.",
+        *change_lines,
         "",
         "## Design",
         "",

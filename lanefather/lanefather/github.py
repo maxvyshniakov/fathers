@@ -116,6 +116,7 @@ def issue_create(
     title: str,
     body: str,
     *,
+    labels: Sequence[str] = (),
     common: str | None = None,
     repo: str | None = None,
     project: config.Config | None = None,
@@ -123,8 +124,12 @@ def issue_create(
     timeout: float | None = None,
 ) -> tuple[str | None, str | None]:
     """Create an issue via `gh issue create`; returns `(issue_url, error)`."""
+    cmd = ["issue", "create", "--title", title, "--body", body]
+    for label in labels:
+        if label:
+            cmd.extend(["--label", label])
     result = run_gh(
-        ["issue", "create", "--title", title, "--body", body],
+        cmd,
         project=project,
         repo=repo,
         common=common,
@@ -139,7 +144,8 @@ def issue_create(
 def _run_status(
     args: Sequence[str],
     *,
-    repo: str,
+    repo: str | None = None,
+    common: str | None = None,
     project: config.Config | None = None,
     env: Mapping[str, str] | None = None,
     timeout: float | None = None,
@@ -150,6 +156,7 @@ def _run_status(
             args,
             project=project,
             repo=repo,
+            common=common,
             env=env,
             timeout=timeout,
             stdin_devnull=stdin_devnull,
@@ -193,11 +200,12 @@ def issue_edit(
 
 
 def label_create(
-    repo: str,
+    repo: str | None,
     name: str,
     *,
     color: str,
     description: str,
+    common: str | None = None,
     project: config.Config | None = None,
     env: Mapping[str, str] | None = None,
     timeout: float | None = None,
@@ -207,6 +215,7 @@ def label_create(
         ["label", "create", name, "--color", color, "--description", description],
         project=project,
         repo=repo,
+        common=common,
         env=env,
         timeout=timeout,
     )
