@@ -7,9 +7,9 @@ from pathlib import Path
 from typing import Any
 import unittest
 
-from support import LaneCase
+from support import NO_FINDINGS, LaneCase
 
-from lanefather import config, done, review, review_gate, review_record, state, status
+from lanefather import config, done, history, review, review_class, review_gate, review_record, state, status
 
 
 def _make_fake_gh(
@@ -72,8 +72,19 @@ class ReviewRecoverTests(LaneCase):
             )
         )
 
-    def _land_lane(self, lane_id: str, ticket: str, file_path: str, content: str) -> tuple[dict[str, Any], str]:
-        self.lane("start", lane_id, "--ticket", ticket, "--base", "integrate/q", "--claims", file_path, "--create")
+    def _land_lane(
+        self,
+        lane_id: str,
+        ticket: str,
+        file_path: str,
+        content: str,
+        *,
+        extra_start: tuple[str, ...] = (),
+    ) -> tuple[dict[str, Any], str]:
+        self.lane(
+            "start", lane_id, "--ticket", ticket, "--base", "integrate/q", "--claims", file_path,
+            "--create", *extra_start,
+        )
         wt = Path(self.record(lane_id)["worktree"])
         self.commit(wt, {file_path: content})
         self.lane("check", lane_id)
@@ -95,6 +106,7 @@ class ReviewRecoverTests(LaneCase):
         source_url = "https://github.com/example/repo/issues/42#issuecomment-1001"
         body = (
             f"Historical review of lane hist (merge: {merge_sha[:10]}):\n"
+            "This lane is fine overall; Review of PR #12 notes:\n"
             f"1. lib/a.txt:1 Null check missing [fixed: {fix_sha[:10]}]\n"
             "2. lib/a.txt:2 Rename helper [rejected: matches public API]\n"
         )
@@ -103,11 +115,11 @@ class ReviewRecoverTests(LaneCase):
                 "1001": {
                     "id": 1001,
                     "body": body,
-                    "created_at": "2026-11-24T10:00:00Z",
+                    "created_at": "2099-01-01T10:00:00Z",
                     "user": {"login": "reviewer-bot"},
                 }
             },
-            issue_comments={"42": [{"createdAt": "2099-01-01T00:00:00Z", "body": body, "url": source_url}]},
+            issue_comments={"42": [{"createdAt": "2099-01-01T10:00:00Z", "body": body, "url": source_url}]},
         )
         out = self.lane("review", "hist", "--recover", "--source", source_url)
         self.assertIn("Recovered historical review evidence of hist (complete)", out)
@@ -142,10 +154,16 @@ class ReviewRecoverTests(LaneCase):
         self.assertEqual(report["unfinished"], [])
         self.assertEqual(report["blocking"], [])
 
+        # history.stats skips recovered receipts in review/reviewer metrics.
+        stats_report = history.stats(store, days=7, lane="hist")
+        self.assertEqual(stats_report["review"]["reviewed_lanes"], 0)
+        self.assertEqual(stats_report["reviewers"], [])
+
         # list, show (text + JSON), and status (text + JSON) distinguish recovered evidence from executed review.
         listed = json.loads(self.lane("list", "--json"))
         lane_row = next(r for r in listed["lanes"] if r["id"] == "hist")
         self.assertIn("recovered historical evidence", lane_row["receipt"])
+        self.assertIn("in target history", lane_row["receipt"])
 
         shown = json.loads(self.lane("show", "hist", "--json"))
         self.assertEqual(shown["review"]["status"], "recovered")
@@ -168,7 +186,6 @@ class ReviewRecoverTests(LaneCase):
         # Running `review hist` without --force-reason prints recovered evidence and does NOT rerun.
         rerun_check = self.lane("review", "hist")
         self.assertIn("Recovered historical review evidence of hist (complete)", rerun_check)
-        self.assertIn("recovered historical review evidence", rerun_check.lower())
 
         # `done` succeeds and preserves the recovered provenance record intact.
         self.lane("done", "hist")
@@ -179,7 +196,7 @@ class ReviewRecoverTests(LaneCase):
         self.assertEqual(after_done["dispositions"][0]["commit"], fix_sha)
 
     def test_auto_discovery_from_linked_ticket_when_source_omitted(self) -> None:
-        self._land_lane("auto-disc", "77", "lib/b.txt", "v1\n")
+        _rec, merge_sha = self._land_lane("auto-disc", "77", "lib/b.txt", "v1\n")
         fix_sha = self._add_integration_commit("lib/b.txt", "v2\n", "fix auto-disc")
         comment_url = "https://github.com/example/repo/issues/77#issuecomment-2002"
         self._set_gh(
@@ -187,8 +204,8 @@ class ReviewRecoverTests(LaneCase):
                 "77": [
                     {
                         "url": comment_url,
-                        "body": f"Review of auto-disc:\n1. Edge case [fixed: {fix_sha[:10]}]\n",
-                        "createdAt": "2026-11-24T11:00:00Z",
+                        "body": f"Review of auto-disc (merge: {merge_sha[:10]}):\n1. Edge case [fixed: {fix_sha[:10]}]\n",
+                        "createdAt": "2099-01-01T11:00:00Z",
                     }
                 ]
             },
@@ -198,8 +215,112 @@ class ReviewRecoverTests(LaneCase):
         self.assertTrue(raw["complete"])
         self.assertEqual(raw["sources"], [comment_url])
 
+    def test_prose_clean_phrase_unverified_scope_unrelated_issue_and_pre_creation_stay_partial(self) -> None:
+        rec, merge_sha = self._land_lane("strict", "55", "lib/strict.txt", "v1\n")
+        fix_sha = self._add_integration_commit("lib/strict.txt", "v2\n", "fix strict")
+        store = self._store()
+
+        # 1. Prose sentence containing "no issues found" stays partial even with matching merge.
+        url_prose = "https://github.com/example/repo/issues/55#issuecomment-5501"
+        self._set_gh(
+            comments_by_id={
+                "5501": {
+                    "id": 5501,
+                    "body": f"merge: {merge_sha[:10]}\nTried to reproduce on my laptop, no issues found.\n",
+                    "created_at": "2099-01-01T10:00:00Z",
+                }
+            },
+        )
+        out1 = self.lane("review", "strict", "--recover", "--source", url_prose, ok=False)
+        self.assertIn("partial", out1.lower())
+        self.assertIsInstance(
+            review_record.ReviewRecord.load(store, "strict", record=self.record("strict")).verdict,
+            review_record.PartialEvidence,
+        )
+
+        # 2. Standalone clean line paired with an unparsed finding-like line stays partial.
+        url_unparsed = "https://github.com/example/repo/issues/55#issuecomment-5502"
+        self._set_gh(
+            comments_by_id={
+                "5502": {
+                    "id": 5502,
+                    "body": f"merge: {merge_sha[:10]}\n- P1 lib/strict.txt:1 Broken check\n0 findings\n",
+                    "created_at": "2099-01-01T10:00:00Z",
+                }
+            },
+        )
+        out2 = self.lane("review", "strict", "--recover", "--source", url_unparsed, ok=False)
+        self.assertIn("unparsed finding-like", out2.lower())
+
+        # 3. Dispositions with no reviewed scope or matching merge stay partial ("reviewed scope unverified").
+        url_noscope = "https://github.com/example/repo/issues/55#issuecomment-5503"
+        self._set_gh(
+            comments_by_id={
+                "5503": {
+                    "id": 5503,
+                    "body": f"1. Bug [fixed: {fix_sha[:10]}]\n",
+                    "created_at": "2099-01-01T10:00:00Z",
+                }
+            },
+        )
+        out3 = self.lane("review", "strict", "--recover", "--source", url_noscope, ok=False)
+        self.assertIn("reviewed scope unverified", out3.lower())
+
+        # 4. Unrelated issue comment stays partial (scope mismatch on ticket).
+        url_other_issue = "https://github.com/example/repo/issues/999#issuecomment-5504"
+        self._set_gh(
+            comments_by_id={
+                "5504": {
+                    "id": 5504,
+                    "body": f"merge: {merge_sha[:10]}\nClean review.\n",
+                    "created_at": "2099-01-01T10:00:00Z",
+                }
+            },
+        )
+        out4 = self.lane("review", "strict", "--recover", "--source", url_other_issue, ok=False)
+        self.assertIn("not the lane's linked ticket", out4.lower())
+
+        # 5. Pre-lane-creation comment stays partial even with standalone clean statement and matching merge.
+        url_old_ts = "https://github.com/example/repo/issues/55#issuecomment-5505"
+        self._set_gh(
+            comments_by_id={
+                "5505": {
+                    "id": 5505,
+                    "body": f"merge: {merge_sha[:10]}\nClean review.\n",
+                    "created_at": "2020-01-01T00:00:00Z",
+                }
+            },
+        )
+        out5 = self.lane("review", "strict", "--recover", "--source", url_old_ts, ok=False)
+        self.assertIn("predates lane creation", out5.lower())
+
+        # Gate still holds `strict` after all partial attempts.
+        report = review_gate.gate_report(store, str(self.integration), rec["common_dir"], self.tip())
+        self.assertTrue(any(e["lane"] == "strict" for e in report["unfinished"]))
+
+    def test_refuses_active_lane_and_invalid_reviewed_range_upfront(self) -> None:
+        self.lane("start", "act", "--ticket", "60", "--base", "integrate/q", "--claims", "lib/act.txt", "--create")
+        wt = Path(self.record("act")["worktree"])
+        self.commit(wt, {"lib/act.txt": "v1\n"})
+        url = "https://github.com/example/repo/issues/60#issuecomment-6001"
+        self._set_gh(comments_by_id={"6001": {"id": 6001, "body": "Clean review.\n"}})
+
+        # Active (unlanded) lane is refused upfront.
+        refused_active = self.lane("review", "act", "--recover", "--source", url, ok=False)
+        self.assertIn("not landed", refused_active)
+        self.assertFalse((self.state / "act.review.json").exists())
+
+        # Land it, then test invalid --reviewed-range is refused upfront without writing a receipt.
+        self.lane("check", "act")
+        self.lane("land", "act", "--wait", "0", "--keep")
+        refused_range = self.lane(
+            "review", "act", "--recover", "--source", url, "--reviewed-range", "not-a-sha..HEAD", ok=False
+        )
+        self.assertIn("is not a commit", refused_range)
+        self.assertFalse((self.state / "act.review.json").exists())
+
     def test_partial_evidence_visibly_incomplete_and_never_satisfies_gate(self) -> None:
-        rec, _merge_sha = self._land_lane("part", "43", "lib/c.txt", "v1\n")
+        rec, merge_sha = self._land_lane("part", "43", "lib/c.txt", "v1\n")
         fix_sha = self._add_integration_commit("lib/c.txt", "v2\n", "fix 1")
         source_url = "https://github.com/example/repo/issues/43#issuecomment-1002"
         self._set_gh(
@@ -207,9 +328,11 @@ class ReviewRecoverTests(LaneCase):
                 "1002": {
                     "id": 1002,
                     "body": (
+                        f"merge: {merge_sha[:10]}\n"
                         f"1. P2 lib/c.txt:1 Fixed issue [fixed: {fix_sha[:10]}]\n"
                         "2. P1 lib/c.txt:2 Unresolved issue [open]\n"
                     ),
+                    "created_at": "2099-01-01T10:00:00Z",
                 }
             },
         )
@@ -221,21 +344,17 @@ class ReviewRecoverTests(LaneCase):
         self.assertIsInstance(rev.verdict, review_record.PartialEvidence)
         self.assertFalse(rev.allows_promote)
 
-        # Gate holds partial evidence.
         report = review_gate.gate_report(store, str(self.integration), rec["common_dir"], self.tip())
         self.assertTrue(any(e["lane"] == "part" for e in report["unfinished"]))
 
-        # show --json and status distinguish partial recovered evidence.
         shown = json.loads(self.lane("show", "part", "--json"))
         self.assertEqual(shown["review"]["status"], "recovered (partial)")
         self.assertFalse(shown["review"]["complete"])
 
-        # `done --finished` refuses partial evidence.
         readiness = done.done_readiness(self.record("part"), store)
         self.assertFalse(readiness.ready)
         self.assertIn("--recover", readiness.refusal or "")
 
-        # Running `review part` prints partial status and returns non-zero without blindly running duplicate review.
         check_out = self.lane("review", "part", ok=False)
         self.assertIn("partial", check_out.lower())
 
@@ -259,8 +378,7 @@ class ReviewRecoverTests(LaneCase):
         self.assertTrue(any(e["lane"] == "unavail" for e in report["unfinished"]))
 
     def test_fix_commit_not_in_target_history_is_partial_and_holds_gate(self) -> None:
-        rec, _merge_sha = self._land_lane("badfix", "45", "lib/e.txt", "v1\n")
-        # Create a commit on a side branch NOT merged into integration HEAD.
+        rec, merge_sha = self._land_lane("badfix", "45", "lib/e.txt", "v1\n")
         orig_branch = self.git(self.repo, "rev-parse", "--abbrev-ref", "HEAD")
         self.git(self.repo, "checkout", "-q", "-b", "unmerged-side")
         unmerged_sha = self.commit(self.repo, {"lib/side.txt": "side\n"}, message="unmerged fix")
@@ -271,7 +389,8 @@ class ReviewRecoverTests(LaneCase):
             comments_by_id={
                 "1005": {
                     "id": 1005,
-                    "body": f"1. Bug [fixed: {unmerged_sha[:10]}]\n",
+                    "body": f"merge: {merge_sha[:10]}\n1. Bug [fixed: {unmerged_sha[:10]}]\n",
+                    "created_at": "2099-01-01T10:00:00Z",
                 }
             },
         )
@@ -288,22 +407,20 @@ class ReviewRecoverTests(LaneCase):
         self.assertTrue(any(e["lane"] == "badfix" for e in report["unfinished"]))
 
     def test_scope_mismatch_and_lane_id_reuse_rejected_as_partial(self) -> None:
-        # 1. Land first incarnation of lane `reuse`, add a fix commit, and finish it.
         _rec1, _merge1 = self._land_lane("reuse", "46", "lib/r1.txt", "incarnation 1\n")
         fix1_sha = self._add_integration_commit("lib/r1.txt", "incarnation 1 fixed\n", "fix incarnation 1")
         self._set_gh()
         self.lane("done", "reuse", "--force-reason", "test reuse")
 
-        # 2. Reuse the exact same lane ID `reuse` for a brand new change.
-        rec2, _merge2 = self._land_lane("reuse", "47", "lib/r2.txt", "incarnation 2\n")
+        rec2, merge2 = self._land_lane("reuse", "47", "lib/r2.txt", "incarnation 2\n")
 
-        # 3. Try to recover incarnation 1's comment (naming fix1_sha, which predates incarnation 2's landed.previous).
         old_url = "https://github.com/example/repo/issues/46#issuecomment-9001"
         self._set_gh(
             comments_by_id={
                 "9001": {
                     "id": 9001,
                     "body": f"1. Old bug [fixed: {fix1_sha[:10]}]\n",
+                    "created_at": "2099-01-01T10:00:00Z",
                 }
             },
         )
@@ -318,14 +435,14 @@ class ReviewRecoverTests(LaneCase):
         report = review_gate.gate_report(store, str(self.integration), rec2["common_dir"], self.tip())
         self.assertTrue(any(e["lane"] == "reuse" for e in report["unfinished"]))
 
-        # 4. Also verify explicit --reviewed-range mismatch fails cleanly as partial.
         other_url = "https://github.com/example/repo/issues/47#issuecomment-9002"
         fix2_sha = self._add_integration_commit("lib/r2.txt", "incarnation 2 fixed\n", "fix incarnation 2")
         self._set_gh(
             comments_by_id={
                 "9002": {
                     "id": 9002,
-                    "body": f"1. New bug [fixed: {fix2_sha[:10]}]\n",
+                    "body": f"merge: {merge2[:10]}\n1. New bug [fixed: {fix2_sha[:10]}]\n",
+                    "created_at": "2099-01-01T10:00:00Z",
                 }
             },
         )
@@ -336,10 +453,9 @@ class ReviewRecoverTests(LaneCase):
         )
         self.assertIn("scope mismatch", out_range.lower())
 
-    def test_interrupted_duplicate_review_preserved_and_executed_review_refused(self) -> None:
-        rec, _merge_sha = self._land_lane("dup", "48", "lib/f.txt", "v1\n")
+    def test_interrupted_duplicate_review_preserved_and_executed_or_stale_review_refused(self) -> None:
+        rec, merge_sha = self._land_lane("dup", "48", "lib/f.txt", "v1\n")
         fix_sha = self._add_integration_commit("lib/f.txt", "v2\n", "fix dup")
-        # Seed an interrupted (dead PID) duplicate review with log file.
         reviews_dir = self.state / "reviews"
         reviews_dir.mkdir(parents=True, exist_ok=True)
         dup_log = reviews_dir / "dup.log"
@@ -360,17 +476,18 @@ class ReviewRecoverTests(LaneCase):
             comments_by_id={
                 "1008": {
                     "id": 1008,
-                    "body": f"1. Fixed issue [fixed: {fix_sha[:10]}]\n",
+                    "body": f"merge: {merge_sha[:10]}\n1. Fixed issue [fixed: {fix_sha[:10]}]\n",
+                    "created_at": "2099-01-01T10:00:00Z",
                 }
             },
         )
         out = self.lane("review", "dup", "--recover", "--source", source_url)
         self.assertIn("preserved artifacts: 1", out)
 
-        # Original log file is untouched and prior receipt is preserved inside `preserved_artifacts`.
         self.assertEqual(dup_log.read_text(encoding="utf-8"), "partial interrupted review log\n")
         raw = self.review("dup")
         self.assertEqual(len(raw["preserved_artifacts"]), 1)
+        self.assertEqual(raw["preserved_artifacts"][0]["kind"], "died_review")
         self.assertEqual(raw["preserved_artifacts"][0]["phase"], "died")
         self.assertEqual(raw["preserved_artifacts"][0]["receipt"]["pid"], 999_999_999)
         self.assertIn(str(dup_log), raw["preserved_artifacts"][0]["files"])
@@ -397,15 +514,115 @@ class ReviewRecoverTests(LaneCase):
         self.assertIn("already has an executed review receipt", refused)
         self.assertEqual((self.state / "exec.review.json").read_bytes(), before_bytes)
 
+        # Stale executed review also gives clear refusal (not "cannot apply 'recover' in phase 'finished'").
+        rec_stale, _ = self._land_lane("stale-ex", "52", "lib/st.txt", "v1\n")
+        review_record.ReviewRecord.begin(
+            store,
+            "stale-ex",
+            {
+                "kind": "lane",
+                "lane": "stale-ex",
+                "lane_created": rec_stale["created"],
+                "tip": rec_stale["landed"]["previous"],
+            },
+            pid=live_pid,
+            log=None,
+            effort="medium",
+        )
+        review_record.ReviewRecord.finish(
+            store,
+            "stale-ex",
+            {"reviewer": "sol", "model": "gpt-6.1-sol", "findings": []},
+            owner_pid=live_pid,
+        )
+        refused_stale = self.lane("review", "stale-ex", "--recover", "--source", source_url, ok=False)
+        self.assertIn("already has an executed review receipt", refused_stale)
+
+    def test_complete_recovered_not_wiped_by_failed_rerun_without_force(self) -> None:
+        _rec, merge_sha = self._land_lane("keep-rec", "53", "lib/k.txt", "v1\n")
+        fix_sha = self._add_integration_commit("lib/k.txt", "v2\n", "fix k")
+        good_url = "https://github.com/example/repo/issues/53#issuecomment-5301"
+        bad_url = "https://github.com/example/repo/issues/53#issuecomment-5302"
+        self._set_gh(
+            comments_by_id={
+                "5301": {
+                    "id": 5301,
+                    "body": f"merge: {merge_sha[:10]}\n1. Bug [fixed: {fix_sha[:10]}]\n",
+                    "created_at": "2099-01-01T10:00:00Z",
+                }
+            },
+            fail_ids={"5302"},
+        )
+        self.lane("review", "keep-rec", "--recover", "--source", good_url)
+        before_bytes = (self.state / "keep-rec.review.json").read_bytes()
+
+        # Re-running with an unavailable source refuses without wiping the complete recovered receipt.
+        refused = self.lane("review", "keep-rec", "--recover", "--source", bad_url, ok=False)
+        self.assertIn("already has complete recovered evidence", refused)
+        self.assertEqual((self.state / "keep-rec.review.json").read_bytes(), before_bytes)
+
+        # With --force-reason, preserves the previous complete recovered payload in preserved_artifacts.
+        forced = self.lane(
+            "review", "keep-rec", "--recover", "--source", bad_url, "--force-reason", "re-verify from archive",
+            ok=False,
+        )
+        self.assertIn("preserved artifacts: 1", forced)
+        after = self.review("keep-rec")
+        self.assertFalse(after["complete"])
+        self.assertEqual(len(after["preserved_artifacts"]), 1)
+        self.assertEqual(after["preserved_artifacts"][0]["kind"], "recovered_review")
+        self.assertTrue(after["preserved_artifacts"][0]["receipt"]["complete"])
+
+    def test_record_does_not_merge_into_recovered_receipt_on_double_lane(self) -> None:
+        _rec, merge_sha = self._land_lane("dbl", "54", "lib/dbl.txt", "v1\n", extra_start=("--review", "double"))
+        fix_sha = self._add_integration_commit("lib/dbl.txt", "v2\n", "fix dbl")
+        source_url = "https://github.com/example/repo/issues/54#issuecomment-5401"
+        self._set_gh(
+            comments_by_id={
+                "5401": {
+                    "id": 5401,
+                    "body": f"reviewer: opus\nmerge: {merge_sha[:10]}\n1. Issue [fixed: {fix_sha[:10]}]\n",
+                    "created_at": "2099-01-01T10:00:00Z",
+                }
+            },
+        )
+        self.lane("review", "dbl", "--recover", "--source", source_url)
+        raw_rec = self.review("dbl")
+        self.assertTrue(raw_rec["recovered"])
+        # Recovered receipts NEVER count toward distinct_finished_reviewers for double-review class.
+        self.assertEqual(review_class.distinct_finished_reviewers(raw_rec), [])
+
+        report_file = self.tmp / "sol-report.md"
+        report_file.write_text(NO_FINDINGS, encoding="utf-8")
+
+        # Without --force-reason, --record refuses to merge into a recovered receipt.
+        out = self.lane("review", "dbl", "--record", str(report_file), "--reviewer", "sol")
+        self.assertIn("recovered historical review evidence", out.lower())
+        still_rec = self.review("dbl")
+        self.assertTrue(still_rec["recovered"])
+        self.assertNotIn("panel", still_rec)
+
+        # With --force-reason, --record replaces cleanly without recovered=True or phantom panel.
+        self.lane(
+            "review", "dbl", "--record", str(report_file), "--reviewer", "sol",
+            "--force-reason", "replace historical recovery with fresh recorded review",
+        )
+        replaced = self.review("dbl")
+        self.assertNotIn("recovered", replaced)
+        self.assertNotIn("evidence_source", replaced)
+        self.assertEqual(review_class.distinct_finished_reviewers(replaced), ["sol"])
+        self.assertIsNotNone(review_class.double_review_problem(replaced, label="dbl"))
+
     def test_idempotent_recovery(self) -> None:
-        self._land_lane("idem", "50", "lib/h.txt", "v1\n")
+        _rec, merge_sha = self._land_lane("idem", "50", "lib/h.txt", "v1\n")
         fix_sha = self._add_integration_commit("lib/h.txt", "v2\n", "fix idem")
         source_url = "https://github.com/example/repo/issues/50#issuecomment-1050"
         self._set_gh(
             comments_by_id={
                 "1050": {
                     "id": 1050,
-                    "body": f"1. Issue [fixed: {fix_sha[:10]}]\n",
+                    "body": f"merge: {merge_sha[:10]}\n1. Issue [fixed: {fix_sha[:10]}]\n",
+                    "created_at": "2099-01-01T10:00:00Z",
                 }
             },
         )
@@ -424,28 +641,23 @@ class ReviewRecoverTests(LaneCase):
         rec, _merge_sha = self._land_lane("surf", "51", "lib/s.txt", "v1\n")
         store = self._store()
 
-        # 1. show (text + JSON) surfaces recovery_hint for landed lane with absent review.
         shown_text = self.lane("show", "surf")
         self.assertIn("review surf --recover", shown_text)
         shown_json = json.loads(self.lane("show", "surf", "--json"))
         self.assertIn("review surf --recover", shown_json["review"]["recovery_hint"])
 
-        # 2. status surfaces recovery_hint.
         status_entry = status.lane_entry(
             self.record("surf"), self.state, "example/repo", {}, {}, store=store
         )
         self.assertIn("review surf --recover", status_entry["review"]["recovery_hint"])
 
-        # 3. review_gate surfaces --recover in unfinished text.
         report = review_gate.gate_report(store, str(self.integration), rec["common_dir"], self.tip())
         self.assertTrue(any("--recover" in e["text"] for e in report["unfinished"]))
 
-        # 4. done --finished readiness surfaces --recover.
         readiness = done.done_readiness(self.record("surf"), store)
         self.assertFalse(readiness.ready)
         self.assertIn("--recover", readiness.refusal or "")
 
-        # 5. Interrupted (dead) review also surfaces --recover in review_lines.
         review_record.ReviewRecord.begin(
             store,
             "surf",

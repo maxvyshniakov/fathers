@@ -1318,13 +1318,25 @@ def record_lane_review(args: Any, store: state.Store) -> int:
     merge_panel = (
         eff_cls == "double"
         and already_finished
+        and not existing.is_recovered
         and len(existing_reviewers) < 2
         and new_reviewer_name not in existing_reviewers
         and not args.force_reason
     )
-    has_existing = already_finished or incomplete_panel or isinstance(verdict, review_record.Exempt) or elsewhere
+    has_existing = (
+        already_finished
+        or incomplete_panel
+        or isinstance(verdict, (review_record.Exempt, review_record.PartialEvidence))
+        or elsewhere
+    )
     if has_existing and not args.force_reason and not merge_panel:
         print("\n".join(review_lines(existing, record=record, prog=store.prog)))
+        if existing.is_recovered:
+            print(
+                f"Lane {args.id} has recovered historical review evidence "
+                "(--force-reason replaces it with a recorded review, logged)"
+            )
+            return 1 if isinstance(verdict, review_record.PartialEvidence) else 0
         if already_finished:
             print(f"Lane {args.id} is already reviewed: one review per lane (--force-reason reviews again, logged)")
         return 1 if incomplete_panel else 0
@@ -1332,7 +1344,7 @@ def record_lane_review(args: Any, store: state.Store) -> int:
     tip, base = review_range(record)
     if is_pre_land and tip == base:
         raise LaneError(f"review refused: lane {args.id} has no commits beyond {record['base']}")
-    if (already_finished or incomplete_panel) and not merge_panel:
+    if (already_finished or incomplete_panel or isinstance(verdict, review_record.PartialEvidence)) and not merge_panel:
         _audit_review_override(store, record, args.force_reason)
     tree = git(main, "rev-parse", tip + "^{tree}")
     fields = _lane_review_fields(record, **({"pre_land": True} if is_pre_land else {}))
@@ -2005,6 +2017,7 @@ def recover_lane_review(args: Any, store: state.Store) -> int:
         target=getattr(args, "target", None),
         reviewed_range=getattr(args, "reviewed_range", None),
         force_reason=getattr(args, "force_reason", None),
+        audit_override=lambda reason: _audit_review_override(store, record, reason),
     )
     print("\n".join(review_lines(completed, record=record, prog=store.prog)))
     if is_complete and completed.allows_promote:

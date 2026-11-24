@@ -913,7 +913,7 @@ def _review_stats(
     totals: dict[str, int] = dict.fromkeys(review_record.mark_counts(()), 0)
     for rev in review_record.ReviewRecord.all(store):
         raw = _as_dict(rev.raw)
-        if raw is None or not rev.has_finished_receipt:
+        if raw is None or not rev.has_finished_receipt or rev.is_recovered:
             continue
         if raw.get("overall") is True or rev.label.startswith("overall-"):
             continue
@@ -1047,7 +1047,7 @@ def reviewer_totals(store: state.Store, days: float | None = 7, lane: str | None
     for rev in review_record.ReviewRecord.all(store):
         raw = _as_dict(rev.raw) or {}
         rev_lane = _as_str(raw.get("lane")) or rev.label
-        if not rev.has_finished_receipt or (lane is not None and rev_lane != lane):
+        if not rev.has_finished_receipt or rev.is_recovered or (lane is not None and rev_lane != lane):
             continue
         if cutoff is not None:
             finished = _parse_iso(raw.get("finished"))

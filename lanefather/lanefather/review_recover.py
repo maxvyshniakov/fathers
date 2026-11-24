@@ -1,22 +1,23 @@
 """Recover historical review evidence from GitHub issue comments without rerunning completed reviews (fathers#179).
 
 Fetches explicit `--source URL` comments (or discovers review comments on linked tickets via `github.py`), parses
-historical dispositions (`fixed: <sha>`, `rejected: <reason>`, unmarked findings, or explicit clean-review statements),
-verifies git ancestry of named fix commits against the target ref and checks reviewed/landed scope against the lane
-record (guarding against lane ID reuse).
+historical dispositions (`fixed: <sha>`, `rejected: <reason>`, unmarked findings, or standalone clean-review
+statements), verifies git ancestry of named fix commits against the target ref and checks reviewed/landed scope,
+linked ticket identity, and creation timeline against the lane record (guarding against lane ID reuse).
 
 Strict truthfulness invariants:
 - Never synthesizes an executed review or invents missing severity, model, reviewer, or tree metadata.
 - Lists any unverifiable facts explicitly in `missing_facts`.
-- Preserves any prior interrupted/partial review receipt under `preserved_artifacts` instead of destroying it.
+- Preserves any prior interrupted/partial/replaced review receipt under `preserved_artifacts` instead of destroying it.
 - Partial or unverified evidence is recorded visibly as incomplete (`complete: False`) and never satisfies the review
   gate or `done`.
-- Repeated recovery is idempotent.
+- Repeated recovery is idempotent and never downgrades complete recovered evidence without `--force-reason`.
 """
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+import datetime
 import os
 import re
 from typing import Any, cast
@@ -29,7 +30,6 @@ from .state import Record
 COMMENT_URL_RE = re.compile(
     r"^https://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/(?:issues|pull)/(\d+)#issuecomment-(\d+)$"
 )
-HEX_SHA_RE = re.compile(r"\b([0-9a-f]{7,64})\b", re.IGNORECASE)
 RANGE_RE = re.compile(
     r"(?:reviewed(?:\s+range)?\s*[:=]\s*|review\s+of\s+[A-Za-z0-9_.-]+\s*\(\s*|\(\s*)"
     r"`?([0-9a-f]{7,64})\.{2,3}([0-9a-f]{7,64})`?",
@@ -40,15 +40,38 @@ MERGE_REF_RE = re.compile(
     re.IGNORECASE,
 )
 LANE_MENTION_RE = re.compile(
-    r"(?:^|\b)(?:review\s+of\s+(?:lane\s+)?|lane\s*[:=]\s*|lane\s+)`?([A-Za-z0-9][A-Za-z0-9_-]{0,63})`?",
+    r"(?:^|\b)(?:review\s+of\s+lane\s+|review\s+of\s+|lane\s*[:=]\s*)`?([A-Za-z0-9][A-Za-z0-9_-]{0,63})`?",
     re.IGNORECASE | re.MULTILINE,
 )
+_LANE_STOPWORDS = frozenset({
+    "lane",
+    "review",
+    "findings",
+    "finding",
+    "clean",
+    "the",
+    "a",
+    "an",
+    "this",
+    "that",
+    "pr",
+    "pull",
+    "issue",
+    "commit",
+    "branch",
+    "merge",
+    "diff",
+    "code",
+    "changes",
+})
 MODEL_RE = re.compile(r"(?:^|\b)model\s*[:=]\s*`?([A-Za-z0-9_.:/-]+)`?", re.IGNORECASE | re.MULTILINE)
 REVIEWER_RE = re.compile(r"(?:^|\b)reviewer\s*[:=]\s*`?([A-Za-z0-9_.:+-]+)`?", re.IGNORECASE | re.MULTILINE)
 CLEAN_REVIEW_RE = re.compile(
-    r"\b(?:0\s+findings|no\s+findings|clean\s+review|review\s+clean|no\s+issues\s+found)\b",
-    re.IGNORECASE,
+    r"^\s*(?:review(?:\s+of\s+[A-Za-z0-9_.-]+(?:\s*\([^)]*\))?)?\s*:\s*)?"
+    r"(?:0\s+findings|no\s+findings|clean\s+review|review\s+clean|no\s+issues\s+found)\.?\s*$",
+    re.IGNORECASE | re.MULTILINE,
 )
+UNPARSED_FINDING_RE = re.compile(r"^\s*[-*]\s*\*?\*?P[0-3]\*?\*?\b", re.IGNORECASE)
 NUMBERED_ITEM_RE = re.compile(
     r"^\s*(?:[-*]\s*)?(?:finding\s*#?(\d+)|#(\d+)|(\d+)\.)\s*[:\-–—]?\s*(.+)$",
     re.IGNORECASE,
@@ -76,6 +99,8 @@ class SourceComment:
 
     url: str
     body: str
+    repo: str | None = None
+    issue_number: str | None = None
     created_at: str | None = None
     author: str | None = None
 
@@ -86,6 +111,7 @@ class ParsedEvidence:
 
     dispositions: tuple[dict[str, Any], ...]
     clean_statement: bool
+    unparsed_finding_lines: tuple[str, ...]
     reviewed_base: str | None
     reviewed_tip: str | None
     mentioned_merge: str | None
@@ -138,7 +164,7 @@ def fetch_sources(
     fetched: list[SourceComment] = []
     unavailable: list[dict[str, str]] = []
     for url in dict.fromkeys(u.strip() for u in urls if u.strip()):
-        repo, _issue_num, comment_id = parse_comment_url(url)
+        repo, issue_num, comment_id = parse_comment_url(url)
         data, err = github.issue_comment_view(repo, comment_id, project=store.project)
         if data is None:
             unavailable.append({"url": url, "error": err or "comment unavailable"})
@@ -153,7 +179,16 @@ def fetch_sources(
             if isinstance(raw_user, dict) and cast(dict[str, Any], raw_user).get("login")
             else None
         )
-        fetched.append(SourceComment(url=url, body=body, created_at=created_at, author=author))
+        fetched.append(
+            SourceComment(
+                url=url,
+                body=body,
+                repo=repo,
+                issue_number=issue_num,
+                created_at=created_at,
+                author=author,
+            )
+        )
     return fetched, unavailable
 
 
@@ -201,7 +236,6 @@ def discover_sources(
             body = raw_body if isinstance(raw_body, str) else ""
             if not _looks_like_review_comment(body):
                 continue
-            # If the comment explicitly names a different lane id and not this lane, skip it in auto-discovery.
             mentioned = _extract_mentioned_lanes(body)
             if mentioned and lane_id not in mentioned:
                 continue
@@ -227,7 +261,16 @@ def discover_sources(
                 if isinstance(raw_author, dict) and cast(dict[str, Any], raw_author).get("login")
                 else None
             )
-            fetched.append(SourceComment(url=comment_url, body=body, created_at=created_at, author=author))
+            fetched.append(
+                SourceComment(
+                    url=comment_url,
+                    body=body,
+                    repo=repo,
+                    issue_number=issue.local,
+                    created_at=created_at,
+                    author=author,
+                )
+            )
     return fetched, unavailable
 
 
@@ -235,7 +278,7 @@ def _extract_mentioned_lanes(body: str) -> list[str]:
     found: list[str] = []
     for match in LANE_MENTION_RE.finditer(body):
         candidate = match.group(1)
-        if candidate.lower() in {"lane", "review", "findings", "finding", "clean", "the", "a", "this", "that"}:
+        if candidate.lower() in _LANE_STOPWORDS:
             continue
         if candidate not in found:
             found.append(candidate)
@@ -261,7 +304,6 @@ def _parse_line_disposition(
     elif not (FIXED_RE.search(stripped) or REJECTED_BRACKET_RE.search(stripped) or REJECTED_RE.search(stripped)):
         return None, next_auto_n
 
-    # Extract disposition marker (fixed / rejected / unmarked).
     fixed_match = FIXED_RE.search(rest)
     rej_bracket = REJECTED_BRACKET_RE.search(rest)
     rej_tail = None if rej_bracket else REJECTED_RE.search(rest)
@@ -284,13 +326,11 @@ def _parse_line_disposition(
         reason = rej_tail.group(1).strip()
         body_text = rest[: rej_tail.start()].strip()
     elif numbered:
-        # Numbered finding line without a fixed/rejected disposition (unmarked / open).
         kind = "unmarked"
         body_text = UNMARKED_HINT_RE.sub("", rest).strip()
     else:
         return None, next_auto_n
 
-    # Clean trailing separators from title text.
     body_text = re.sub(r"[\s\-–—:(]+$", "", body_text).strip()
     body_text = re.sub(r"^[\s\-–—:]+", "", body_text).strip()
 
@@ -301,7 +341,6 @@ def _parse_line_disposition(
         severity = sev_match.group(1)
         body_text = sev_match.group(2).strip()
 
-    # Extract optional file[:line].
     file_path: str | None = None
     line_no: int | None = None
     file_match = FILE_LINE_PREFIX_RE.match(body_text)
@@ -337,6 +376,7 @@ def parse_historical_evidence(comments: Sequence[SourceComment]) -> ParsedEviden
     """Parse dispositions and explicit scope/metadata references from fetched comments."""
     dispositions: list[dict[str, Any]] = []
     seen_numbers: dict[int, int] = {}
+    unparsed_finding_lines: list[str] = []
     next_n = 1
     clean_statement = False
     reviewed_base: str | None = None
@@ -374,10 +414,11 @@ def parse_historical_evidence(comments: Sequence[SourceComment]) -> ParsedEviden
         for raw_line in body.splitlines():
             parsed, next_n = _parse_line_disposition(raw_line, source_url=comment.url, next_auto_n=next_n)
             if parsed is None:
+                if UNPARSED_FINDING_RE.match(raw_line):
+                    unparsed_finding_lines.append(raw_line.strip())
                 continue
             num = int(parsed["n"])
             if num in seen_numbers:
-                # Later comment disposition supersedes an earlier unmarked entry for the same finding number.
                 prev_idx = seen_numbers[num]
                 prev = dispositions[prev_idx]
                 if prev.get("kind") == "unmarked" and parsed.get("kind") in ("fixed", "rejected"):
@@ -391,7 +432,6 @@ def parse_historical_evidence(comments: Sequence[SourceComment]) -> ParsedEviden
                         merged["title"] = prev["title"]
                     dispositions[prev_idx] = merged
                 else:
-                    # Distinct entry with same number (e.g. from second source): keep both under next available number.
                     parsed["n"] = next_n
                     seen_numbers[next_n] = len(dispositions)
                     dispositions.append(parsed)
@@ -400,9 +440,13 @@ def parse_historical_evidence(comments: Sequence[SourceComment]) -> ParsedEviden
                 seen_numbers[num] = len(dispositions)
                 dispositions.append(parsed)
 
+    if unparsed_finding_lines:
+        clean_statement = False
+
     return ParsedEvidence(
         dispositions=tuple(dispositions),
         clean_statement=clean_statement,
+        unparsed_finding_lines=tuple(unparsed_finding_lines),
         reviewed_base=reviewed_base,
         reviewed_tip=reviewed_tip,
         mentioned_merge=mentioned_merge,
@@ -412,10 +456,14 @@ def parse_historical_evidence(comments: Sequence[SourceComment]) -> ParsedEviden
     )
 
 
+def _resolve_commit(main: str, ref: str) -> str:
+    return git(main, "rev-parse", "--verify", "--quiet", "--end-of-options", f"{ref}^{{commit}}", check=False)
+
+
 def _resolve_target_sha(main: str, record: Record, target_ref: str | None) -> str:
     """Resolve the target commit SHA to check fix-commit ancestry against."""
     if target_ref:
-        sha = git(main, "rev-parse", "--verify", "--quiet", f"{target_ref}^{{commit}}", check=False)
+        sha = _resolve_commit(main, target_ref)
         if not sha:
             raise LaneError(f"--target {target_ref!r}: not a commit in {main}")
         return sha
@@ -446,11 +494,7 @@ def _sha_matches(candidate: str, full_sha: str) -> bool:
     return bool(c and f) and (f == c or f.startswith(c) or c.startswith(f))
 
 
-def _resolve_commit(main: str, ref: str) -> str:
-    return git(main, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}", check=False)
-
-
-def _parse_range_arg(range_arg: str) -> tuple[str, str]:
+def _parse_and_resolve_range_arg(main: str, range_arg: str) -> tuple[str, str]:
     cleaned = range_arg.strip()
     if "..." in cleaned:
         left, _, right = cleaned.partition("...")
@@ -461,7 +505,28 @@ def _parse_range_arg(range_arg: str) -> tuple[str, str]:
     left, right = left.strip(), right.strip()
     if not left or not right:
         raise LaneError(f"--reviewed-range {range_arg!r}: expected BASE..TIP")
-    return left, right
+    resolved_base = _resolve_commit(main, left)
+    if not resolved_base:
+        raise LaneError(f"--reviewed-range {range_arg!r}: base {left!r} is not a commit in {main}")
+    resolved_tip = _resolve_commit(main, right)
+    if not resolved_tip:
+        raise LaneError(f"--reviewed-range {range_arg!r}: tip {right!r} is not a commit in {main}")
+    return resolved_base, resolved_tip
+
+
+def _artifact_kind(existing: review_record.ReviewRecord) -> str:
+    if existing.is_recovered:
+        return "recovered_review"
+    verdict = existing.verdict
+    if isinstance(verdict, review_record.Died):
+        return "died_review"
+    if isinstance(verdict, review_record.Failed):
+        return "failed_review"
+    if isinstance(verdict, review_record.PartialPanel):
+        return "partial_panel_review"
+    if isinstance(verdict, review_record.Running):
+        return "running_review"
+    return "executed_review"
 
 
 def _snapshot_existing_artifact(
@@ -476,7 +541,7 @@ def _snapshot_existing_artifact(
         if isinstance(val, str) and val and os.path.exists(val) and val not in files:
             files.append(val)
     return {
-        "kind": "interrupted_review",
+        "kind": _artifact_kind(existing),
         "phase": existing.phase.value,
         "preserved_at": preserved_at,
         "files": files,
@@ -501,6 +566,35 @@ def _semantic_recovery_key(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _parse_iso_utc(raw: str | None) -> datetime.datetime | None:
+    if not raw:
+        return None
+    try:
+        parsed = journal.parse_time(raw)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=datetime.UTC)
+    return parsed.astimezone(datetime.UTC)
+
+
+def _source_matches_linked_tickets(
+    comment: SourceComment,
+    linked: Sequence[scope.Issue],
+    default_repo: str | None,
+) -> bool:
+    if not linked or not comment.issue_number:
+        return True
+    comment_repo = comment.repo.lower() if comment.repo else None
+    for issue in linked:
+        if issue.local != comment.issue_number:
+            continue
+        expected_repo = (issue.repo or default_repo or "").lower()
+        if not expected_repo or not comment_repo or expected_repo == comment_repo:
+            return True
+    return False
+
+
 def recover_lane(
     store: state.Store,
     record: Record,
@@ -509,12 +603,18 @@ def recover_lane(
     target: str | None = None,
     reviewed_range: str | None = None,
     force_reason: str | None = None,
+    audit_override: Callable[[str], None] | None = None,
 ) -> tuple[review_record.ReviewRecord, bool]:
     """Recover historical review evidence for `record`, verify git ancestry & scope, and persist via `ReviewRecord`."""
     lane_id = str(record["id"])
     prog = store.prog
-    if lifecycle.planned(record):
-        raise LaneError(f"review --recover refused: lane {lane_id} is planned, not landed")
+    raw_landed: Any = record.get("landed")
+    landed_info = cast(dict[str, Any], raw_landed) if isinstance(raw_landed, dict) else {}
+    landed_merge = str(landed_info.get("merge") or "")
+    if not lifecycle.landed(record) or not landed_merge:
+        raise LaneError(
+            f"review --recover refused: lane {lane_id} is {lifecycle.display_state(record)}, not landed"
+        )
     common = record.get("common_dir")
     if not isinstance(common, str) or not common or not os.path.isdir(common):
         raise LaneError(f"review --recover refused: lane {lane_id} names no repository that exists")
@@ -522,7 +622,7 @@ def recover_lane(
 
     existing = review_record.ReviewRecord.load(store, lane_id, record=record)
     existing_raw = existing.raw
-    existing_is_recovered = bool(existing_raw and existing_raw.get("recovered") is True)
+    existing_is_recovered = existing.is_recovered
 
     if not existing_is_recovered:
         if isinstance(existing.verdict, review_record.Running) and not force_reason:
@@ -532,15 +632,17 @@ def recover_lane(
             )
         if isinstance(
             existing.verdict,
-            (review_record.Complete, review_record.Unmarked, review_record.Exempt),
+            (review_record.Complete, review_record.Unmarked, review_record.Exempt, review_record.Stale),
         ) and not force_reason:
             raise LaneError(
                 f"review --recover refused: lane {lane_id} already has an executed review receipt "
                 f"({existing.summary(prog=prog)[1]})"
             )
 
-    # Validate explicit arguments before network/git calls.
-    explicit_range: tuple[str, str] | None = _parse_range_arg(reviewed_range) if reviewed_range else None
+    # Validate explicit arguments upfront before network calls.
+    explicit_range: tuple[str, str] | None = (
+        _parse_and_resolve_range_arg(main, reviewed_range) if reviewed_range else None
+    )
     target_sha = _resolve_target_sha(main, record, target)
 
     if sources:
@@ -559,10 +661,28 @@ def recover_lane(
     if not fetched and not unavailable:
         incomplete_reasons.append("no historical review comments found on linked ticket(s)")
 
-    # Build landed_scope from lane record.
-    raw_landed: Any = record.get("landed")
-    landed_info = cast(dict[str, Any], raw_landed) if isinstance(raw_landed, dict) else {}
-    landed_merge = str(landed_info.get("merge") or "")
+    if parsed.unparsed_finding_lines:
+        incomplete_reasons.append(
+            f"source contains {len(parsed.unparsed_finding_lines)} unparsed finding-like line(s)"
+        )
+
+    # Check source ticket & timeline binding against lane record.
+    linked_issues = scope.issues(record)
+    default_repo = github.repository(common, store.project.tickets)
+    lane_created_dt = _parse_iso_utc(state.lane_created_of(record))
+    for comment in fetched:
+        if linked_issues and not _source_matches_linked_tickets(comment, linked_issues, default_repo):
+            ref = f"{comment.repo}#{comment.issue_number}" if comment.repo else f"#{comment.issue_number}"
+            incomplete_reasons.append(
+                f"scope mismatch: source {comment.url} is on {ref}, not the lane's linked ticket(s)"
+            )
+        comment_dt = _parse_iso_utc(comment.created_at)
+        if lane_created_dt is not None and comment_dt is not None and comment_dt < lane_created_dt:
+            incomplete_reasons.append(
+                f"scope mismatch: source {comment.url} predates lane creation "
+                f"({comment.created_at} < {record.get('created')})"
+            )
+
     landed_tip = str(landed_info.get("tip") or "")
     landed_prev = str(landed_info.get("previous") or "")
     landed_tree = str(landed_info.get("tree") or "")
@@ -577,8 +697,8 @@ def recover_lane(
         if v
     }
 
-    # Verify target holds the lane's landed merge (when landed).
-    if landed_merge and not git_ok(main, "merge-base", "--is-ancestor", landed_merge, target_sha):
+    # Verify target holds the lane's landed merge.
+    if not git_ok(main, "merge-base", "--is-ancestor", landed_merge, target_sha):
         incomplete_reasons.append(
             f"scope mismatch: lane's landed merge {landed_merge[:10]} is not in target {target_sha[:10]}"
         )
@@ -590,15 +710,20 @@ def recover_lane(
         )
 
     # Verify merge SHA mentioned in comment against landed merge.
-    if parsed.mentioned_merge and landed_merge:
+    verified_merge_match = False
+    if parsed.mentioned_merge:
         resolved_mentioned_merge = _resolve_commit(main, parsed.mentioned_merge)
         if resolved_mentioned_merge:
-            if resolved_mentioned_merge != landed_merge:
+            if resolved_mentioned_merge == landed_merge:
+                verified_merge_match = True
+            else:
                 incomplete_reasons.append(
                     f"scope mismatch: source names merge {resolved_mentioned_merge[:10]}, "
                     f"lane landed {landed_merge[:10]}"
                 )
-        elif not _sha_matches(parsed.mentioned_merge, landed_merge):
+        elif _sha_matches(parsed.mentioned_merge, landed_merge):
+            verified_merge_match = True
+        else:
             incomplete_reasons.append(
                 f"scope mismatch: source names merge {parsed.mentioned_merge[:10]}, "
                 f"lane landed {landed_merge[:10]}"
@@ -623,7 +748,7 @@ def recover_lane(
         else:
             range_ok = True
             if landed_tip:
-                tip_matches = resolved_tip == landed_tip or (bool(landed_merge) and resolved_tip == landed_merge)
+                tip_matches = resolved_tip in {landed_tip, landed_merge}
                 if not tip_matches:
                     range_ok = False
                     incomplete_reasons.append(
@@ -691,7 +816,6 @@ def recover_lane(
 
         verified_dispositions.append(entry)
 
-        # Build corresponding finding entry without inventing severity.
         mark: dict[str, Any] | None = None
         if kind == "fixed" and entry.get("verified") is True:
             mark = {
@@ -721,7 +845,11 @@ def recover_lane(
     if not verified_dispositions and not parsed.clean_statement and fetched:
         incomplete_reasons.append("no review dispositions or clean-review statement found in source(s)")
 
-    # Deduplicate incomplete_reasons preserving order.
+    # Require verified scope binding to the lane (reviewed_scope.verified or verified merge matching landed.merge).
+    scope_tied = (reviewed_scope is not None and reviewed_scope.get("verified") is True) or verified_merge_match
+    if not scope_tied and (verified_dispositions or parsed.clean_statement):
+        incomplete_reasons.append("reviewed scope unverified")
+
     incomplete_reasons = list(dict.fromkeys(incomplete_reasons))
     is_complete = len(incomplete_reasons) == 0 and (bool(verified_dispositions) or parsed.clean_statement)
 
@@ -737,7 +865,31 @@ def recover_lane(
     if reviewed_scope is None:
         missing_facts.append("reviewed_scope")
 
-    # Preserve prior interrupted/partial non-recovered artifacts; keep existing preserved_artifacts on idempotent rerun.
+    # Guard against downgrading an already-complete recovered receipt without --force-reason.
+    existing_was_complete_recovered = (
+        existing_is_recovered and isinstance(existing.verdict, review_record.Complete) and existing_raw is not None
+    )
+    prev_sources = (
+        [str(s) for s in cast(list[Any], existing_raw.get("sources")) if isinstance(s, str) and s]
+        if existing_was_complete_recovered and existing_raw and isinstance(existing_raw.get("sources"), list)
+        else []
+    )
+    fetched_urls = [c.url for c in fetched]
+    downgrading_recovered = existing_was_complete_recovered and (
+        not is_complete or len(fetched_urls) < len(prev_sources)
+    )
+    if downgrading_recovered and not force_reason:
+        why = (
+            "would replace complete recovered evidence with partial evidence"
+            if not is_complete
+            else "would reduce verified sources on complete recovered evidence"
+        )
+        raise LaneError(
+            f"review --recover refused: lane {lane_id} already has complete recovered evidence and this run "
+            f"{why} (pass --force-reason to replace and preserve the previous record)"
+        )
+
+    # Preserve prior interrupted/partial/replaced artifacts; keep existing preserved_artifacts on idempotent rerun.
     preserved_artifacts: list[dict[str, Any]] = []
     if existing_raw is not None:
         raw_preserved: Any = existing_raw.get("preserved_artifacts")
@@ -747,7 +899,9 @@ def recover_lane(
                 for item in cast(list[Any], raw_preserved)
                 if isinstance(item, dict)
             ]
-        if not existing_is_recovered and existing.phase is not review_record.ReceiptPhase.ABSENT:
+        if (not existing_is_recovered and existing.phase is not review_record.ReceiptPhase.ABSENT) or (
+            downgrading_recovered and force_reason
+        ):
             preserved_artifacts.append(_snapshot_existing_artifact(existing, preserved_at=now))
 
     actor = _actor_label()
@@ -785,8 +939,11 @@ def recover_lane(
     ):
         return existing, is_complete
 
-    if force_reason and not existing_is_recovered and existing.phase is not review_record.ReceiptPhase.ABSENT:
-        journal.override("review", record, force_reason, ["recovered over existing review"], audited=False, store=store)
+    if force_reason and audit_override is not None and (
+        (not existing_is_recovered and existing.phase is not review_record.ReceiptPhase.ABSENT)
+        or downgrading_recovered
+    ):
+        audit_override(force_reason)
 
     completed = review_record.ReviewRecord.recover(
         store,

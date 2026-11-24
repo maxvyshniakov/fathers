@@ -991,8 +991,8 @@ def review_words(label: str, verdict: ReviewVerdict, *, prog: str = "lanefather"
         )
     if verdict.recovered:
         if verdict.findings:
-            return True, f"recovered historical evidence ({len(verdict.findings)} dispositions, all verified)"
-        return True, "recovered historical evidence (verified)"
+            return True, f"recovered historical evidence ({len(verdict.findings)} dispositions, in target history)"
+        return True, "recovered historical evidence (scope verified)"
     return True, f"reviewed by {verdict.reviewer}: {len(verdict.findings)} findings, all marked"
 
 
@@ -1753,7 +1753,13 @@ class ReviewRecord:
             }
 
         def _build(existing: Receipt | None) -> Receipt:
-            if merge_panel and existing is not None and existing.get("status") == ReceiptPhase.FINISHED.value:
+            if (
+                merge_panel
+                and existing is not None
+                and existing.get("status") == ReceiptPhase.FINISHED.value
+                and existing.get("recovered") is not True
+                and existing.get("evidence_source") != "historical"
+            ):
                 prior_findings = [dict(f) for f in extract_findings(existing)]
                 raw_panel: Any = existing.get("panel")
                 if isinstance(raw_panel, list) and raw_panel:
