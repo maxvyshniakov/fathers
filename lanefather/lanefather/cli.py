@@ -95,7 +95,7 @@ COMMANDS: dict[str, Command] = {
     "review": Command("a lane's review, its marks and its fix lane",
                       "<id> [--mark N fixed:<merge>|rejected:<reason>] [--fix-lane] [--compare] "
                       "[--record FILE --reviewer ALIAS] [--reviewer ALIAS|both] [--audit] | "
-                      "--overall <sha> [--since <base>] [--lanes ID,ID] [--paths GLOB... | --areas FILE] "
+                      "--overall <sha> [--since <base>] [--lanes ID,ID] [--paths GLOB... | --areas FILE | --area NAME] "
                       "[--record FILE --reviewer ALIAS]",
                       "fix-login --mark 1 fixed:fix-login-review-fixes"),
     "findings": Command("whether a review holds a SHA, for a publish", "<sha> [--since REF] [--json]",
@@ -363,6 +363,8 @@ def parser(project: config.Config = config.DEFAULT) -> Parser:
     p.add_argument("--areas", metavar="FILE",
                    help="with --overall: TOML or JSON file of named path groups; each area is reviewed separately "
                         "and its findings become one ticket with an area label")
+    p.add_argument("--area", metavar="NAME",
+                   help="with --overall: select one area receipt (for --mark or inspecting/retrying its ticket)")
     p.add_argument("--force-reason", help="review again although the lane has a review, or register the fix lane "
                                           "over the lane cap; logged")
     p.set_defaults(run=review.review)

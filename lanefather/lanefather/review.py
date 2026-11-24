@@ -22,6 +22,7 @@ import os
 from pathlib import Path
 import posixpath
 import re
+import shlex
 import subprocess
 import sys
 import time
@@ -439,6 +440,20 @@ def _delta_review_lines(
     return [head, *_format_finding_lines(delta_findings)]
 
 
+def _overall_recovery_target(raw: dict[str, Any], label: str, *, for_rerun: bool = False) -> str:
+    """CLI target for recovering a died overall review or retrying its ticket filing."""
+    sha = raw.get("sha") or raw.get("tip")
+    base = f"--overall {sha[:10]}" if isinstance(sha, str) and sha else f"--overall {label}"
+    raw_area = raw.get("area")
+    if isinstance(raw_area, str) and raw_area:
+        return f"{base} --areas <file>" if for_rerun else f"{base} --area {raw_area}"
+    raw_paths: Any = raw.get("paths")
+    if isinstance(raw_paths, list) and raw_paths:
+        path_args = " ".join(f"--paths {shlex.quote(str(p))}" for p in cast(list[Any], raw_paths))
+        return f"{base} {path_args}"
+    return base
+
+
 def review_lines(
     rev: review_record.ReviewRecord,
     *,
@@ -455,8 +470,7 @@ def review_lines(
         return [f"Review of {label}: running since {verdict.started} (pid {verdict.pid}, log {verdict.log})"]
     if isinstance(verdict, review_record.Died):
         if raw.get("kind") == "overall" or label.startswith(("ship-", "batch-", "paths-")):
-            sha = raw.get("sha") or raw.get("tip")
-            target = f"--overall {sha[:10]}" if isinstance(sha, str) and sha else f"--overall {label}"
+            target = _overall_recovery_target(raw, label, for_rerun=True)
         else:
             target = label
         return [f"Review of {label}: died (pid {verdict.pid}, log {verdict.log}): rerun {cmd_prog} review {target}"]
@@ -517,8 +531,8 @@ def review_lines(
         lines.append(f"Ticket: {raw['issue']}")
     elif raw.get("issue_error"):
         lines.append(
-            f"Ticket not filed: {raw['issue_error']}; {cmd_prog} review --overall "
-            f"{str(raw.get('tip', ''))[:10]} files it again"
+            f"Ticket not filed: {raw['issue_error']}; {cmd_prog} review "
+            f"{_overall_recovery_target(raw, label)} files it again"
         )
     pre_land = rev.pre_land_fix(record)
     if pre_land is not None:
@@ -1629,8 +1643,18 @@ def hand_over(args: Any, store: state.Store) -> int:
     return 0
 
 
-AREA_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+# GitHub caps label names at 50 chars; `area:<name>` leaves 45 chars for `<name>`.
+AREA_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,44}$")
 AREA_LABEL_COLOR = "1D76DB"
+
+
+def _validate_area_name(name: str, *, context: str) -> str:
+    if not AREA_NAME_RE.fullmatch(name) or name in (".", ".."):
+        raise LaneError(
+            f"{context}: invalid area name {name!r} "
+            "(1-45 chars of letters, digits, '.', '_' or '-', starting with a letter or digit)"
+        )
+    return name
 
 
 def ship_review_label(sha: str) -> str:
@@ -1704,12 +1728,7 @@ def _load_areas(path_str: str) -> list[tuple[str, list[str]]]:
     result: list[tuple[str, list[str]]] = []
     seen_lower: set[str] = set()
     for raw_name, raw_globs in table.items():
-        name = str(raw_name)
-        if not AREA_NAME_RE.fullmatch(name) or name in (".", ".."):
-            raise LaneError(
-                f"--areas {path_str}: invalid area name {name!r} "
-                "(use letters, digits, '.', '_' or '-', starting with a letter or digit)"
-            )
+        name = _validate_area_name(str(raw_name), context=f"--areas {path_str}")
         lowered = name.lower()
         if lowered in seen_lower:
             raise LaneError(f"--areas {path_str}: duplicate area name {name!r} (case-insensitive)")
@@ -1723,7 +1742,7 @@ def _matching_diff_paths(
     main: str, base: str, tip: str, globs: Sequence[str], project: config.Config
 ) -> list[str]:
     """Changed repo-relative paths in `base...tip` matching at least one glob in `globs`."""
-    out = git(main, "diff", "--name-only", "-z", f"{base}...{tip}")
+    out = git(main, "diff", "--name-only", "-z", "--no-renames", f"{base}...{tip}")
     changed = [line for line in out.split("\x00") if line]
     if not changed:
         return []
@@ -1879,9 +1898,12 @@ def _resolve_overall_mark_label(
     covered_ids: list[str],
     *,
     paths: Sequence[str] = (),
+    area: str | None = None,
 ) -> str:
     if covered_ids:
         return batch_review_label(sha, covered_ids)
+    if area:
+        return area_review_label(sha, area)
     if paths:
         return paths_review_label(sha, paths)
     ship_lbl = ship_review_label(sha)
@@ -1896,6 +1918,48 @@ def _resolve_overall_mark_label(
             f"multiple batch reviews exist for {sha[:10]}; pass --lanes <id,id> to select which batch review to mark"
         )
     return ship_lbl
+
+
+def _existing_overall_result(
+    args: Any,
+    store: state.Store,
+    existing: review_record.ReviewRecord,
+    *,
+    label: str,
+    common: str,
+    covered_ids: list[str],
+    path_globs: Sequence[str] = (),
+    area: str | None = None,
+) -> int | None:
+    """Return an exit code when `existing` already handles the request without starting a new review, else None."""
+    if args.force_reason:
+        return None
+    prog = store.prog
+    verdict = existing.verdict
+    if isinstance(verdict, (review_record.Unmarked, review_record.Complete)):
+        if area and path_globs:
+            raw_recorded: Any = (existing.raw or {}).get("paths")
+            recorded_paths = [str(p) for p in cast(list[Any], raw_recorded)] if isinstance(raw_recorded, list) else []
+            if recorded_paths and recorded_paths != list(path_globs):
+                raise LaneError(
+                    f"area {area!r} ({label}) was already reviewed with different paths "
+                    f"({', '.join(recorded_paths)} vs {', '.join(path_globs)}); "
+                    "pass --force-reason <why> to review it again"
+                )
+        if not covered_ids:
+            retried = retry_ticket(store, label, common)
+            print("\n".join(review_lines(retried, prog=prog)))
+            return 1 if (retried.raw or {}).get("issue_error") else 0
+        print("\n".join(review_lines(existing, prog=prog)))
+        return 0
+    if isinstance(verdict, review_record.PartialPanel):
+        print("\n".join(review_lines(existing, prog=prog)))
+        print(f"Overall review {label}: {existing.summary()[1]}")
+        return 1
+    if isinstance(verdict, review_record.Running) and verdict.pid != os.getpid():
+        print("\n".join(review_lines(existing, prog=prog)))
+        return 0
+    return None
 
 
 def _run_overall_target(
@@ -1913,22 +1977,6 @@ def _run_overall_target(
 ) -> int:
     prog = store.prog
     panel_required = store.project.review_panel_required
-    existing = review_record.ReviewRecord.load(store, label)
-    verdict = existing.verdict
-    if isinstance(verdict, (review_record.Unmarked, review_record.Complete)) and not args.force_reason:
-        if not covered_ids:
-            retried = retry_ticket(store, label, common)
-            print("\n".join(review_lines(retried, prog=prog)))
-            return 1 if (retried.raw or {}).get("issue_error") else 0
-        print("\n".join(review_lines(existing, prog=prog)))
-        return 0
-    if isinstance(verdict, review_record.PartialPanel) and not args.force_reason:
-        print("\n".join(review_lines(existing, prog=prog)))
-        print(f"Overall review {label}: {existing.summary()[1]}")
-        return 1
-    if isinstance(verdict, review_record.Running) and verdict.pid != os.getpid() and not args.force_reason:
-        print("\n".join(review_lines(existing, prog=prog)))
-        return 0
     fields: dict[str, Any] = {
         "kind": "overall",
         "sha": sha,
@@ -2009,9 +2057,11 @@ def overall_review(args: Any, store: state.Store) -> int:
     path_globs = _normalize_path_globs(raw_paths, context="--paths") if raw_paths else []
     areas_file = getattr(args, "areas", None)
     areas = _load_areas(areas_file) if areas_file else []
+    raw_area_flag = getattr(args, "area", None)
+    area_flag = _validate_area_name(raw_area_flag, context="--area") if raw_area_flag else None
 
     if args.mark:
-        label = _resolve_overall_mark_label(store, sha, covered_ids, paths=path_globs)
+        label = _resolve_overall_mark_label(store, sha, covered_ids, paths=path_globs, area=area_flag)
         result = review_record.ReviewRecord.mark_label(store, label, common, args.mark)
         for app in result.applied:
             journal.ledger(
@@ -2035,6 +2085,17 @@ def overall_review(args: Any, store: state.Store) -> int:
         else:
             print(f"Overall review {label}: {words}")
         return 0
+
+    if area_flag:
+        label = area_review_label(sha, area_flag)
+        existing = review_record.ReviewRecord.load(store, label)
+        rc = _existing_overall_result(args, store, existing, label=label, common=common, covered_ids=[])
+        if rc is not None:
+            return rc
+        raise LaneError(
+            f"no finished or running area review for {area_flag!r} at {sha[:10]}; "
+            f"run {prog} review --overall {sha[:10]} --since <base> --areas <file>"
+        )
 
     if areas:
         saved_base: str | None = None
@@ -2061,10 +2122,26 @@ def overall_review(args: Any, store: state.Store) -> int:
                 )
                 continue
             reviewed_any = True
+            area_label = area_review_label(sha, area_name)
+            existing_area = review_record.ReviewRecord.load(store, area_label)
+            existing_rc = _existing_overall_result(
+                args,
+                store,
+                existing_area,
+                label=area_label,
+                common=common,
+                covered_ids=[],
+                path_globs=area_globs,
+                area=area_name,
+            )
+            if existing_rc is not None:
+                if existing_rc != 0:
+                    had_error = True
+                continue
             rc = _run_overall_target(
                 args,
                 store,
-                label=area_review_label(sha, area_name),
+                label=area_label,
                 common=common,
                 sha=sha,
                 base=base,
@@ -2100,21 +2177,11 @@ def overall_review(args: Any, store: state.Store) -> int:
             raise LaneError(f"--lanes {lane_id}: landed merge {merge_sha[:10]} is not an ancestor of {sha[:10]}")
         covered_records.append(rec)
     existing = review_record.ReviewRecord.load(store, label)
-    verdict = existing.verdict
-    if isinstance(verdict, (review_record.Unmarked, review_record.Complete)) and not args.force_reason:
-        if not covered_ids:
-            retried = retry_ticket(store, label, common)
-            print("\n".join(review_lines(retried, prog=prog)))
-            return 1 if (retried.raw or {}).get("issue_error") else 0
-        print("\n".join(review_lines(existing, prog=prog)))
-        return 0
-    if isinstance(verdict, review_record.PartialPanel) and not args.force_reason:
-        print("\n".join(review_lines(existing, prog=prog)))
-        print(f"Overall review {label}: {existing.summary()[1]}")
-        return 1
-    if isinstance(verdict, review_record.Running) and verdict.pid != os.getpid() and not args.force_reason:
-        print("\n".join(review_lines(existing, prog=prog)))
-        return 0
+    existing_rc = _existing_overall_result(
+        args, store, existing, label=label, common=common, covered_ids=covered_ids
+    )
+    if existing_rc is not None:
+        return existing_rc
     # A rerun of a failed or killed review keeps its base.
     saved_base = str(existing.raw["base"]) if existing.raw and existing.raw.get("base") else None
     since = args.since or saved_base
@@ -2179,14 +2246,19 @@ def review(args: Any, store: state.Store) -> int:
     has_lanes = bool(getattr(args, "lanes", None))
     has_paths = bool(getattr(args, "paths", None))
     areas_file = getattr(args, "areas", None)
+    area_flag = getattr(args, "area", None)
     if has_lanes and not args.overall:
         raise LaneError("--lanes goes with --overall <sha>")
     if has_paths and not args.overall:
         raise LaneError("--paths goes with --overall <sha>")
     if areas_file and not args.overall:
         raise LaneError("--areas goes with --overall <sha>")
+    if area_flag and not args.overall:
+        raise LaneError("--area goes with --overall <sha>")
     if has_paths and areas_file:
         raise LaneError("--paths and --areas do not combine")
+    if area_flag and (has_paths or areas_file or has_lanes):
+        raise LaneError("--area does not combine with --paths, --areas or --lanes")
     if (has_paths or areas_file) and has_lanes:
         raise LaneError("--lanes does not combine with --paths or --areas")
     if args.overall:
@@ -2198,6 +2270,8 @@ def review(args: Any, store: state.Store) -> int:
             raise LaneError("--areas does not combine with --record")
         if areas_file and args.mark:
             raise LaneError("--areas does not combine with --mark")
+        if area_flag and record_file:
+            raise LaneError("--area does not combine with --record")
         if record_file and args.mark:
             raise LaneError("--record does not combine with --mark")
         return overall_review(args, store)

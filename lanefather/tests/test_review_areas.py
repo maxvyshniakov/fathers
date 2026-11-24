@@ -5,10 +5,11 @@ from __future__ import annotations
 import json
 import textwrap
 import unittest
+from unittest import mock
 
 from support import NO_FINDINGS, TWO_FINDINGS, LaneCase
 
-from lanefather import review
+from lanefather import review, reviewer
 
 
 class OverallReviewPathsAndAreasTests(LaneCase):
@@ -150,6 +151,42 @@ class OverallReviewPathsAndAreasTests(LaneCase):
         self.assertIn("Area: backend", rerun)
         self.assertEqual(len([c for c in self.codex_calls() if c[2] == "exec"]), 2)
 
+        # Marking an area review finding via `--area NAME --mark ...` works cleanly.
+        marked = self.lane(
+            "review",
+            "--overall",
+            self.tip_sha,
+            "--area",
+            "backend",
+            "--mark",
+            "1",
+            "rejected:verified in area",
+        )
+        self.assertIn("rejected: verified in area", marked)
+        self.assertEqual(self.review(backend_label)["findings"][0]["mark"]["kind"], "rejected")
+        # Native area receipt is unaffected.
+        self.assertIsNone(self.review(native_label)["findings"][0]["mark"])
+
+        # Changing an area's globs on rerun refuses without `--force-reason`, and succeeds with it.
+        changed_areas = self.tmp / "areas_changed.toml"
+        changed_areas.write_text('[areas]\nbackend = ["lib/**", "docs/*.md"]\n', encoding="utf-8")
+        err = self.lane(
+            "review", "--overall", self.tip_sha, "--since", self.base, "--areas", str(changed_areas), ok=False
+        )
+        self.assertIn("different paths", err)
+        self.lane(
+            "review",
+            "--overall",
+            self.tip_sha,
+            "--since",
+            self.base,
+            "--areas",
+            str(changed_areas),
+            "--force-reason",
+            "area globs expanded",
+        )
+        self.assertEqual(self.review(backend_label)["paths"], ["lib/**", "docs/*.md"])
+
     def test_areas_json_and_top_level_toml_formats_and_prompt_isolation(self) -> None:
         # JSON format: one area covering native only; verify lib/ is excluded from the prompt.
         areas_json = self.tmp / "areas.json"
@@ -249,6 +286,56 @@ class OverallReviewPathsAndAreasTests(LaneCase):
         self.assertEqual(receipt["area"], "native")
         self.assertEqual({e["reviewer"] for e in receipt["panel"]}, {"sol", "opus"})
 
+    def test_cross_area_move_shows_in_both_source_and_destination_areas(self) -> None:
+        base = self.tip_sha
+        # Move lib/api.txt -> native/moved.txt (pure git rename).
+        self.git(self.integration, "mv", "lib/api.txt", "native/moved.txt")
+        self.git(self.integration, "commit", "-m", "move file across areas")
+        moved_sha = self.tip()
+
+        areas_file = self.tmp / "move_areas.toml"
+        areas_file.write_text('[areas]\nbackend = ["lib/**"]\nnative = ["native/**"]\n', encoding="utf-8")
+        self.review_text.write_text(NO_FINDINGS)
+        output = self.lane(
+            "review", "--overall", moved_sha, "--since", base, "--areas", str(areas_file)
+        )
+        self.assertIn("Area: backend", output)
+        self.assertIn("Area: native", output)
+        self.assertTrue((self.state / f"{review.area_review_label(moved_sha, 'backend')}.review.json").exists())
+        self.assertTrue((self.state / f"{review.area_review_label(moved_sha, 'native')}.review.json").exists())
+
+    def test_inline_diff_batches_large_path_lists_in_order(self) -> None:
+        req = reviewer.Request(
+            standards="rules",
+            subject="subject",
+            base=self.base,
+            tip=self.tip_sha,
+            paths=("docs/guide.md", "lib/api.txt", "lib/sub/helper.txt", "native/core.txt"),
+        )
+        with mock.patch.object(reviewer, "DIFF_PATH_BATCH", 2):
+            diff = reviewer._inline_diff(str(self.integration), req)  # pyright: ignore[reportPrivateUsage]
+        self.assertIn("docs_changed", diff)
+        self.assertIn("alpha_changed", diff)
+        self.assertIn("helper_changed", diff)
+        self.assertIn("native_changed", diff)
+        self.assertLess(diff.index("docs_changed"), diff.index("alpha_changed"))
+        self.assertLess(diff.index("alpha_changed"), diff.index("helper_changed"))
+        self.assertLess(diff.index("helper_changed"), diff.index("native_changed"))
+
+    def test_area_ticket_failure_hint_points_to_area_flag_and_retries(self) -> None:
+        areas_file = self.tmp / "retry_area.toml"
+        areas_file.write_text('[areas]\nbackend = ["lib/**"]\n', encoding="utf-8")
+        self.review_text.write_text(TWO_FINDINGS)
+        self.env["FAKE_GH_FAIL_CREATE"] = "1"
+        failed_out = self.lane(
+            "review", "--overall", self.tip_sha, "--since", self.base, "--areas", str(areas_file), ok=False
+        )
+        self.assertIn(f"lanefather review --overall {self.tip_sha[:10]} --area backend files it again", failed_out)
+        del self.env["FAKE_GH_FAIL_CREATE"]
+        retried_out = self.lane("review", "--overall", self.tip_sha, "--area", "backend")
+        self.assertIn("Ticket: https://github.com/fixture/", retried_out)
+        self.assertEqual(len([c for c in self.codex_calls() if c[2] == "exec"]), 1)
+
     def test_invalid_flag_combinations_and_malformed_areas_files_refuse_cleanly(self) -> None:
         valid_areas = self.tmp / "valid.toml"
         valid_areas.write_text('[areas]\nbackend = ["lib/**"]\n', encoding="utf-8")
@@ -256,9 +343,26 @@ class OverallReviewPathsAndAreasTests(LaneCase):
         cases: list[tuple[tuple[str, ...], str]] = [
             (("review", "a", "--paths", "lib/**"), "--paths goes with --overall"),
             (("review", "a", "--areas", str(valid_areas)), "--areas goes with --overall"),
+            (("review", "a", "--area", "backend"), "--area goes with --overall"),
             (
                 ("review", "--overall", self.tip_sha, "--since", self.base, "--paths", "lib/**", "--areas", str(valid_areas)),
                 "--paths and --areas do not combine",
+            ),
+            (
+                ("review", "--overall", self.tip_sha, "--area", "backend", "--paths", "lib/**"),
+                "--area does not combine with --paths, --areas or --lanes",
+            ),
+            (
+                ("review", "--overall", self.tip_sha, "--area", "backend", "--areas", str(valid_areas)),
+                "--area does not combine with --paths, --areas or --lanes",
+            ),
+            (
+                ("review", "--overall", self.tip_sha, "--area", "backend", "--lanes", "a"),
+                "--area does not combine with --paths, --areas or --lanes",
+            ),
+            (
+                ("review", "--overall", self.tip_sha, "--area", "a" * 46),
+                "invalid area name",
             ),
             (
                 ("review", "--overall", self.tip_sha, "--since", self.base, "--paths", "lib/**", "--lanes", "a"),
@@ -302,6 +406,7 @@ class OverallReviewPathsAndAreasTests(LaneCase):
             ("empty.toml", "", "areas file is empty"),
             ("no_areas.toml", "[areas]\n", "defines no areas"),
             ("bad_name.toml", '[areas]\n"../escape" = ["lib/**"]\n', "invalid area name"),
+            ("too_long.toml", f'[areas]\n{"a" * 46} = ["lib/**"]\n', "invalid area name"),
             ("empty_globs.toml", "[areas]\nbackend = []\n", "non-empty list of path globs"),
             ("dup_case.toml", '[areas]\nAPI = ["lib/**"]\napi = ["native/**"]\n', "duplicate area name"),
             ("extra_top.toml", 'other = 1\n[areas]\nbackend = ["lib/**"]\n', "unexpected top-level keys"),

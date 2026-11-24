@@ -41,6 +41,7 @@ ROLE_TIMEOUT = LIMIT_TIMEOUT + 15
 REVIEW_TIMEOUT = 30 * 60
 OPUS_TOOLS = "Read,Grep,Glob,Bash(git diff:*),Bash(git log:*),Bash(git show:*)"
 MAX_INLINE_DIFF = 400_000
+DIFF_PATH_BATCH = 500
 MAX_FINDINGS = 8
 SEVERITIES = ("P1", "P2", "P3")
 # package-misuse: a use of a dependency package against its documented API; the friction journal counts these.
@@ -759,10 +760,28 @@ def _restore_checkout(checkout: str) -> None:
 def _inline_diff(checkout: str, request: Request) -> str:
     """The diff itself, for a reviewer without a shell beyond git (Claude, Antigravity) and for every panel member."""
     if request.paths:
-        pathspecs = [f":(literal){p}" for p in request.paths]
-        diff = git(checkout, "diff", f"{request.base}...{request.tip}", "--", *pathspecs)
-    else:
-        diff = git(checkout, "diff", f"{request.base}...{request.tip}")
+        chunks: list[str] = []
+        total = 0
+        truncated = False
+        batch_size = max(1, DIFF_PATH_BATCH)
+        for offset in range(0, len(request.paths), batch_size):
+            batch = request.paths[offset : offset + batch_size]
+            pathspecs = [f":(literal){p}" for p in batch]
+            part = git(checkout, "diff", "--no-renames", f"{request.base}...{request.tip}", "--", *pathspecs)
+            if part:
+                if chunks and not chunks[-1].endswith("\n"):
+                    chunks.append("\n")
+                    total += 1
+                chunks.append(part)
+                total += len(part)
+                if total > MAX_INLINE_DIFF:
+                    truncated = True
+                    break
+        diff = "".join(chunks)
+        if truncated or len(diff) > MAX_INLINE_DIFF:
+            diff = diff[:MAX_INLINE_DIFF] + "\n[diff truncated: read the rest with git diff]"
+        return diff
+    diff = git(checkout, "diff", f"{request.base}...{request.tip}")
     if len(diff) > MAX_INLINE_DIFF:
         diff = diff[:MAX_INLINE_DIFF] + "\n[diff truncated: read the rest with git diff]"
     return diff

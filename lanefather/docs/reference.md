@@ -17,7 +17,7 @@ lanefather check <id>                     the checks the plan selects for the la
 lanefather wait <id> --for registered|landed|done [--timeout S] [--json]   block until the lane is there
 lanefather land <id> [--into WORKTREE] [--keep] [--partial [--remaining TEXT]]
 lanefather review <id> [--mark N fixed:<merge>|rejected:<reason>] [--fix-lane] [--record FILE --reviewer ALIAS] [--audit]
-lanefather review --overall <sha> [--since <base>] [--lanes ID,ID] [--paths GLOB... | --areas FILE] [--record FILE --reviewer ALIAS] [--mark N ...]
+lanefather review --overall <sha> [--since <base>] [--lanes ID,ID] [--paths GLOB... | --areas FILE | --area NAME] [--record FILE --reviewer ALIAS] [--mark N ...]
 lanefather done <id>
 lanefather done --finished [--dry-run]    done on every finished lane of the registered projects
 lanefather drop <id> [<id> ...]           remove an active lane that adds nothing to its base
@@ -670,14 +670,19 @@ shows. The receipt records the reviewer's actual `provider`, `cli`, `model`, `ef
 
 For a large overall review (fathers#155), `lanefather review --overall <sha> --since <base>` accepts `--paths GLOB...`
 (repeatable) to restrict the reviewed diff and file list to paths matching those globs (using the same glob syntax as
-lane claims: `*` and `?` within a segment, `**` across segments, and bare directories covering everything beneath them),
-or `--areas FILE` to split the review into named areas. An areas file is TOML (an `[areas]` table or top-level
-`area_name = ["glob1", "glob2"]`) or JSON (`{"area_name": ["glob1", "glob2"]}` for `.json`). Each area with matching
-changes is reviewed separately under its own deterministic receipt (`ship-<sha>-<area>`, recording `area` and `paths`;
-`--paths` uses `paths-<sha>-<digest>` so neither collides with a full `ship-<sha>` receipt), areas with no matching
-changes in `<base>..<sha>` are skipped without starting a reviewer, and each area run with findings files a single
-GitHub issue labelled `area:<name>` (creating the label if missing). `--paths` and `--areas` require `--overall`, are
-mutually exclusive with each other and with `--lanes`, and combine with `--reviewer ALIAS|both`.
+lane claims: `*` and `?` within a segment, `**` across segments, and bare directories covering everything beneath them;
+add a trailing `/` for a new directory whose name contains a dot, such as `conf.d/`), or `--areas FILE` to split the
+review into named areas. An areas file is TOML (an `[areas]` table or top-level `area_name = ["glob1", "glob2"]`) or
+JSON (`{"area_name": ["glob1", "glob2"]}` for `.json`); area names are at most 45 characters so `area:<name>` fits
+GitHub's 50-character label limit. Each area with matching changes is reviewed separately under its own deterministic
+receipt (`ship-<sha>-<area>`, recording `area`, `paths`, and `issue_label` when a ticket is filed; `--paths` uses
+`paths-<sha>-<digest>` recording `paths`, so neither collides with a full `ship-<sha>` receipt). Areas with no matching
+changes in `<base>..<sha>` are skipped without starting a reviewer, rerunning `--areas` refuses if an area's configured
+globs changed since its finished receipt unless `--force-reason` is given, and each area run with findings files a
+single GitHub issue labelled `area:<name>` (creating the label if missing). Pass `--area NAME` with `--overall <sha>`
+to inspect an area receipt, retry its ticket filing, or mark its findings (`--mark N ...`). `--paths`, `--areas`, and
+`--area` require `--overall`, are mutually exclusive with each other and with `--lanes`, and `--paths`/`--areas`
+combine with `--reviewer ALIAS|both`.
 
 Receipts from this release add keys (`agent` in a check receipt; `panel`, `forced`, `role`, `prompt_sha256`,
 `scope`, `scope_complete` and a finding's `reviewer`, `session` and `usage` in a review receipt) that an earlier
