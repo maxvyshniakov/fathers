@@ -124,6 +124,13 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 
 ### Fixed
 
+- `spawnfather hook` now treats `SessionEnd` as ending the session only for terminal reasons (`prompt_input_exit`,
+  `clear`, `logout`, `bypass_permissions_disabled`, or an omitted reason); transient or harness reasons such as
+  `other` (fired between turns in T3 Code) or `resume` no longer reap `--keep-for session` entries or mark the session
+  ended for `leftovers` sweep, and `spawnfather own --help` documents `--keep-for session` vs `hand --to lane:...`
+  for long-lived servers in T3 threads. When `sweep` finds an owned process entry already `gone`, it now records an
+  `entry.gone` event (and `report["gone"]` details) with `exit` if known and the last lines of the entry's `log` file
+  when readable (fathers#245).
 - Spawnfather now shares its Claude Code and Codex agent-session patterns with Slotfather through
   `fathers_common.agents`, and its process-table reads fail closed when `ps` omits the caller or exits 1 with an
   error message on stderr (fathers#146).

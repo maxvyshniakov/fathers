@@ -92,12 +92,22 @@ def parser() -> Parser:
                             f"{duration(defaults.TTL)} unless changed)")
         p.add_argument("--keep-for", choices=("owner", "session"), default="owner",
                        help="owner: ends with the agent that started it; session: survives a subagent's stop and "
-                            "ends with the session")
+                            "transient SessionEnd events (such as T3 Code between turns) and ends when the session "
+                            "ends for good")
         p.add_argument("--label", help="a name for list")
         p.add_argument("--lane", help="the lane it belongs to (default LANEFATHER_LANE or the lane records)")
         p.add_argument("--agent", help=argparse.SUPPRESS)
 
-    p = sub.add_parser("own", help="start a command as an owned process group")
+    p = sub.add_parser(
+        "own",
+        help="start a command as an owned process group",
+        description=(
+            "Start a command as an owned process group. For a long-lived server a person will look at from a T3 "
+            "thread, use --detach --keep-for session so it survives subagent stops and between-turn SessionEnd "
+            "(reason: other) events until the session ends or its --ttl passes. To outlive the session and its TTL "
+            "altogether, hand the entry to a lane with `spawnfather hand ID --to lane:PROJECT/ID`."
+        ),
+    )
     ownership(p)
     p.add_argument("--kind", choices=_resources.WRAPPABLE,
                    help="the command makes a resource that outlives it (simctl boot, docker run -d, tailscale serve "

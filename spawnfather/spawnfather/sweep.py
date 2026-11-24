@@ -27,6 +27,7 @@ import os
 from pathlib import Path
 import plistlib
 import re
+import stat
 import sys
 import time
 from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
@@ -43,7 +44,8 @@ from . import resources as _resources
 from . import safety as _safety
 from . import settings as _settings
 from . import worktrees as _worktrees
-from .defaults import KEEP_FINISHED, REAPING_STUCK, STARTING_STUCK, WORKTREE_IDLE
+from .defaults import (GONE_LOG_BYTES, GONE_LOG_LINE_MAX, GONE_LOG_LINES, KEEP_FINISHED, REAPING_STUCK,
+                       STARTING_STUCK, WORKTREE_IDLE)
 from .entry import Entry
 from .state import Store, VERSION, as_dict, as_list, read_json, write_atomic
 from .text import duration
@@ -194,8 +196,13 @@ def sweep(store: Store, dry_run: bool = False, table: Optional[_procs.Table] = N
                 owned.add(supervisor["pid"])
                 continue
             if not dry_run:
-                _entry.gone(store, entry["id"], now)
-            report["gone"].append({"id": entry["id"], "how": how})
+                updated = _entry.gone(store, entry["id"], now)
+                details = _gone_details(updated or entry, how)
+                if updated is not None:
+                    _events.write(store.root, "entry.gone", _events.subject(updated), _events.tool("sweep"), details)
+            else:
+                details = _gone_details(entry, how)
+            report["gone"].append({"id": entry["id"], **details})
             continue
         result = reap_due_or_orphaned(store, entry, now, table, sessions, grace, dry_run)
         if result is not None:
@@ -478,6 +485,53 @@ def worktrees_text(found: Dict[str, Any], dry_run: bool) -> List[str]:
     lines += [f"{'would prune' if dry_run else 'pruned'} {line}" for line in as_list(found.get("pruned"))]
     lines += [f"note: {note}" for note in as_list(found.get("notes"))]
     return lines
+
+
+def _tail_log(path: Any) -> Optional[List[str]]:
+    """Last few lines of an entry's log file, capped in bytes and lines; None if missing, not a regular file,
+    unreadable, or empty."""
+    if not isinstance(path, str) or not path:
+        return None
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+    except OSError:
+        return None
+    try:
+        handle = os.fdopen(fd, "rb")
+    except OSError:
+        os.close(fd)
+        return None
+    try:
+        with handle:
+            st = os.fstat(handle.fileno())
+            if not stat.S_ISREG(st.st_mode) or st.st_size <= 0:
+                return None
+            truncated = st.st_size > GONE_LOG_BYTES
+            if truncated:
+                handle.seek(st.st_size - GONE_LOG_BYTES)
+            chunk = handle.read(GONE_LOG_BYTES)
+    except OSError:
+        return None
+    lines = chunk.decode("utf-8", errors="replace").splitlines()
+    if truncated and len(lines) > 1:
+        lines = lines[1:]  # drop the partial line at the seek boundary
+    lines = [line[:GONE_LOG_LINE_MAX] for line in lines[-GONE_LOG_LINES:]]
+    return lines or None
+
+
+def _gone_details(entry: Entry, how: str) -> Dict[str, Any]:
+    """What the sweep can record when an owned entry's processes are already gone."""
+    details: Dict[str, Any] = {"how": how}
+    code = entry.get("exit")
+    if isinstance(code, int) and not isinstance(code, bool):
+        details["exit"] = code
+    log = entry.get("log")
+    if isinstance(log, str) and log:
+        tail = _tail_log(log)
+        if tail is not None:
+            details["log"] = log
+            details["log_tail"] = tail
+    return details
 
 
 def _age(seconds: Optional[float]) -> str:

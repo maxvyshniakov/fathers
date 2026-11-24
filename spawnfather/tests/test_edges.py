@@ -74,6 +74,39 @@ class EdgeTests(Case):
         self.assertEqual("reaping", self.state_of("jheld"), "its reaper still runs")
         self.assertEqual("reaping", self.state_of("jfresh"), "not stuck long enough")
 
+    def test_sweep_records_exit_and_log_tail_when_an_owned_entry_is_gone(self):
+        me = os.getpid()
+        now = 10_000.0
+        here = table(proc(me, ppid=1, start="Thu Nov 12 09:00:00 2026", cmd="python3"))
+        log = self.tmp / "storybook.log"
+        log.write_text("\n".join(f"line {i}" for i in range(1, 25)) + "\nKilled: 9\n")
+        unreadable = self.tmp / "not-a-file"
+        unreadable.mkdir()
+        with_log = running(4243, "Thu Nov 12 08:30:00 2026", "node storybook", "jwithlog")
+        with_log.update(log=str(log), exit=137)
+        missing_log = running(4244, "Thu Nov 12 08:30:00 2026", "node server", "jmissing")
+        missing_log.update(log=str(self.tmp / "does-not-exist.log"))
+        dir_log = running(4245, "Thu Nov 12 08:30:00 2026", "node worker", "jdirlog")
+        dir_log.update(log=str(unreadable))
+        for record in (with_log, missing_log, dir_log):
+            self.store.save(record)
+        report = self.quiet_sweep(table=here, now=now)
+        by_id = {g["id"]: g for g in report["gone"]}
+        self.assertEqual({"jwithlog", "jmissing", "jdirlog"}, set(by_id))
+        self.assertEqual(137, by_id["jwithlog"].get("exit"))
+        self.assertEqual(str(log), by_id["jwithlog"].get("log"))
+        self.assertEqual("Killed: 9", (by_id["jwithlog"].get("log_tail") or [""])[-1])
+        self.assertLessEqual(len(by_id["jwithlog"].get("log_tail") or []), 10)
+        self.assertNotIn("log_tail", by_id["jmissing"])
+        self.assertNotIn("log_tail", by_id["jdirlog"])
+        logged = [json.loads(line) for line in (self.state / "events.jsonl").read_text().splitlines()]
+        gone_events = {e["subject"]["id"]: e for e in logged if e["kind"] == "entry.gone"}
+        self.assertEqual({"jwithlog", "jmissing", "jdirlog"}, set(gone_events))
+        self.assertEqual(137, gone_events["jwithlog"]["details"].get("exit"))
+        self.assertEqual("Killed: 9", gone_events["jwithlog"]["details"]["log_tail"][-1])
+        self.assertNotIn("log_tail", gone_events["jmissing"]["details"])
+        self.assertNotIn("log_tail", gone_events["jdirlog"]["details"])
+
     def test_reaping_entry_members_are_owned_in_sweep_and_not_reported_as_unowned(self):
         me = os.getpid()
         now = 10_000.0

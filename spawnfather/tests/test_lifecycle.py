@@ -109,6 +109,11 @@ class HookTests(Case):
         self.assertEqual("running", self.state_of(kept["id"]))
         self.assertTrue(self.runs(kept["pid"]))
         self.hook("SessionEnd", "s1", reason="other")
+        self.assert_no_reap_started()
+        self.assertEqual("running", self.state_of(kept["id"]))
+        self.assertTrue(self.runs(kept["pid"]))
+        self.assertFalse((self.state / "ended" / "s1.json").exists())
+        self.hook("SessionEnd", "s1", reason="prompt_input_exit")
         self.wait_for(lambda: self.state_of(kept["id"]) == "reaped", what="session end reap")
         self.assertFalse(self.runs(kept["pid"]))
 

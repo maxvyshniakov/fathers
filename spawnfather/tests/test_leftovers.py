@@ -343,7 +343,7 @@ class EnvironmentTests(Case):
         self.assertEqual({"CLAUDE_CODE_SESSION_ID": ["s-real-168"], "CLAUDE_PID": [str(ended.pid)]}, read)
         self.assertIsNone(REAL_ENVIRONMENTS({mine.pid: "another command"})[mine.pid], "a changed command: unread")
         item = {"pid": mine.pid, "start": mine.start, "cmd": mine.cmd, "cwd": "/", "also": [], "tree": [mine.pid]}
-        leftovers.record_end(self.store, "s-real-168", "other", now=time.time())
+        leftovers.record_end(self.store, "s-real-168", "prompt_input_exit", now=time.time())
         kept, rows = leftovers.stop_gone(self.store, [item], procs.Table.read(), [],
                                          leftovers.Holders(set(), set(), set()), 5.0, False, time.time(),
                                          environ=REAL_ENVIRONMENTS, stopper=reap.stop)

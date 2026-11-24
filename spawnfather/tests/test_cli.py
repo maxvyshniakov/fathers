@@ -109,6 +109,11 @@ class ConventionTests(Case):
         for command in [c for c in cli.COMMANDS if c not in ("supervise", "background")]:
             self.assertRegex(shown, rf"\n    {re.escape(command)}\b", command)
 
+    def test_own_help_explains_keep_for_session_and_lane_handoff(self):
+        shown = " ".join(self.cli("own", "--help").stdout.split())
+        self.assertIn("--keep-for session", shown)
+        self.assertIn("hand ID --to lane:PROJECT/ID", shown)
+
     def test_version_flag_and_command_agree(self):
         flag, command = self.cli("--version"), self.cli("version")
         self.assertEqual((0, ""), (flag.returncode, flag.stderr))

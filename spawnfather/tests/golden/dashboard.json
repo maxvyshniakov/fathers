@@ -20,6 +20,7 @@
        "entry.owned",
        "entry.adopted",
        "entry.exited",
+       "entry.gone",
        "entry.extended",
        "entry.handed",
        "entry.reaped",
