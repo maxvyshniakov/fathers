@@ -672,6 +672,140 @@ class ParallelRunnerTests(unittest.TestCase):
             self.assertIn("boom-c", result.stderr)
             self.assertIn("FAILED (files=2: tests/test_a.py, tests/test_c.py)", result.stderr)
 
+    def test_schedule_prefers_recorded_timings_over_file_size(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tests = root / "tests"
+            tests.mkdir()
+            small_slow = tests / "test_a_small_slow.py"
+            large_fast = tests / "test_b_large_fast.py"
+            medium = tests / "test_c_medium.py"
+            small_slow.write_text("# tiny\n")
+            large_fast.write_text("# " + ("x" * 2000) + "\n")
+            medium.write_text("# " + ("y" * 500) + "\n")
+            files = [small_slow, large_fast, medium]
+
+            # Without timings, largest file schedules first.
+            size_order = [files[i].name for i in checks.schedule_test_files(root, files, {})]
+            self.assertEqual(["test_b_large_fast.py", "test_c_medium.py", "test_a_small_slow.py"], size_order)
+
+            # With recorded timings, slower small file schedules before larger-but-faster file.
+            timings = {
+                "tests/test_a_small_slow.py": 8.5,
+                "tests/test_b_large_fast.py": 0.4,
+                "tests/test_c_medium.py": 2.1,
+            }
+            timed_order = [files[i].name for i in checks.schedule_test_files(root, files, timings)]
+            self.assertEqual(["test_a_small_slow.py", "test_c_medium.py", "test_b_large_fast.py"], timed_order)
+
+    def test_missing_or_corrupt_timings_file_falls_back_to_size_order(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tests = root / "tests"
+            tests.mkdir()
+            small = tests / "test_a_small.py"
+            large = tests / "test_b_large.py"
+            small.write_text("# small\n")
+            large.write_text("# " + ("x" * 1000) + "\n")
+            files = [small, large]
+
+            missing = root / "missing-timings.json"
+            missing_timings = checks.load_test_timings(missing, "lanefather")
+            self.assertEqual({}, missing_timings)
+            self.assertEqual(
+                ["test_b_large.py", "test_a_small.py"],
+                [files[i].name for i in checks.schedule_test_files(root, files, missing_timings)],
+            )
+
+            corrupt = root / "corrupt-timings.json"
+            corrupt_payloads = (
+                "{not valid json",
+                "[]",
+                '{"v": 1, "packages": "nope"}',
+                '{"v": 1, "packages": {"lanefather": {"tests/test_a_small.py": "bad"}}}',
+            )
+            for payload in corrupt_payloads:
+                with self.subTest(payload=payload):
+                    corrupt.write_text(payload, encoding="utf-8")
+                    loaded = checks.load_test_timings(corrupt, "lanefather")
+                    self.assertEqual({}, loaded)
+                    self.assertEqual(
+                        ["test_b_large.py", "test_a_small.py"],
+                        [files[i].name for i in checks.schedule_test_files(root, files, loaded)],
+                    )
+
+    def test_parallel_runner_persists_timings_and_uses_them_on_next_run(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tests = root / "tests"
+            tests.mkdir()
+            timings_path = root / checks.TEST_TIMINGS_RECORD
+            (tests / "test_a_small.py").write_text(
+                "import unittest\n"
+                "class A(unittest.TestCase):\n"
+                "    def test_one(self): self.assertEqual(1, 1)\n"
+            )
+            (tests / "test_b_large.py").write_text(
+                "import unittest\n"
+                "# " + ("x" * 1500) + "\n"
+                "class B(unittest.TestCase):\n"
+                "    def test_two(self): self.assertEqual(2, 2)\n"
+            )
+            # Pre-seed an unrelated package to verify persistence preserves other packages.
+            timings_path.write_text(
+                json.dumps({"v": 1, "packages": {"other": {"tests/test_other.py": 1.25}}}),
+                encoding="utf-8",
+            )
+            with mock.patch("sys.stdout", new_callable=io.StringIO), \
+                    mock.patch("sys.stderr", new_callable=io.StringIO):
+                code = checks.run_unittest_parallel(
+                    root, ["-s", "tests", "-p", "test_*.py"], dict(os.environ), workers=2,
+                    timings_path=timings_path, package="sample",
+                )
+            self.assertEqual(0, code)
+            saved = json.loads(timings_path.read_text(encoding="utf-8"))
+            self.assertEqual(1, saved["v"])
+            self.assertEqual({"tests/test_other.py": 1.25}, saved["packages"]["other"])
+            sample_timings = saved["packages"]["sample"]
+            self.assertEqual({"tests/test_a_small.py", "tests/test_b_large.py"}, set(sample_timings))
+            self.assertTrue(all(isinstance(v, (int, float)) and v >= 0 for v in sample_timings.values()))
+
+            # Corrupt the file and verify run_unittest_parallel still succeeds and heals it.
+            timings_path.write_text("{corrupt", encoding="utf-8")
+            with mock.patch("sys.stdout", new_callable=io.StringIO), \
+                    mock.patch("sys.stderr", new_callable=io.StringIO):
+                code = checks.run_unittest_parallel(
+                    root, ["-s", "tests", "-p", "test_*.py"], dict(os.environ), workers=2,
+                    timings_path=timings_path, package="sample",
+                )
+            self.assertEqual(0, code)
+            healed = json.loads(timings_path.read_text(encoding="utf-8"))
+            self.assertEqual({"tests/test_a_small.py", "tests/test_b_large.py"}, set(healed["packages"]["sample"]))
+
+            # Verify dispatch order respects recorded timings when workers=2 runs with mocked subprocess.run.
+            timings_path.write_text(
+                json.dumps({"v": 1, "packages": {"sample": {
+                    "tests/test_a_small.py": 12.0,
+                    "tests/test_b_large.py": 0.2,
+                }}}),
+                encoding="utf-8",
+            )
+            dispatched: list[str] = []
+
+            def fake_run(argv: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+                dispatched.append(argv[-1])
+                return subprocess.CompletedProcess(argv, 0, stdout="", stderr="Ran 1 test in 0.010s\n\nOK\n")
+
+            with mock.patch.object(checks.subprocess, "run", side_effect=fake_run), \
+                    mock.patch("sys.stdout", new_callable=io.StringIO), \
+                    mock.patch("sys.stderr", new_callable=io.StringIO):
+                code = checks.run_unittest_parallel(
+                    root, ["-s", "tests", "-p", "test_*.py"], dict(os.environ), workers=2,
+                    timings_path=timings_path, package="sample",
+                )
+            self.assertEqual(0, code)
+            self.assertEqual(["test_a_small.py", "test_b_large.py"], dispatched)
+
 
 class RepositoryRuleTests(unittest.TestCase):
     """One lint gate for the four packages: the same file, the same pinned tools, the shared Ruff rules."""
