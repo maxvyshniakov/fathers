@@ -124,6 +124,9 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 
 ### Fixed
 
+- Spawnfather now shares its Claude Code and Codex agent-session patterns with Slotfather through
+  `fathers_common.agents`, and its process-table reads fail closed when `ps` omits the caller or exits 1 with an
+  error message on stderr (fathers#146).
 - A worktree whose disposable build output sat in an otherwise empty folder (`desktop/node_modules/`) was kept as
   holding ignored files; only the ignored paths themselves count now.
 - A worktree with submodules is refused with a clear reason instead of a failed `git worktree remove`, and a dead

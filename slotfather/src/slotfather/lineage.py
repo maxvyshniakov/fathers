@@ -5,9 +5,12 @@ from __future__ import annotations
 import re
 from typing import Callable, Iterable, Mapping, Sequence, cast
 
-# Agent and terminal sessions: an executable that is one, or a process with a terminal (session_command()).
-SESSION = re.compile(r"(^|/)(claude|codex|CodexCLI|tmux|screen|zellij|mosh-server|sshd|sshd-session|login|"
-                     r"Runner\.Listener|Runner\.Worker)$|/claude/versions/[^/]+$")
+from fathers_common import agents as _agents
+
+# Non-agent terminal, remote and CI sessions; agent sessions (Claude Code, Codex) come from `fathers_common.agents`.
+TERMINAL_SESSION = re.compile(
+    r"(^|/)(tmux|screen|zellij|mosh-server|sshd|sshd-session|login|Runner\.Listener|Runner\.Worker)$"
+)
 
 
 def children_of(parents: Mapping[int, int]) -> dict[int, list[int]]:
@@ -65,7 +68,13 @@ def program(cmd: str) -> str:
     return found[1] if found else (cmd.split() or [""])[0]
 
 
+def session_executable(cmd: str) -> bool:
+    """Whether `cmd` is an agent session (Claude Code or Codex, via `fathers_common.agents`) or a terminal
+    multiplexer, sshd, login or CI runner executable."""
+    return _agents.is_agent(cmd) or bool(TERMINAL_SESSION.search(program(cmd)))
+
+
 def session_command(cmd: str, tty: str = "") -> bool:
-    """The one session rule (`procs` and the sweep): a process with a terminal, or whose executable (program()) is
-    an agent, a terminal multiplexer, sshd, login or a CI runner."""
-    return bool(tty) or bool(SESSION.search(program(cmd)))
+    """The one session rule (`procs` and the sweep): a process with a terminal, or whose command is an agent
+    session or a terminal multiplexer, sshd, login or CI runner."""
+    return bool(tty) or session_executable(cmd)

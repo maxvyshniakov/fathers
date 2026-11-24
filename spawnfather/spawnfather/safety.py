@@ -14,11 +14,13 @@ import os
 import re
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Set, Tuple
 
+from fathers_common import agents as _agents
+
 from . import procs as _procs
 from .state import Store, as_dict, as_list, read_json
 
-CLAUDE = re.compile(r"(^|/)claude(\s|$)|/claude/versions/[^/\s]+(\s|$)|/claude\.app/Contents/MacOS/claude(\s|$)")
-CODEX = re.compile(r"(^|/)(codex|CodexCLI)(\s|$)|/codex-[\w-]+/vendor/[^\s]*/codex(\s|$)")
+CLAUDE = _agents.CLAUDE
+CODEX = _agents.CODEX
 
 
 AGENT_LOCK = re.compile(r"^claude agent\b.*\(pid (\d+)\)")
@@ -32,17 +34,17 @@ def agent_lock_pid(lock: str) -> Optional[int]:
 
 def claude(cmd: str) -> bool:
     """A Claude Code session's process, by its command."""
-    return bool(CLAUDE.search(cmd))
+    return _agents.is_claude(cmd)
 
 
 def codex(cmd: str) -> bool:
     """A Codex session's process, by its command."""
-    return bool(CODEX.search(cmd))
+    return _agents.is_codex(cmd)
 
 
 def agent(proc: _procs.Proc) -> bool:
     """An agent session's process (Claude Code or Codex)."""
-    return claude(proc.cmd) or codex(proc.cmd)
+    return _agents.is_agent(proc.cmd)
 
 
 def protected(table: _procs.Table) -> Set[int]:

@@ -18,6 +18,7 @@ import subprocess
 import time
 from typing import Any, Callable, Iterable, Mapping, Sequence, cast
 
+from fathers_common import agents as _agents
 from fathers_common.proc import Proc
 
 from . import lineage as _lineage
@@ -35,7 +36,6 @@ SPAWNFATHER_EVERY = 60.0  # seconds a holder reuses Spawnfather's entries (the c
 LOAD_MIN = 1.0  # one-minute load below which the machine has not a core's worth of work outside leases to name
 
 _APP = re.compile(r"(?:^|/)([^/]+?)\.app/Contents/")
-_AGENT = re.compile(r"/claude/versions/[^/]+$")
 
 Spawned = Callable[[], Sequence[Mapping[str, Any]]]
 
@@ -54,8 +54,7 @@ def family(cmd: str) -> str:
         name = bundle[1]
     else:
         program = _lineage.program(cmd)
-        name = "" if _AGENT.search(program) is None else "claude"
-        name = name or os.path.basename(program).lstrip("-").rstrip(":")
+        name = _agents.agent_kind(program) or os.path.basename(program).lstrip("-").rstrip(":")
     return clip(name, FAMILY_MAX) or "?"
 
 
@@ -84,8 +83,9 @@ def owner(pid: int, procs: Mapping[int, Proc], parents: Mapping[int, int], by_pi
         if procs[member].pgid in by_group:
             return by_group[procs[member].pgid]
     for member in chain:
-        if _lineage.SESSION.search(_lineage.program(procs[member].cmd)):
-            return clip(f"{family(procs[member].cmd)} {member}", OWNER_MAX)
+        if _lineage.session_executable(procs[member].cmd):
+            label = _agents.agent_kind(procs[member].cmd) or family(procs[member].cmd)
+            return clip(f"{label} {member}", OWNER_MAX)
     return None
 
 

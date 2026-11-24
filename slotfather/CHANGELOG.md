@@ -234,6 +234,10 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 
 ### Fixed
 
+- Slotfather and Spawnfather now share one table of Claude Code and Codex agent-session patterns
+  (`fathers_common.agents`), so `slotfather procs --json`, `slotfather sweep` and outside-leases attribution
+  recognize the same agent sessions as Spawnfather, including vendor-bundled Codex and interpreter-launched
+  sessions (fathers#146).
 - `slotfather sweep` protects live processes belonging to newer clients' unknown queue entries, wait forecasts
   account for the full slot count granted to `-n MIN-MAX` range requests, `-n 1-MAX` grants clamp to 1 slot under a
   memory-pressure warning, and requests with no run history are no longer admitted ahead of a head that gave way

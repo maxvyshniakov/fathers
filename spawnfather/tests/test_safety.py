@@ -128,6 +128,20 @@ class PolicyTests(unittest.TestCase):
                  for number, line in enumerate(path.read_text().splitlines(), 1) if pattern.search(line)]
         self.assertEqual([], found)
 
+    def test_procs_identities_and_table_read_fail_closed(self):
+        """`procs.identities` raises on exit 1 with stderr, and `Table.read` rejects a table without the caller."""
+        from unittest import mock
+
+        bad_identities = subprocess.CompletedProcess(["ps"], 1, "", "ps: illegal option")
+        with mock.patch("subprocess.run", return_value=bad_identities), self.assertRaises(procs.ProcError):
+            procs.identities([os.getpid()])
+
+        no_caller = subprocess.CompletedProcess(
+            ["ps"], 0, "    1     0     1     0   0.0 ??       Thu Nov 12 10:00:00 2026 /sbin/launchd\n", "",
+        )
+        with mock.patch("subprocess.run", return_value=no_caller), self.assertRaises(procs.ProcError):
+            procs.Table.read()
+
 
 if __name__ == "__main__":
     unittest.main()
