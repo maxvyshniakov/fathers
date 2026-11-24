@@ -3,9 +3,7 @@ lock-free cleanup, fathers#72).
 """
 from __future__ import annotations
 
-import ast
 import fcntl
-import inspect
 import json
 import os
 import pathlib
@@ -15,9 +13,6 @@ import unittest
 from unittest import mock
 
 from support import LaneCase
-
-ROOT = pathlib.Path(__file__).resolve().parent.parent
-PKG = ROOT / "lanefather"
 
 
 class _KilledAfterMerge(RuntimeError):
@@ -207,29 +202,6 @@ class LandPhasesTests(LaneCase):
         self.assertEqual(self.record("d")["status"], "done")
         self.assertFalse(pathlib.Path(worktree).exists())
         self.assertEqual(json.loads((self.state / "d.json").read_text())["status"], "done")
-
-
-class Tidy4StructureTests(unittest.TestCase):
-    """Static acceptance checks for #72."""
-
-    def test_land_and_done_function_sizes_and_signatures(self) -> None:
-        from lanefather import done, land
-
-        land_lines = len(inspect.getsourcelines(land.land)[0])
-        finish_lines = len(inspect.getsourcelines(done.finish)[0])
-        self.assertLessEqual(land_lines, 40, f"land.land is {land_lines} lines")
-        self.assertLessEqual(finish_lines, 40, f"done.finish is {finish_lines} lines")
-
-        allowed_namespace = {
-            "land.py": {"land", "recheck"},
-            "done.py": {"done", "drop", "keep"},
-        }
-        for filename, allowed in allowed_namespace.items():
-            tree = ast.parse((PKG / filename).read_text())
-            for node in tree.body:
-                if isinstance(node, ast.FunctionDef) and node.name not in allowed:
-                    arg_names = [a.arg for a in (*node.args.posonlyargs, *node.args.args, *node.args.kwonlyargs)]
-                    self.assertNotIn("args", arg_names, f"{filename}:{node.name} must not take namespace `args`")
 
 
 if __name__ == "__main__":

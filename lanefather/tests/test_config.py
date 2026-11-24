@@ -2,7 +2,6 @@
 [done] stop_inside (lanefather.lifetimes) and the review role of models.toml (lanefather.review)."""
 from __future__ import annotations
 
-import ast
 import json
 import os
 import pathlib
@@ -12,7 +11,7 @@ import textwrap
 import unittest
 import unittest.mock
 
-from support import FIXTURE_CONFIG, ROOT
+from support import FIXTURE_CONFIG
 
 from lanefather import config, lifetimes, promote, reviewer, slots, state, verify
 from lanefather.errors import LaneError
@@ -366,47 +365,6 @@ class SeamTests(ConfigCase):
                     '[checks.min_slots]\n"" = 2\n', '[checks.min_slots]\n"   " = 2\n'):
             with self.subTest(bad=bad), self.assertRaises(LaneError):
                 self.use(bad)
-
-
-class AmbientConfigAndStateGuardTests(unittest.TestCase):
-    """Static architecture guard (fathers#234): zero ambient `config.current()` / `config.use()` / `config._current` /
-    `config.prog()`, zero module-level `state.*` (`state_dir`, `record_path`, `receipt_path`, `load`, `save`, `lanes`,
-    `locked`), and zero `journal.logs()` / `journal.log_path()` definitions or references across `lanefather/lanefather/`."""
-
-    def test_no_ambient_config_state_or_journal_helpers_across_package(self) -> None:
-        pkg_dir = ROOT / "lanefather"
-        forbidden_config = {"current", "use", "_current", "prog"}
-        forbidden_state = {"state_dir", "record_path", "receipt_path", "load", "save", "lanes", "locked"}
-        forbidden_journal = {"logs", "log_path"}
-        violations: list[str] = []
-
-        for name in forbidden_config:
-            if hasattr(config, name):
-                violations.append(f"config.{name} still exists on lanefather.config")
-        for name in forbidden_state:
-            if hasattr(state, name):
-                violations.append(f"state.{name} still exists at module level on lanefather.state")
-
-        for py_file in sorted(pkg_dir.glob("*.py")):
-            tree = ast.parse(py_file.read_text(encoding="utf-8"), filename=str(py_file))
-            for node in tree.body:
-                if isinstance(node, ast.FunctionDef):
-                    if py_file.name == "config.py" and node.name in forbidden_config:
-                        violations.append(f"config.py:{node.lineno} defines {node.name}")
-                    if py_file.name == "state.py" and node.name in forbidden_state:
-                        violations.append(f"state.py:{node.lineno} defines module-level {node.name}")
-                    if py_file.name == "journal.py" and node.name in forbidden_journal:
-                        violations.append(f"journal.py:{node.lineno} defines module-level {node.name}")
-            for node in ast.walk(tree):
-                if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
-                    if node.value.id == "config" and node.attr in forbidden_config:
-                        violations.append(f"{py_file.name}:{node.lineno} references config.{node.attr}")
-                    elif node.value.id == "state" and node.attr in forbidden_state:
-                        violations.append(f"{py_file.name}:{node.lineno} references state.{node.attr}")
-                    elif node.value.id == "journal" and node.attr in forbidden_journal:
-                        violations.append(f"{py_file.name}:{node.lineno} references journal.{node.attr}")
-
-        self.assertEqual(violations, [], "\n".join(violations))
 
 
 if __name__ == "__main__":

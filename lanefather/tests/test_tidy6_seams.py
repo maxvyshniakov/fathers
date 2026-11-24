@@ -1,9 +1,7 @@
-"""Focused unit tests for Tidy 6 seams (fathers#74, fathers#216): github.py, review_gate.py, review_record._transition,
-lock-free gh in done, and acyclic top-level imports among lanes, review, done, tickets, checks, history and
-review_record."""
+"""Focused unit tests for Tidy 6 seams (fathers#74, fathers#216): github.py and lock-free gh in done.
+Static architecture guards live in `test_static_guards.py`."""
 from __future__ import annotations
 
-import ast
 import os
 from pathlib import Path
 import subprocess
@@ -14,130 +12,6 @@ import unittest
 from support import FIXTURE_CONFIG, LaneCase, ScratchCase, close_process
 
 from lanefather import config, github
-
-PKG_DIR = Path(__file__).resolve().parent.parent / "lanefather"
-CORE_MODULES = {
-    "lanes",
-    "review",
-    "done",
-    "tickets",
-    "checks",
-    "history",
-    "review_record",
-    "lifecycle",
-    "postmerge",
-    "land",
-}
-
-
-def _imported_internal_modules(path: Path) -> tuple[set[str], set[str]]:
-    """Return `(top_level, local)` relative module names imported from `lanefather` in `path`."""
-    tree = ast.parse(path.read_text(), filename=str(path))
-    top: set[str] = set()
-    local: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom) and node.level == 1:
-            names = [a.name for a in node.names] if node.module is None else [node.module]
-            target = top if node.col_offset == 0 else local
-            target.update(names)
-    return top, local
-
-
-class Tidy6ArchitectureTests(unittest.TestCase):
-    def test_no_gh_subprocess_outside_github_module(self) -> None:
-        for py_file in sorted(PKG_DIR.glob("*.py")):
-            if py_file.name == "github.py":
-                continue
-            tree = ast.parse(py_file.read_text(), filename=str(py_file))
-            for node in ast.walk(tree):
-                if isinstance(node, ast.Call):
-                    func = node.func
-                    if (isinstance(func, ast.Attribute) and func.attr in ("run", "Popen")
-                            and isinstance(func.value, ast.Name) and func.value.id == "subprocess"):
-                        src = ast.get_source_segment(py_file.read_text(), node) or ""
-                        self.assertNotIn("gh", src.lower(), f"{py_file.name} invokes gh outside github.py: {src}")
-
-    def test_no_import_cycle_or_local_import_among_core_modules(self):
-        graph: dict[str, set[str]] = {}
-        for mod in CORE_MODULES:
-            top, local = _imported_internal_modules(PKG_DIR / f"{mod}.py")
-            local_core = local & CORE_MODULES
-            self.assertEqual(local_core, set(), f"{mod}.py has function-local imports: {local_core}")
-            graph[mod] = top & CORE_MODULES
-
-        visiting: set[str] = set()
-        visited: set[str] = set()
-
-        def dfs(node: str, trail: list[str]) -> None:
-            if node in visited:
-                return
-            visiting.add(node)
-            for nxt in graph[node]:
-                if nxt in visiting:
-                    self.fail(f"import cycle among core modules: {' -> '.join([*trail, nxt])}")
-                dfs(nxt, [*trail, nxt])
-            visiting.remove(node)
-            visited.add(node)
-
-        for mod in sorted(CORE_MODULES):
-            dfs(mod, [mod])
-
-        history_top, history_local = _imported_internal_modules(PKG_DIR / "history.py")
-        self.assertEqual(history_local, set(), f"history.py has local imports: {history_local}")
-        self.assertNotIn("review", history_top | history_local)
-        self.assertIn("review_record", history_top)
-
-    def test_review_receipts_written_only_by_review_record_transition(self):
-        writers: list[tuple[str, str]] = []
-        for py_file in sorted(PKG_DIR.glob("*.py")):
-            tree = ast.parse(py_file.read_text(), filename=str(py_file))
-            for node in ast.walk(tree):
-                if isinstance(node, ast.FunctionDef):
-                    for inner in ast.walk(node):
-                        if not isinstance(inner, ast.Call) or not isinstance(inner.func, ast.Attribute):
-                            continue
-                        if (inner.func.attr == "write"
-                                and isinstance(inner.func.value, ast.Name)
-                                and inner.func.value.id == "receipts"):
-                            kinds = [
-                                *(inner.args[3:4]),
-                                *(kw.value for kw in inner.keywords if kw.arg == "kind"),
-                            ]
-                            for kind_arg in kinds:
-                                if isinstance(kind_arg, ast.Constant) and kind_arg.value == "review":
-                                    self.fail(f"{py_file.name}:{node.name} calls receipts.write(..., 'review')")
-                        if inner.func.attr == "write_json":
-                            target_src = ast.unparse(inner.args[0]) if inner.args else ""
-                            if py_file.name == "review_record.py" or '"review"' in target_src or "'review'" in target_src:
-                                writers.append((py_file.name, node.name))
-        self.assertEqual(writers, [("review_record.py", "_transition")])
-
-    def test_post_merge_and_recheck_receipts_written_only_by_postmerge(self):
-        writers: list[tuple[str, str]] = []
-        for py_file in sorted(PKG_DIR.glob("*.py")):
-            tree = ast.parse(py_file.read_text(), filename=str(py_file))
-            for node in ast.walk(tree):
-                if isinstance(node, ast.FunctionDef):
-                    for inner in ast.walk(node):
-                        if not isinstance(inner, ast.Call) or not isinstance(inner.func, ast.Attribute):
-                            continue
-                        if (inner.func.attr == "write"
-                                and isinstance(inner.func.value, ast.Name)
-                                and inner.func.value.id == "receipts"):
-                            kinds = [
-                                *(inner.args[3:4]),
-                                *(kw.value for kw in inner.keywords if kw.arg == "kind"),
-                            ]
-                            for kind_arg in kinds:
-                                if isinstance(kind_arg, ast.Constant) and kind_arg.value in ("post-merge", "recheck"):
-                                    self.fail(f"{py_file.name}:{node.name} calls receipts.write(..., {kind_arg.value!r})")
-                        if inner.func.attr == "write_json":
-                            target_src = ast.unparse(inner.args[0]) if inner.args else ""
-                            if py_file.name == "postmerge.py" or any(
-                                k in target_src for k in ('"post-merge"', "'post-merge'", '"recheck"', "'recheck'")
-                            ):
-                                writers.append((py_file.name, node.name))
-        self.assertEqual(writers, [("postmerge.py", "_write_receipt")])
 
 
 class GitHubAdapterTests(ScratchCase):
