@@ -126,6 +126,7 @@ class Landed:
     onto: str | None
     keep: bool
     receipt: dict[str, Any] | None
+    pre_land_overridden: bool = False
 
 
 @dataclass(frozen=True)
@@ -269,7 +270,7 @@ def _find_merge_commit(integration: str, tip: str, since: str | None = None) -> 
 def _finish_land_transition(
     store: state.Store, lane_id: str, *, merge_sha: str, previous: str, tip: str, tree: str,
     integration: str, onto: str | None, keep: bool, new_overrides: list[dict[str, Any]],
-    receipt: dict[str, Any] | None,
+    receipt: dict[str, Any] | None, pre_land_overridden: bool = False,
 ) -> Landed:
     record = lifecycle.transition(
         store, lane_id, "land",
@@ -283,6 +284,7 @@ def _finish_land_transition(
     return Landed(
         record=record, merge=merge_sha, previous=previous, integration=integration,
         onto=onto, keep=bool(record["landed"]["keep"]), receipt=receipt,
+        pre_land_overridden=pre_land_overridden,
     )
 
 
@@ -336,6 +338,9 @@ def merge(
             raise LaneError(f"land refused: {integration} has uncommitted changes or a merge in progress")
         if onto in store.project.promoted:
             reviewed, words = review_record.ReviewRecord.load(store, lane_id, record=record).summary(prog=prog)
+            if pre_land_problem is not None:
+                reviewed = False
+                words = pre_land_problem
             if not reviewed and not review.review_exemption(record, store):
                 if not force_reason:
                     raise LaneError(f"land refused: {integration} is on {onto}, which promote would not hold for "
@@ -394,6 +399,7 @@ def merge(
         return _finish_land_transition(
             store, lane_id, merge_sha=merge_sha, previous=previous, tip=tip, tree=tree,
             integration=integration, onto=onto, keep=keep_flag, new_overrides=new_overrides, receipt=receipt,
+            pre_land_overridden=bool(pre_land_problem),
         )
 
 
@@ -418,7 +424,10 @@ def post_merge(store: state.Store, landed: Landed, slots: int | None) -> Smoke:
             ).splitlines() if p]
             docs_only = review.documentation_only(merged_paths, store.project)
             record = store.update(lane_id, lambda rec: rec["landed"].update(docs_only=docs_only))
-            print(f"lane: {review.start_lane_review(store, record)}", flush=True)
+            print(
+                f"lane: {review.start_lane_review(store, record, force_fresh=landed.pre_land_overridden)}",
+                flush=True,
+            )
             print(f"lane: post-merge smoke skipped: exact merge tree {merge_tree[:10]} already verified by lane "
                   f"receipt ({len(exact_verified)} checks); no plan bootstrap needed", flush=True)
             kind = "skip"
@@ -438,7 +447,10 @@ def post_merge(store: state.Store, landed: Landed, slots: int | None) -> Smoke:
             merged_plan = inspector.plan_for(previous)
             plan_docs_only = review.documentation_only(merged_plan["paths"], store.project)
             record = store.update(lane_id, lambda rec: rec["landed"].update(docs_only=plan_docs_only))
-            print(f"lane: {review.start_lane_review(store, record)}", flush=True)
+            print(
+                f"lane: {review.start_lane_review(store, record, force_fresh=landed.pre_land_overridden)}",
+                flush=True,
+            )
             kind, rows = inspector.post_merge_selection(merged_plan)
             kind, rows, narrowing, lane_verified = plan.narrow_smoke(
                 inspector, receipt, record["landed"], merge_tree, kind, rows, record.get("worktree"),

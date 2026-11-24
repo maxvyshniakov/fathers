@@ -1075,7 +1075,7 @@ class ReusedLaneIdReviewTests(LaneCase):
         # Unmarked pre-land findings refuse land.
         refused = self.lane("land", "a", ok=False)
         self.assertIn("land refused", refused)
-        self.assertIn("unmarked findings", refused)
+        self.assertIn("unmarked P1/P2 findings", refused)
 
         # Fix finding 1 in the same lane without --fix-lane, reject finding 2, recheck, and land.
         fix_sha = self.commit(worktree, {"calls/main.txt": "foo\nbaz\n"}, "fix finding 1")
@@ -1163,6 +1163,72 @@ class ReusedLaneIdReviewTests(LaneCase):
         show_json = json.loads(self.lane("show", "a", "--json"))
         self.assertEqual(show_json["review"]["summary"], expected)
         self.assertTrue(show_json["review"]["pre_land"])
+
+        # P3 #10: once an unreviewed commit is added, list/status/show mark it stale.
+        self.commit(worktree, {"lib/api.txt": "foo\nbar\nextra\n"}, "unreviewed extra")
+        self.assertIn(f"{expected} (stale)", self.lane("list"))
+        self.assertIn(f"{expected} (stale)", self.lane("status", cwd=self.tmp))
+        self.assertIn(f"{expected} (stale)", self.lane("show", "a"))
+
+    def test_pre_land_review_multi_commit_fix_and_active_guidance_and_branch_checks(self):
+        # P2 #5 + P2 #9 + P3 #12 + P3 #13.
+        self.review_text.write_text(TWO_FINDINGS)
+        worktree = self.created("a", "lib/**", "calls/**")
+        self.commit(worktree, {"lib/api.txt": "foo\nbaz\n"})
+        self.lane("check", "a")
+        out = self.lane("review", "a")
+        # P3 #13: active pre-land review guidance points to same-lane fix, not --fix-lane.
+        self.assertIn("fixed:<fix-commit>|a", out)
+        self.assertNotIn("--fix-lane", out)
+
+        # P2 #9: wrong checked-out branch refuses review; P3 #12: refused --force-reason writes no override.
+        self.git(worktree, "checkout", "--detach", "HEAD")
+        ledger_before = (self.state / "ledger.log").read_text()
+        wrong_branch = self.lane("review", "a", "--force-reason", "re-review on detached", ok=False)
+        self.assertIn("detached HEAD", wrong_branch)
+        self.assertEqual((self.state / "ledger.log").read_text(), ledger_before)
+        self.git(worktree, "checkout", "lane/a")
+
+        # P1 #1: empty commit cannot close a finding.
+        self.git(worktree, "commit", "--allow-empty", "-qm", "empty commit")
+        empty_sha = self.git(worktree, "rev-parse", "HEAD")
+        empty_mark = self.lane("review", "a", "--mark", "1", f"fixed:{empty_sha}", ok=False)
+        self.assertIn("has the same tree as the reviewed commit", empty_mark)
+        self.git(worktree, "reset", "--hard", "HEAD~1")
+
+        # P2 #5: multi-commit same-lane fix (F1 -> F2) marked with fixed:a (F2) lands cleanly.
+        self.commit(worktree, {"lib/api.txt": "foo\nbaz\nqux\n"}, "fix part 1")
+        self.commit(worktree, {"calls/main.txt": "foo\nbaz\n"}, "fix part 2")
+        self.lane("check", "a")
+        self.lane("review", "a", "--mark", "1", "fixed:a", "--mark", "2", "rejected:out of scope")
+        land_out = self.lane("land", "a")
+        self.assertIn("review kept", land_out)
+        self.assertEqual(self.record("a")["status"], "done")
+
+    def test_another_active_lane_cannot_mark_findings_of_a_landed_lane(self):
+        # P1 #2: fixed:<another active lane> must not resolve another lane's unlanded tip.
+        self.review_text.write_text(TWO_FINDINGS)
+        wt_a = self.created("a", "lib/**")
+        self.commit(wt_a, {"lib/api.txt": "foo\nbaz\n"})
+        self.lane("check", "a")
+        self.lane("land", "a")
+        self.lane("review", "a")
+
+        wt_b = self.created("b", "docs/**")
+        self.commit(wt_b, {"docs/b.md": "b\n"})
+        self.review_text.write_text("No findings.\n")
+        self.lane("review", "b")
+
+        refused = self.lane("review", "a", "--mark", "1", "fixed:b", ok=False)
+        self.assertIn("not a commit or a landed lane here", refused)
+
+    def test_landed_lane_without_check_receipt_preserves_exact_no_receipt_in_list(self):
+        # P3 #11: landed lane with no check receipt stays exact "no receipt" in list.
+        wt = self.created("a", "lib/**")
+        self.commit(wt, {"lib/api.txt": "foo\nbar\n"})
+        self.lane("land", "a", "--force-reason", "no check")
+        list_json = json.loads(self.lane("list", "--json"))
+        self.assertEqual(list_json["lanes"][0]["receipt"], "no receipt")
 
 
 if __name__ == "__main__":

@@ -282,6 +282,115 @@ class PreLandReviewGateTests(LaneCase):
         land_out = self.lane("land", "a")
         self.assertIn("post-merge green", land_out)
 
+    def test_fix_sha_missing_from_tip_or_reverted_refuses_land(self):
+        # P1 #1: fixed:<sha> not an ancestor of tip (reset) or reverted back to reviewed_tree refuses land.
+        self.review_text.write_text(
+            "### P2 — lib/api.txt:1 — Needs fix\nFix it.\n"
+        )
+        worktree = self.created("a", "lib/**", "calls/**")
+        reviewed_sha = self.commit(worktree, {"lib/api.txt": "foo\nbaz\n"})
+        self.lane("check", "a")
+        self.lane("review", "a")
+
+        fix_sha = self.commit(worktree, {"calls/main.txt": "foo\nbaz\n"}, "fix")
+        self.lane("review", "a", "--mark", "1", f"fixed:{fix_sha}")
+
+        # Case 1: reset back to reviewed_sha so fix_sha is no longer an ancestor of tip.
+        self.git(worktree, "reset", "--hard", reviewed_sha)
+        self.lane("check", "a")
+        reset_refused = self.lane("land", "a", ok=False)
+        self.assertIn("does not contain fix commit", reset_refused)
+
+        # Case 2: restore fix_sha then revert it so tree == reviewed_tree while fix_sha is an ancestor.
+        self.git(worktree, "reset", "--hard", fix_sha)
+        self.git(worktree, "revert", "--no-edit", fix_sha)
+        self.lane("check", "a")
+        revert_refused = self.lane("land", "a", ok=False)
+        self.assertIn("matches the unfixed pre-land reviewed commit", revert_refused)
+
+    def test_side_branch_merge_and_conflicted_integration_merge_refuse_land(self):
+        # P1 #3 + P1 #4: side-branch merge marked fixed:M and conflicted integration merge both refuse land.
+        self.review_text.write_text("### P2 — lib/api.txt:1 — Needs fix\nFix it.\n")
+        worktree = self.created("a", "lib/**", "calls/**")
+        reviewed_sha = self.commit(worktree, {"lib/api.txt": "foo\nbaz\n"})
+        self.lane("check", "a")
+        self.lane("review", "a")
+
+        # Side branch with unreviewed commits merged into lane/a and marked fixed:M.
+        self.git(worktree, "checkout", "-b", "side-unreviewed", reviewed_sha)
+        self.commit(worktree, {"calls/main.txt": "foo\nbaz\n"}, "side commit 1")
+        self.commit(worktree, {"lib/extra.txt": "sneaky\n"}, "side commit 2")
+        self.git(worktree, "checkout", "lane/a")
+        self.git(worktree, "merge", "--no-ff", "-m", "merge side", "side-unreviewed")
+        merge_sha = self.git(worktree, "rev-parse", "HEAD")
+        self.lane("review", "a", "--mark", "1", f"fixed:{merge_sha}")
+        self.lane("check", "a")
+        side_refused = self.lane("land", "a", ok=False)
+        self.assertIn("unreviewed merge commits", side_refused)
+
+        # Reset and test evil/modified integration merge (extra edit folded into merge commit).
+        self.git(worktree, "reset", "--hard", reviewed_sha)
+        fix_sha = self.commit(worktree, {"calls/main.txt": "foo\nbaz\n"}, "real fix")
+        self.lane("review", "a", "--mark", "1", f"fixed:{fix_sha}")
+        self.commit(self.integration, {"docs/other.md": "other\n"}, "integration advance")
+        self.git(worktree, "merge", "--no-ff", "--no-commit", "integrate/q")
+        self.write(worktree, "lib/api.txt", "foo\nbaz\nevil\n")
+        self.git(worktree, "add", "lib/api.txt")
+        self.git(worktree, "commit", "-qm", "evil integration merge")
+        self.lane("check", "a")
+        evil_refused = self.lane("land", "a", ok=False)
+        self.assertIn("unreviewed merge commits", evil_refused)
+
+    def test_p3_only_pre_land_finding_does_not_block_land(self):
+        # P2 #6: P3-only unmarked finding does not block land when review_blocks is P1/P2.
+        self.review_text.write_text(
+            '```json\n{"findings": [{"severity": "P3", "file": "lib/api.txt", "line": 1, '
+            '"title": "Minor nit", "detail": "Just a nit."}]}\n```\n'
+        )
+        worktree = self.created("a", "lib/**")
+        self.commit(worktree, {"lib/api.txt": "foo\nbar\n"})
+        self.lane("check", "a")
+        self.lane("review", "a")
+
+        land_out = self.lane("land", "a")
+        self.assertIn("post-merge green", land_out)
+        self.assertIn("review kept", land_out)
+
+    def test_invalid_reviewed_tip_fails_closed(self):
+        # P2 #7: Complete receipt with missing/invalid tip OID refuses land.
+        worktree = self.created("a", "lib/**")
+        self.commit(worktree, {"lib/api.txt": "foo\nbar\n"})
+        self.lane("check", "a")
+        self.lane("review", "a")
+        receipt = self.review("a")
+        receipt["tip"] = "not-an-oid"
+        (self.state / "a.review.json").write_text(json.dumps(receipt))
+        refused = self.lane("land", "a", ok=False)
+        self.assertIn("no valid reviewed commit SHA", refused)
+
+    def test_forced_land_with_stale_pre_land_review_clears_stale_receipt_and_audits_promoted(self):
+        # P2 #8: Forced land with unreviewed commits clears stale pre-land receipt (no auto-done,
+        # fresh post-land review required) and logs unreviewed override when landing onto dev.
+        dev_wt = self.repo / ".claude" / "worktrees" / "dev"
+        self.git(self.repo, "worktree", "add", "-q", "-b", "dev", str(dev_wt))
+        self.lane("start", "a", "--ticket", "404", "--base", "dev", "--claims", "lib/**", "--create")
+        worktree = self.record("a")["worktree"]
+        self.commit(worktree, {"lib/api.txt": "foo\nbar\n"})
+        self.lane("check", "a")
+        self.lane("review", "a")
+        self.commit(worktree, {"lib/api.txt": "foo\nbar\nextra\n"}, "unreviewed extra")
+        self.lane("check", "a")
+
+        forced = self.lane("land", "a", "--into", str(dev_wt), "--force-reason", "hotfix override")
+        self.assertIn("post-merge green", forced)
+        self.assertIn("review not started", forced)
+        # Must NOT auto-finish with the stale pre-land review.
+        self.assertEqual(self.record("a")["status"], "landed")
+        self.assertFalse((self.state / "a.review.json").exists())
+        ledger = (self.state / "ledger.log").read_text()
+        self.assertIn("override land a onto dev unreviewed: hotfix override", ledger)
+        self.assertNotIn("land a onto dev:", ledger)
+
 
 if __name__ == "__main__":
     unittest.main()

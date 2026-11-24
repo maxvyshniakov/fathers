@@ -7,7 +7,7 @@ page), read-only.
                  "lanes": [{"id", "status", "ticket": {"number", "url"}, "tickets": [{"number", "url", "partial"}],
                             "branch", "base", "worktree", "claims",
                             "after", "created", "receipt": {"status", "tree_match", "path"},
-                            "post_merge": str | null, "review": {"status", "open", "findings"},
+                            "post_merge": str | null, "review": {"status", "open", "findings", ...},
                             "logs": {phase: path}, "outcome", "gone"}]}
                 | {"project", "state_dir", "error"}]}
 
