@@ -128,7 +128,7 @@ COMMANDS: dict[str, Command] = {
     "results": Command("check results by tree and plan",
                        "key|lookup|record <rev> (--full | --checks A,B) [--status S] [--json]",
                        "lookup HEAD --full"),
-    "stats": Command("per-check durations, red runs and flakes", "[--days N] [--lane ID] [--json]",
+    "stats": Command("lane flow, outcomes, overrides, review and check health", "[--days N] [--lane ID] [--json]",
                      "--days 3 --json"),
     "settings": Command("this machine's settings: show, check, set, reset",
                         "[check|set|reset KEY [VALUE]] [--all] [--revision R] [--json]",
@@ -494,10 +494,10 @@ def parser(project: config.Config = config.DEFAULT) -> Parser:
                                       "host's); a result stands only for its own platform")
     p.add_argument("--json", action="store_true")
     p.set_defaults(run=results.command)
-    p = add(root, commands, "stats", "p50 and p90 from the run history (lanefather.history), which done leaves alone.",
-            prog=prog)
+    p = add(root, commands, "stats", "Lane flow, outcomes, overrides, review and per-check p50/p90 from lane records, "
+            "receipts, events and run history (lanefather.history).", prog=prog)
     p.add_argument("--days", type=float, default=7, help="the window in days (default 7; 0: everything kept)")
-    p.add_argument("--lane", help="only this lane's runs")
+    p.add_argument("--lane", help="scope all stats blocks to this lane")
     p.add_argument("--json", action="store_true", help="the version-1 report")
     p.set_defaults(run=history.command)
     p = add(root, commands, "settings", "Review start, rerun wait, slot priorities, free-disk floor "

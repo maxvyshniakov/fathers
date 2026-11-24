@@ -92,5 +92,607 @@ class JunitFailuresTests(ScratchCase):
         self.assertEqual(history.junit_failures(self.tmp / "missing.xml"), [])
 
 
+class StatsMetricsTests(ScratchCase):
+    """Fixture-driven verification of `lanefather stats` orchestration metrics (fathers#47)."""
+
+    def _iso(self, base: Any, offset_seconds: int) -> str:
+        import datetime
+        return (base + datetime.timedelta(seconds=offset_seconds)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    def _setup_fixture_store(self) -> tuple[Any, pathlib.Path, Any]:
+        import datetime
+
+        from lanefather import config, state
+
+        base = datetime.datetime.now(datetime.UTC).replace(microsecond=0) - datetime.timedelta(hours=2)
+        state_dir = self.tmp / "state"
+        state_dir.mkdir(parents=True, exist_ok=True)
+        store = state.Store(config.DEFAULT, directory=state_dir)
+        events_file = self.tmp / "events.jsonl"
+
+        def write_json(name: str, payload: dict[str, Any]) -> None:
+            (state_dir / name).write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+        # 1. alpha: landed + promoted, with finished review (2 fixed, 1 rejected)
+        write_json("alpha.json", {
+            "id": "alpha",
+            "ticket": "101",
+            "status": "done",
+            "outcome": "landed",
+            "created": self._iso(base, 0),
+            "landed": {"at": self._iso(base, 300), "merge": "aaaa1111"},
+        })
+        write_json("alpha.receipt.json", {
+            "lane_created": self._iso(base, 0),
+            "status": "green",
+            "started": self._iso(base, 90),
+            "finished": self._iso(base, 100),
+            "leases": [{"run": "run-alpha-check", "lease": "lease-alpha-check"}],
+        })
+        write_json("alpha.review.json", {
+            "version": 1,
+            "label": "alpha",
+            "lane": "alpha",
+            "lane_created": self._iso(base, 0),
+            "status": "finished",
+            "reviewer": "sol",
+            "model": "gpt-6.1-sol",
+            "finished": self._iso(base, 400),
+            "findings": [
+                {"n": 1, "severity": "P1", "title": "bug 1", "mark": {"kind": "fixed", "merge": "dddd4444"}},
+                {"n": 2, "severity": "P2", "title": "bug 2", "mark": {"kind": "fixed", "merge": "dddd4444"}},
+                {"n": 3, "severity": "P3", "title": "nit", "mark": {"kind": "rejected", "reason": "by design"}},
+            ],
+        })
+
+        # 2. beta: landed, NOT promoted, with a lane override (present in both events and record to test dedup)
+        write_json("beta.json", {
+            "id": "beta",
+            "ticket": "102",
+            "status": "landed",
+            "created": self._iso(base, 0),
+            "landed": {"at": self._iso(base, 500), "merge": "bbbb2222"},
+            "overrides": [
+                {"at": self._iso(base, 495), "reason": "urgent hotfix", "refusals": ["no green receipt"]},
+            ],
+        })
+        write_json("beta.receipt.json", {
+            "lane_created": self._iso(base, 0),
+            "status": "green",
+            "started": self._iso(base, 180),
+            "finished": self._iso(base, 200),
+            "leases": [{"run": "run-beta-check", "lease": "lease-beta-check"}],
+        })
+
+        # 3. gamma: parked (no green receipt, no land, no promote)
+        write_json("gamma.json", {
+            "id": "gamma",
+            "ticket": "103",
+            "status": "done",
+            "outcome": "parked",
+            "created": self._iso(base, 0),
+            "parked": {"at": self._iso(base, 400), "reason": "waiting on API", "ref": "park/gamma"},
+        })
+
+        # 4. delta: active fix lane of alpha (no green receipt yet)
+        write_json("delta.json", {
+            "id": "delta",
+            "ticket": "101",
+            "status": "active",
+            "created": self._iso(base, 600),
+            "review_fix_of": "alpha",
+        })
+
+        # Run history for check + post-merge phases
+        history_dir = state_dir / "history"
+        history_dir.mkdir(parents=True, exist_ok=True)
+        month = base.strftime("%Y-%m")
+        history_lines = [
+            {
+                "v": 1, "kind": "check", "at": self._iso(base, 100), "lane": "alpha", "phase": "check",
+                "check": "lib-check", "status": "passed", "seconds": 10.0,
+                "started": self._iso(base, 90), "finished": self._iso(base, 100),
+                "run": "run-alpha-check", "lease": "lease-alpha-check",
+            },
+            {
+                "v": 1, "kind": "check", "at": self._iso(base, 200), "lane": "beta", "phase": "check",
+                "check": "lib-check", "status": "passed", "seconds": 20.0,
+                "started": self._iso(base, 180), "finished": self._iso(base, 200),
+                "run": "run-beta-check", "lease": "lease-beta-check",
+            },
+            {
+                "v": 1, "kind": "check", "at": self._iso(base, 350), "lane": "alpha", "phase": "post-merge",
+                "check": "lib-check", "status": "passed", "seconds": 30.0,
+                "started": self._iso(base, 320), "finished": self._iso(base, 350),
+                "run": "run-alpha-smoke", "lease": "lease-alpha-smoke",
+            },
+        ]
+        (history_dir / f"{month}.jsonl").write_text(
+            "\n".join(json.dumps(line) for line in history_lines) + "\n", encoding="utf-8"
+        )
+
+        # Machine events: promote.finished for alpha, duplicate beta land override, promote review-gate override
+        event_rows = [
+            {
+                "v": 1, "source": "lanefather", "kind": "promote.finished", "time": self._iso(base, 900),
+                "level": "info",
+                "subject": {"type": "commit", "id": "aaaa1111", "state_dir": str(state_dir)},
+                "details": {"branches": ["dev"], "pushed": True, "failed": []},
+            },
+            {
+                "v": 1, "source": "lanefather", "kind": "override", "time": self._iso(base, 495),
+                "level": "warn",
+                "subject": {"type": "lane", "id": "beta", "state_dir": str(state_dir)},
+                "details": {"command": "land", "reason": "urgent hotfix", "refusals": ["no green receipt"]},
+            },
+            {
+                "v": 1, "source": "lanefather", "kind": "override", "time": self._iso(base, 890),
+                "level": "warn",
+                "subject": {"type": "commit", "id": "aaaa1111", "state_dir": str(state_dir)},
+                "details": {
+                    "command": "promote",
+                    "reason": "release window",
+                    "refusals": ["lane alpha: finding #1", "lane alpha: finding #2"],
+                },
+            },
+        ]
+        events_file.write_text("\n".join(json.dumps(ev) for ev in event_rows) + "\n", encoding="utf-8")
+        return store, events_file, base
+
+    def test_stats_metrics_exact_percentiles_omission_and_unknown_wait_without_slotfather(self) -> None:
+        import contextlib
+        import io
+        import os
+        import types
+        from unittest import mock
+
+        from lanefather import history
+
+        store, events_file, _ = self._setup_fixture_store()
+        with (
+            mock.patch.dict(os.environ, {"LANEFATHER_EVENTS": str(events_file)}),
+            mock.patch("lanefather.slots.command", return_value=None),
+        ):
+            report = history.stats(store, days=7)
+
+            self.assertEqual(report["v"], 1)
+            # Backwards-compatible blocks stay present.
+            self.assertEqual(len(report["checks"]), 1)
+            self.assertEqual(report["checks"][0]["check"], "lib-check")
+            self.assertEqual(len(report["reviewers"]), 1)
+
+            # lane_flow: alpha (100s) and beta (200s) green; gamma & delta omitted (never 0).
+            flow = report["lane_flow"]
+            self.assertEqual(flow["lanes"], 4)
+            self.assertEqual(flow["to_first_green"], {"count": 2, "p50": 150.0, "p90": 190.0})
+            self.assertEqual(flow["to_land"], {"count": 2, "p50": 400.0, "p90": 480.0})
+            # Only alpha promoted (900s); unpromoted beta/gamma/delta omitted!
+            self.assertEqual(flow["to_promote"], {"count": 1, "p50": 900.0, "p90": 900.0})
+            self.assertFalse(flow["slotfather_available"])
+
+            phases = {row["phase"]: row for row in flow["phases"]}
+            self.assertEqual(set(phases), {"check", "post-merge"})
+            self.assertEqual(phases["check"]["runs"], 2)
+            self.assertEqual(phases["check"]["run_p50"], 15.0)
+            self.assertEqual(phases["check"]["run_p90"], 19.0)
+            self.assertIsNone(phases["check"]["wait_p50"])
+            self.assertIsNone(phases["check"]["wait_p90"])
+            self.assertEqual(phases["check"]["wait_status"], "unknown")
+            self.assertEqual(phases["check"]["matched_leases"], 0)
+            self.assertIsNone(phases["post-merge"]["wait_p50"])
+            self.assertEqual(phases["post-merge"]["wait_status"], "unknown")
+
+            # outcomes
+            self.assertEqual(report["outcomes"], {
+                "total": 4, "landed": 2, "parked": 1, "abandoned": 0,
+                "dropped": 0, "active": 1, "planned": 0, "other": 0,
+            })
+
+            # overrides & fix_lanes (beta's override is deduplicated between events.jsonl and beta.json)
+            overrides = report["overrides"]
+            self.assertEqual(overrides["total"], 2)
+            self.assertEqual(overrides["lane"], 1)
+            self.assertEqual(overrides["promote"], 1)
+            self.assertEqual(overrides["by_command"], {"land": 1, "promote": 1})
+            self.assertEqual(overrides["promote_reasons"], [{"reason": "release window", "count": 1}])
+            self.assertEqual(overrides["fix_lanes"], {
+                "total": 1,
+                "single": 1,
+                "batch": 0,
+                "lanes": [{"id": "delta", "fix_of": ["alpha"], "batch": False}],
+            })
+
+            # review
+            rev = report["review"]
+            self.assertEqual(rev["reviewed_lanes"], 1)
+            self.assertEqual(rev["findings"], 3)
+            self.assertEqual(rev["p1"], 1)
+            self.assertEqual(rev["p2"], 1)
+            self.assertEqual(rev["p3"], 1)
+            self.assertEqual(rev["fixed"], 2)
+            self.assertEqual(rev["rejected"], 1)
+            self.assertEqual(rev["unmarked"], 0)
+            self.assertEqual(rev["findings_per_lane"], 3.0)
+            self.assertEqual(rev["fixed_share"], round(2 / 3, 3))
+            self.assertEqual(rev["rejected_share"], round(1 / 3, 3))
+            self.assertEqual(rev["unmarked_share"], 0.0)
+            self.assertEqual(rev["gate"], {"held": 2, "overridden": 1})
+
+            # Human-readable rendering
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                code = history.command(types.SimpleNamespace(days=7, lane=None, json=False), store)
+            self.assertEqual(code, 0)
+            text = buf.getvalue()
+            self.assertIn("Lane flow:", text)
+            self.assertIn("to promote: p50 900.0s, p90 900.0s (n=1)", text)
+            self.assertIn("wait unknown", text)
+            self.assertIn("Outcomes:", text)
+            self.assertIn("2 landed, 1 parked", text)
+            self.assertIn("Overrides:", text)
+            self.assertIn("fix lanes: 1 (1 single, 0 batch)", text)
+            self.assertIn("Review:", text)
+            self.assertIn("gate: 2 held, 1 overridden", text)
+
+            # Lane filter scopes cleanly to alpha
+            alpha_only = history.stats(store, days=7, lane="alpha")
+            self.assertEqual(alpha_only["outcomes"]["total"], 1)
+            self.assertEqual(alpha_only["outcomes"]["landed"], 1)
+            self.assertEqual(alpha_only["lane_flow"]["to_promote"], {"count": 1, "p50": 900.0, "p90": 900.0})
+
+    def test_stats_joins_slotfather_lease_wait_by_lease_id(self) -> None:
+        import os
+        from unittest import mock
+
+        from support import FIXTURES
+
+        from lanefather import history
+
+        store, events_file, _ = self._setup_fixture_store()
+        sf_history = self.tmp / "slotfather-history.jsonl"
+        sf_rows = [
+            {"v": 2, "lease_id": "lease-alpha-check", "waited": 4, "ran": 10, "meta": {"run": "run-alpha-check"}},
+            {"v": 2, "lease_id": "lease-beta-check", "waited": 14, "ran": 20, "meta": {"run": "run-beta-check"}},
+            # post-merge lease intentionally absent -> must remain unknown, never 0!
+        ]
+        sf_history.write_text("\n".join(json.dumps(r) for r in sf_rows) + "\n", encoding="utf-8")
+        fake_sf = FIXTURES / "slotfather"
+        with (
+            mock.patch.dict(os.environ, {
+                "LANEFATHER_EVENTS": str(events_file),
+                "FAKE_SLOTFATHER_HISTORY": str(sf_history),
+            }),
+            mock.patch("lanefather.slots.command", return_value=str(fake_sf)),
+        ):
+            report = history.stats(store, days=7)
+            flow = report["lane_flow"]
+            self.assertTrue(flow["slotfather_available"])
+            phases = {row["phase"]: row for row in flow["phases"]}
+            self.assertEqual(phases["check"]["matched_leases"], 2)
+            self.assertEqual(phases["check"]["wait_status"], "known")
+            self.assertEqual(phases["check"]["wait_p50"], 9.0)
+            self.assertEqual(phases["check"]["wait_p90"], 13.0)
+            # Unmatched phase must report unknown (None), never 0.
+            self.assertEqual(phases["post-merge"]["matched_leases"], 0)
+            self.assertEqual(phases["post-merge"]["wait_status"], "unknown")
+            self.assertIsNone(phases["post-merge"]["wait_p50"])
+            self.assertIsNone(phases["post-merge"]["wait_p90"])
+
+    def test_stats_handles_malformed_events_missing_receipts_and_legacy_records(self) -> None:
+        import datetime
+        import os
+        from unittest import mock
+
+        from lanefather import config, history, state
+
+        now_dt = datetime.datetime.now(datetime.UTC).replace(microsecond=0)
+        created = (now_dt - datetime.timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        landed_at = (now_dt - datetime.timedelta(minutes=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        state_dir = self.tmp / "messy-state"
+        state_dir.mkdir(parents=True, exist_ok=True)
+        store = state.Store(config.DEFAULT, directory=state_dir)
+
+        # Legacy landed record without `outcome`
+        (state_dir / "legacy-landed.json").write_text(json.dumps({
+            "id": "legacy-landed",
+            "status": "done",
+            "created": created,
+            "landed": {"at": landed_at, "merge": "1111aaaa"},
+        }), encoding="utf-8")
+        # Legacy dropped record without `outcome`
+        (state_dir / "legacy-dropped.json").write_text(json.dumps({
+            "id": "legacy-dropped",
+            "status": "done",
+            "created": created,
+            "dropped": {"why": "no commits"},
+        }), encoding="utf-8")
+        # Legacy forced-done record without `outcome`, `landed`, or `dropped`
+        (state_dir / "legacy-other.json").write_text(json.dumps({
+            "id": "legacy-other",
+            "status": "done",
+            "created": created,
+        }), encoding="utf-8")
+        # Corrupt JSON file must not crash stats
+        (state_dir / "corrupt.json").write_text("{not valid json", encoding="utf-8")
+
+        # Malformed events.jsonl with bad JSON and bad field types
+        bad_events = self.tmp / "bad-events.jsonl"
+        bad_events.write_text(
+            "not-json\n"
+            "[]\n"
+            '{"kind": 123, "time": true}\n'
+            '{"v": 1, "source": "lanefather", "kind": "override", "time": "bad-ts", "details": "oops"}\n',
+            encoding="utf-8",
+        )
+        with (
+            mock.patch.dict(os.environ, {"LANEFATHER_EVENTS": str(bad_events)}),
+            mock.patch("lanefather.slots.command", return_value=None),
+        ):
+            report = history.stats(store, days=7)
+            self.assertEqual(report["v"], 1)
+            self.assertEqual(report["outcomes"], {
+                "total": 3, "landed": 1, "parked": 0, "abandoned": 0,
+                "dropped": 1, "active": 0, "planned": 0, "other": 1,
+            })
+            self.assertEqual(report["lane_flow"]["to_land"]["count"], 1)
+            self.assertEqual(report["lane_flow"]["to_first_green"], {"count": 0, "p50": None, "p90": None})
+            self.assertEqual(report["lane_flow"]["to_promote"], {"count": 0, "p50": None, "p90": None})
+            self.assertEqual(report["review"]["reviewed_lanes"], 0)
+            self.assertIsNone(report["review"]["findings_per_lane"])
+
+    def test_promote_time_early_exit_and_chronological_stop_minimizes_git_calls(self) -> None:
+        import datetime
+        import os
+        from unittest import mock
+
+        from lanefather import config, history, state
+
+        base = datetime.datetime.now(datetime.UTC).replace(microsecond=0) - datetime.timedelta(hours=1)
+        state_dir = self.tmp / "perf-state"
+        state_dir.mkdir(parents=True, exist_ok=True)
+        fake_repo = self.tmp / "repo"
+        (fake_repo / ".git").mkdir(parents=True, exist_ok=True)
+        store = state.Store(config.DEFAULT, directory=state_dir)
+        events_file = self.tmp / "perf-events.jsonl"
+
+        # Lane 1: already has promoted.at -> must make 0 git calls.
+        (state_dir / "fast.json").write_text(json.dumps({
+            "id": "fast",
+            "status": "done",
+            "outcome": "landed",
+            "common_dir": str(fake_repo / ".git"),
+            "created": self._iso(base, 0),
+            "landed": {"at": self._iso(base, 100), "merge": "11111111"},
+            "promoted": {"at": self._iso(base, 250), "sha": "pppp0001"},
+        }), encoding="utf-8")
+
+        # Lane 2: landed at +300s; promotes at +100s, +200s (skipped), +400s (match), +500s (not reached).
+        (state_dir / "chrono.json").write_text(json.dumps({
+            "id": "chrono",
+            "status": "done",
+            "outcome": "landed",
+            "common_dir": str(fake_repo / ".git"),
+            "created": self._iso(base, 0),
+            "landed": {"at": self._iso(base, 300), "merge": "22222222"},
+        }), encoding="utf-8")
+
+        event_rows = [
+            {
+                "v": 1, "source": "lanefather", "kind": "promote.finished", "time": self._iso(base, offset),
+                "level": "info",
+                "subject": {"type": "commit", "id": sha, "state_dir": str(state_dir)},
+                "details": {"branches": ["dev"], "pushed": True, "failed": []},
+            }
+            for offset, sha in (
+                (500, "prom0500"),
+                (100, "prom0100"),
+                (400, "prom0400"),
+                (200, "prom0200"),
+            )
+        ]
+        events_file.write_text("\n".join(json.dumps(e) for e in event_rows) + "\n", encoding="utf-8")
+
+        git_calls: list[tuple[str, ...]] = []
+
+        def fake_git_ok(_cwd: str, *args: str) -> bool:
+            git_calls.append(args)
+            return args[-2:] == ("22222222", "prom0400")
+
+        with (
+            mock.patch.dict(os.environ, {"LANEFATHER_EVENTS": str(events_file)}),
+            mock.patch("lanefather.slots.command", return_value=None),
+            mock.patch("lanefather.gitops.git_ok", side_effect=fake_git_ok),
+        ):
+            # Only fast lane -> 0 git calls.
+            fast_report = history.stats(store, days=7, lane="fast")
+            self.assertEqual(fast_report["lane_flow"]["to_promote"], {"count": 1, "p50": 250.0, "p90": 250.0})
+            self.assertEqual(git_calls, [])
+
+            # Both lanes -> only 1 git call (for chrono against prom0400; skipped +100/+200 and stopped before +500).
+            full_report = history.stats(store, days=7)
+            self.assertEqual(len(git_calls), 1)
+            self.assertEqual(git_calls[0][-2:], ("22222222", "prom0400"))
+            self.assertEqual(full_report["lane_flow"]["to_promote"], {"count": 2, "p50": 325.0, "p90": 385.0})
+
+    def test_days_window_preserves_first_green_includes_active_and_filters_old_receipts(self) -> None:
+        import datetime
+        import os
+        from unittest import mock
+
+        from lanefather import config, history, state
+
+        now_dt = datetime.datetime.now(datetime.UTC).replace(microsecond=0)
+        day = 86400
+        state_dir = self.tmp / "window-state"
+        state_dir.mkdir(parents=True, exist_ok=True)
+        store = state.Store(config.DEFAULT, directory=state_dir)
+        events_file = self.tmp / "window-events.jsonl"
+
+        created_10d = self._iso(now_dt, -10 * day)
+        green_9d = self._iso(now_dt, -9 * day)
+        recheck_1d = self._iso(now_dt, -1 * day)
+        landed_1d = self._iso(now_dt, -1 * day + 60)
+
+        # Lane created 10 days ago, first green 9 days ago, re-checked and landed 1 day ago.
+        (state_dir / "old-green.json").write_text(json.dumps({
+            "id": "old-green",
+            "status": "done",
+            "outcome": "landed",
+            "created": created_10d,
+            "landed": {"at": landed_1d, "merge": "aaaa9999"},
+        }), encoding="utf-8")
+        (state_dir / "old-green.receipt.json").write_text(json.dumps({
+            "lane_created": created_10d,
+            "status": "green",
+            "started": self._iso(now_dt, -1 * day - 15),
+            "finished": recheck_1d,
+            "leases": [{"run": "recent-run", "lease": "recent-lease"}],
+        }), encoding="utf-8")
+
+        # Currently active lane created 10 days ago with an ancient check receipt.
+        (state_dir / "still-active.json").write_text(json.dumps({
+            "id": "still-active",
+            "status": "active",
+            "created": created_10d,
+        }), encoding="utf-8")
+        (state_dir / "still-active.receipt.json").write_text(json.dumps({
+            "lane_created": created_10d,
+            "status": "red",
+            "started": self._iso(now_dt, -10 * day + 10),
+            "finished": self._iso(now_dt, -10 * day + 30),
+            "leases": [{"run": "ancient-run", "lease": "ancient-lease"}],
+        }), encoding="utf-8")
+
+        events_file.write_text(json.dumps({
+            "v": 1, "source": "lanefather", "kind": "lane.checked", "time": green_9d,
+            "level": "info",
+            "subject": {"type": "lane", "id": "old-green", "state_dir": str(state_dir)},
+            "details": {"status": "green"},
+        }) + "\n", encoding="utf-8")
+
+        with (
+            mock.patch.dict(os.environ, {"LANEFATHER_EVENTS": str(events_file)}),
+            mock.patch("lanefather.slots.command", return_value=None),
+        ):
+            report = history.stats(store, days=7)
+            # First green was 1 day after creation (86400s), NOT 9 days (777600s)!
+            self.assertEqual(report["lane_flow"]["to_first_green"], {"count": 1, "p50": 86400.0, "p90": 86400.0})
+            # Currently active lane is included in outcomes even though created 10 days ago.
+            self.assertEqual(report["outcomes"]["active"], 1)
+            self.assertEqual(report["outcomes"]["landed"], 1)
+            # Ancient 10-day-old receipt lease is filtered out of phases under --days 7.
+            phases = {row["phase"]: row for row in report["lane_flow"]["phases"]}
+            self.assertEqual(phases["check"]["runs"], 1)
+
+    def test_recheck_run_deduplicated_across_post_merge_and_recheck_receipt(self) -> None:
+        import datetime
+        import os
+        from unittest import mock
+
+        from support import FIXTURES
+
+        from lanefather import config, history, state
+
+        base = datetime.datetime.now(datetime.UTC).replace(microsecond=0) - datetime.timedelta(hours=1)
+        state_dir = self.tmp / "recheck-state"
+        state_dir.mkdir(parents=True, exist_ok=True)
+        store = state.Store(config.DEFAULT, directory=state_dir)
+
+        (state_dir / "lane1.json").write_text(json.dumps({
+            "id": "lane1",
+            "status": "landed",
+            "created": self._iso(base, 0),
+            "landed": {"at": self._iso(base, 100), "merge": "cccc1111"},
+        }), encoding="utf-8")
+        # Recheck receipt carries the same run id + lease id that verify.run_smoke logged under phase="post-merge".
+        (state_dir / "lane1.recheck.json").write_text(json.dumps({
+            "lane_created": self._iso(base, 0),
+            "status": "green",
+            "started": self._iso(base, 120),
+            "finished": self._iso(base, 145),
+            "leases": [{"run": "run-recheck-1", "lease": "lease-recheck-1"}],
+        }), encoding="utf-8")
+
+        history_dir = state_dir / "history"
+        history_dir.mkdir(parents=True, exist_ok=True)
+        month = base.strftime("%Y-%m")
+        (history_dir / f"{month}.jsonl").write_text(json.dumps({
+            "v": 1, "kind": "check", "at": self._iso(base, 145), "lane": "lane1", "phase": "post-merge",
+            "check": "lib-check", "status": "passed", "seconds": 25.0,
+            "started": self._iso(base, 120), "finished": self._iso(base, 145),
+            "run": "run-recheck-1",
+        }) + "\n", encoding="utf-8")
+
+        sf_history = self.tmp / "recheck-sf.jsonl"
+        sf_history.write_text(json.dumps({
+            "v": 2, "lease_id": "lease-recheck-1", "waited": 7, "ran": 25,
+        }) + "\n", encoding="utf-8")
+
+        with (
+            mock.patch.dict(os.environ, {
+                "LANEFATHER_EVENTS": str(self.tmp / "missing-events.jsonl"),
+                "FAKE_SLOTFATHER_HISTORY": str(sf_history),
+            }),
+            mock.patch("lanefather.slots.command", return_value=str(FIXTURES / "slotfather")),
+        ):
+            report = history.stats(store, days=7)
+            phases = {row["phase"]: row for row in report["lane_flow"]["phases"]}
+            self.assertEqual(set(phases), {"post-merge"})
+            self.assertEqual(phases["post-merge"]["runs"], 1)
+            self.assertEqual(phases["post-merge"]["matched_leases"], 1)
+            self.assertEqual(phases["post-merge"]["wait_p50"], 7.0)
+
+    def test_overrides_per_batch_breakdown_and_lane_scoping_parity(self) -> None:
+        import os
+        from unittest import mock
+
+        from lanefather import history
+
+        store, events_file, base = self._setup_fixture_store()
+        # Add a review receipt without an explicit raw "lane" field to verify reviewer_totals --lane parity.
+        (store.directory / "beta.review.json").write_text(json.dumps({
+            "version": 1,
+            "label": "beta",
+            "lane_created": self._iso(base, 0),
+            "status": "finished",
+            "reviewer": "opus",
+            "model": "claude-opus-5-5",
+            "finished": self._iso(base, 520),
+            "findings": [{"n": 1, "severity": "P2", "title": "check", "mark": {"kind": "fixed", "merge": "eeee5555"}}],
+        }), encoding="utf-8")
+
+        with (
+            mock.patch.dict(os.environ, {"LANEFATHER_EVENTS": str(events_file)}),
+            mock.patch("lanefather.slots.command", return_value=None),
+        ):
+            report = history.stats(store, days=7)
+            batches = {row["batch"]: row for row in report["overrides"]["batches"]}
+            self.assertEqual(set(batches), {"aaaa1111", "unpromoted"})
+            self.assertEqual(batches["aaaa1111"], {
+                "batch": "aaaa1111",
+                "overrides": 1,
+                "lane_overrides": 0,
+                "promote_overrides": 1,
+                "reasons": [{"reason": "release window", "count": 1}],
+                "fix_lanes": [],
+            })
+            self.assertEqual(batches["unpromoted"], {
+                "batch": "unpromoted",
+                "overrides": 1,
+                "lane_overrides": 1,
+                "promote_overrides": 0,
+                "reasons": [{"reason": "urgent hotfix", "count": 1}],
+                "fix_lanes": ["delta"],
+            })
+
+            # --lane beta scopes all blocks consistently, including reviewer_totals when raw["lane"] is absent.
+            beta_only = history.stats(store, days=7, lane="beta")
+            self.assertEqual(beta_only["outcomes"]["total"], 1)
+            self.assertEqual(beta_only["overrides"]["total"], 1)
+            self.assertEqual(beta_only["review"]["reviewed_lanes"], 1)
+            self.assertEqual([r["reviewer"] for r in beta_only["reviewers"]], ["opus"])
+
+
 if __name__ == "__main__":
     unittest.main()

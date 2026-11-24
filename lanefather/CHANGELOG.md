@@ -8,6 +8,18 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
 
 ### Added
 
+- Lane flow, outcomes, overrides, and review metrics in `lanefather stats` (fathers#47): `lanefather stats [--days N]
+  [--lane ID] [--json]` now adds four structured blocks (`lane_flow`, `outcomes`, `overrides`, and `review`) alongside
+  the existing `checks` and `reviewers` blocks under `"v": 1`, with matching human-readable sections. `lane_flow`
+  reports p50/p90 durations from lane registration (`created`) to earliest green `lane.checked` event (falling back to
+  a green check receipt), land (`landed.at`), and promote (`promoted.at` or earliest matching `promote.finished` /
+  promote record), omitting lanes that have not reached a milestone rather than counting them as 0, plus per-phase run
+  time vs Slotfather queue wait (`slotfather history export`) joined by `lease_id` (or `run`), reporting wait as
+  unknown (`null` / `"unknown"`) whenever Slotfather is unavailable or has no matching lease. `outcomes` counts
+  `landed`, `parked`, `abandoned`, `dropped`, `active`, and `planned` lanes (always including currently active/planned
+  lanes); `overrides` summarizes `--force-reason` counts and reasons (overall, lane vs promote, and per promote batch
+  under `batches`) plus single and batch fix lanes (`fix_of`); `review` reports findings per lane,
+  fixed/rejected/unmarked shares, and review-gate held/overridden counts from `override` events.
 - Umbrella tickets and partial land flags in the ticket lifecycle (fathers#64):
   - `[tickets] umbrella = [...]` accepts positive integer issue numbers or `owner/repo#N` / GitHub issue URL strings
     with strict type validation. Umbrella tickets never get `Fixes #N` in `merge_message` (using `Refs #N` instead),
