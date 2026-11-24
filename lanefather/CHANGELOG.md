@@ -281,8 +281,8 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
   (`results.env_hash`, fathers#59): `land`, `check`, `list`, `show`, and `status` all evaluate check receipts through
   one verdict (`NoReceipt | Green | Red | StaleTree | StaleToolchain`), so a toolchain or platform change invalidates
   both lane receipts and results-store reuse for the same reason. `lanefather land` now refuses a green receipt whose
-  toolchain or platform changed (`StaleToolchain`, overridable via `--force-reason`), while read-only `list`, `show`,
-  and `status` continue to avoid executing project toolchain resolvers.
+  toolchain or platform changed (or whose toolchain resolver refused) unless overridden via `--force-reason`, while
+  read-only `list`, `show`, and `status` check tree currency only and never execute project toolchain resolvers.
 
 - `lanefather land` post-merge `plan` mode now reuses passing whole-suite results from the lane's green check receipt
   instead of re-running every suite when the merge tree equals the lane's verified tree or when the diff between the

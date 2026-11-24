@@ -115,6 +115,8 @@ def receipt_platform(receipt: dict[str, Any] | None, worktree: Any = None, *,
     raw_platform = receipt.get("platform")
     if isinstance(raw_platform, str) and raw_platform:
         return raw_platform
+    if raw_platform not in (None, ""):
+        return None
     if isinstance(worktree, (str, Path)) and str(worktree) and Path(worktree).is_dir():
         return host_platform(project)
     return None

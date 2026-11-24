@@ -475,6 +475,24 @@ class ReceiptReadersTableTests(LaneCase):
                 },
             ),
             (
+                "corrupt_platform",
+                {
+                    "version": 1, "lane": "fx", "head": tip, "tree": tip_tree, "status": "green",
+                    "toolchain": current_tc, "platform": 123, "results": [], "check_results": {},
+                },
+                {
+                    "land_problem": f"the receipt is stale: it was not made on {host_plat}; rerun lanefather check fx",
+                    "check_short_circuit": False,
+                    "check_notice": f"lane: the receipt was not made on {host_plat}; running the checks again",
+                    "list_receipt": "green",
+                    "list_receipt_with_tc": "green (stale)",
+                    "show_checks": {"status": "green", "current": None, "tree_match": True},
+                    "show_checks_with_tc": {"status": "green", "current": False, "tree_match": True},
+                    "status_receipt": {"status": "green", "tree_match": True, "has_path": True},
+                    "results_verified": False,
+                },
+            ),
+            (
                 "stale_tree_green",
                 {
                     "version": 1, "lane": "fx", "head": tip, "tree": stale_tree, "status": "green",

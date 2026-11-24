@@ -218,6 +218,9 @@ class PlatformTests(unittest.TestCase):
                 ({"tree": "t"}, here, "linux-x64"),               # older receipt, its worktree is on this host
                 ({"tree": "t"}, str(self.tmp / "gone"), None),    # older receipt, worktree elsewhere: unknown
                 ({"tree": "t"}, None, None),
+                ({"platform": 123}, here, None),                  # corrupt non-string platform fails closed
+                ({"platform": {"x": 1}}, here, None),
+                ({"platform": ["darwin-arm64"]}, here, None),
                 (None, here, None),
             ]
             for receipt, worktree, expected in rows:

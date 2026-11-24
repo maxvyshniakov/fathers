@@ -112,6 +112,10 @@ def merge_problem(
         return (f"the receipt is stale: it covers tree {verdict.receipt_tree}, the lane tip {tip[:10]} has tree "
                 f"{tree}; rerun {prog} check {lane_id}")
     if isinstance(verdict, receipts.StaleToolchain):
+        if isinstance(toolchain, dict) and "refused" in toolchain:
+            refused = cast(dict[str, Any], toolchain).get("refused")
+            detail = f": {refused}" if isinstance(refused, str) and refused else ""
+            return f"the {project.toolchain_name} could not be resolved{detail}; rerun {prog} check {lane_id}"
         if verdict.toolchain_changed:
             return (f"the receipt is stale: the {project.toolchain_name} changed since the lane check; "
                     f"rerun {prog} check {lane_id}")
@@ -357,10 +361,20 @@ def merge(
                 store, lane_id, merge_sha=merge_sha, previous=previous, tip=tip, tree=tree,
                 integration=integration, onto=onto, keep=keep_flag, new_overrides=new_overrides, receipt=receipt,
             )
-        worktree = record.get("worktree")
-        tc_root = worktree if isinstance(worktree, str) and os.path.isdir(worktree) else main
-        toolchain = plan.toolchain_state(tc_root, store.project)
-        platform = result_store.host_platform(store.project)
+        int_head = git(integration, "rev-parse", "HEAD")
+        already_merged_repair = repair and git_ok(integration, "merge-base", "--is-ancestor", tip, int_head)
+        toolchain: Any = receipts.UNCHECKED
+        platform: str | None = None
+        if not already_merged_repair and isinstance(receipts.check_verdict(record, receipt, tree), receipts.Green):
+            worktree = record.get("worktree")
+            if isinstance(worktree, str) and os.path.isdir(worktree):
+                toolchain = plan.toolchain_state(worktree, store.project)
+            else:
+                try:
+                    toolchain = plan.toolchain_for_rev(store.project, main, tip)
+                except LaneError as error:
+                    toolchain = {"refused": str(error)}
+            platform = result_store.host_platform(store.project)
         problems: list[str] = []
         problem = merge_problem(
             lane_id, tip, tree, receipt,
@@ -371,8 +385,7 @@ def merge(
         pre_land_problem = review.pre_land_review_problem(store, record, main, tip, tree, integration, prog=prog)
         if pre_land_problem:
             problems.append(pre_land_problem)
-        int_head = git(integration, "rev-parse", "HEAD")
-        if repair and git_ok(integration, "merge-base", "--is-ancestor", tip, int_head):
+        if already_merged_repair:
             repaired_merge = _find_merge_commit(integration, tip)
             if repaired_merge:
                 lane_stats = review_class.diff_stats(integration, repaired_merge[1], repaired_merge[0])
