@@ -694,7 +694,7 @@ class UmbrellaAndPartialLandTests(TicketCase):
         self.assertEqual(self.issue("404")["labels"], [])
         self.assertIn("#404 commented in fixture/straylight (partial: not labelled)", output)
         [comment] = self.land_comments("404")
-        self.assertIn("partial:", comment)
+        self.assertIn("Partial:", comment)
         self.assertIn("remaining: wire CLI flags and docs", comment)
         self.assertIn("stays open", comment)
         self.assertNotIn("Fixes #404", comment)
@@ -702,6 +702,54 @@ class UmbrellaAndPartialLandTests(TicketCase):
         landed = self.record("a")["landed"]
         self.assertIs(landed.get("partial"), True)
         self.assertEqual(landed.get("remaining"), "wire CLI flags and docs")
+
+    def test_umbrella_fixes_outside_lane_scope_warns_and_leading_zeros_match(self):
+        self.commit(
+            self.integration,
+            {".lanefather.toml": FIXTURE_CONFIG + ALL_ON + "umbrella = [347, 5]\n"},
+            "configure umbrella 347 and 5",
+        )
+        self.scoped("a", "--ticket", "05")
+        worktree = pathlib.Path(self.record("a")["worktree"])
+        self.commit(worktree, {"lib/api.txt": "foo\nbaz\n"}, "unrelated change\n\nFixes #347")
+        self.lane("check", "a")
+        output = self.lane("land", "a")
+        self.assertIn("says Fixes #347, which is an umbrella ticket", output)
+        self.assertEqual(
+            self.git(self.integration, "log", "-1", "--format=%B").splitlines(),
+            ["Merge lane/a (#05)", "", "Refs #05"],
+            "leading zeros on #05 match umbrella = [5]",
+        )
+        self.assertEqual(self.issue("05")["labels"], [])
+
+    def test_release_comments_keeps_ticket_closed_by_external_commit_alongside_partial_lane(self):
+        base = self.tip()
+        self.scoped("a", "--ticket", "200")
+        worktree = pathlib.Path(self.record("a")["worktree"])
+        self.commit(worktree, {"lib/api.txt": "foo\nbaz\n"}, "partial work\n\nFixes #200")
+        self.lane("check", "a")
+        self.lane("land", "a", "--partial")
+        # A separate commit outside the partial lane genuinely closes #200.
+        self.commit(self.integration, {"docs/notes.md": "done\n"}, "finish #200\n\nFixes #200")
+        shipped_out = self.lane("shipped", "v1.8.0", "--since", base)
+        self.assertIn("release v1.8.0: commented on 1 of 1 issues it fixes (#200)", shipped_out)
+        self.assertTrue(self.land_comments("200")[-1].startswith("Released in `v1.8.0`"))
+
+    def test_repair_derives_partial_from_refs_merge_and_refuses_mismatch(self):
+        worktree = pathlib.Path(self.created("a", "lib/**"))
+        self.commit(worktree, {"lib/api.txt": "foo\nbaz\n"}, "part one")
+        self.lane("check", "a")
+        self.git(self.integration, "merge", "--no-ff", "-m", "Merge lane/a (#404)\n\nRefs #404", "lane/a")
+        self.lane("land", "a", "--repair", "--keep")
+        self.assertIs(self.record("a")["landed"].get("partial"), True)
+        self.assertEqual(self.issue("404")["labels"], [])
+
+        worktree2 = pathlib.Path(self.created("b", "calls/**"))
+        self.commit(worktree2, {"calls/main.txt": "foo\nbaz\n"}, "complete")
+        self.lane("check", "b")
+        self.git(self.integration, "merge", "--no-ff", "-m", "Merge lane/b (#404)\n\nFixes #404", "lane/b")
+        refused = self.lane("land", "b", "--repair", "--partial", ok=False)
+        self.assertIn("land --repair --partial refused", refused)
 
     def test_land_partial_without_remaining_and_validation_of_remaining_option(self):
         worktree = pathlib.Path(self.created("a", "lib/**"))
@@ -730,10 +778,11 @@ class UmbrellaAndPartialLandTests(TicketCase):
         self.checked()
         self.lane("land", "a", "--partial", "--remaining", "follow-up cleanup")
         self.lane("review", "a")
-        self.lane(
+        start_out = self.lane(
             "start", "fix-a", "--fix-of", "a", "--ticket", "404", "--base", "integrate/q",
             "--claims", "lib/**", "--create",
         )
+        self.assertIn("inherited partial scope from a for #404", start_out)
         fix = self.record("fix-a")
         self.assertEqual(fix["scope"], [{"issue": "404", "partial": True}])
         fix_wt = pathlib.Path(fix["worktree"])

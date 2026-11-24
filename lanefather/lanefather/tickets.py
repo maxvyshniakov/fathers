@@ -113,8 +113,31 @@ def _key(ref: str) -> str | None:
 def _norm(key: str, default_repo: str = "") -> str:
     """Case-folded identity for deduplication, resolving bare numbers against `default_repo` when known."""
     issue = scope.Issue(key)
+    local = issue.local.lstrip("0") or "0" if issue.local.isdigit() else issue.local
     repo = (issue.repo or default_repo).lower()
-    return f"{repo}#{issue.local}" if repo else issue.local
+    return f"{repo}#{local}" if repo else local
+
+
+def check_repair_partial(merge_sha: str, merge_body: str, issues: Sequence[scope.Issue],
+                         rule: config.Tickets, repo: str, partial: bool) -> bool:
+    """Derive or validate `--partial` on `land --repair` from an already-committed merge message."""
+    if not rule.fixes_trailer:
+        return partial
+    default_repo = repo or rule.repo
+    non_umbrella = [issue for issue in issues if not issue.partial and not is_umbrella(issue, rule, default_repo)]
+    if not non_umbrella:
+        return partial
+    fixed = {_norm(k, default_repo) for ref in FIXES.findall(merge_body) if (k := _key(ref)) is not None}
+    reffed = {_norm(k, default_repo) for ref in REFS.findall(merge_body) if (k := _key(ref)) is not None}
+    has_fixes = any(_norm(issue.number, default_repo) in fixed for issue in non_umbrella)
+    all_reffed = all(_norm(issue.number, default_repo) in reffed for issue in non_umbrella)
+    if partial and has_fixes:
+        raise LaneError(
+            f"land --repair --partial refused: merge {merge_sha[:10]} already says Fixes; rerun without --partial"
+        )
+    if not partial and not has_fixes and all_reffed:
+        return True
+    return partial
 
 
 def trailer_conflicts(cwd: str, base: str, head: str, issues: Sequence[scope.Issue],
@@ -123,27 +146,29 @@ def trailer_conflicts(cwd: str, base: str, head: str, issues: Sequence[scope.Iss
     """Each `Fixes #N` line in base..head, or in the merge message, for a partial or umbrella ticket: GitHub
     closes the ticket anyway when that commit reaches the default branch."""
     default_repo = repo or rule.repo
-    reasons: dict[str, str] = {}
-    for issue in issues:
-        folded = _norm(issue.number, default_repo)
-        if issue.partial:
-            reasons[folded] = "partial"
-        elif is_umbrella(issue, rule, default_repo):
-            reasons[folded] = "an umbrella ticket"
-    if not reasons:
+    partial_keys = {_norm(issue.number, default_repo) for issue in issues if issue.partial}
+    if not partial_keys and not rule.umbrella:
         return []
+
+    def conflict_reason(key: str) -> str | None:
+        if _norm(key, default_repo) in partial_keys:
+            return "partial"
+        if is_umbrella(key, rule, default_repo):
+            return "an umbrella ticket"
+        return None
+
     found: list[str] = []
     log = git(cwd, "log", "--format=%H%x01%B%x00", f"{base}..{head}", check=False)
     for entry in log.split("\0"):
         sha, _, body = entry.strip("\n").partition("\x01")
         for ref in dict.fromkeys(FIXES.findall(body)):
             key = _key(ref)
-            if key is not None and (why := reasons.get(_norm(key, default_repo))) is not None:
+            if key is not None and (why := conflict_reason(key)) is not None:
                 found.append(f"lane commit {sha[:10]} says Fixes {ref}, which is {why}: GitHub closes {ref} "
                              "when it reaches the default branch")
     for ref in dict.fromkeys(FIXES.findall(message)):
         key = _key(ref)
-        if key is not None and (why := reasons.get(_norm(key, default_repo))) is not None:
+        if key is not None and (why := conflict_reason(key)) is not None:
             found.append(f"the merge message says Fixes {ref}, which is {why}: GitHub closes {ref} "
                          "when it reaches the default branch")
     return found
@@ -273,12 +298,9 @@ def land_comment(record: Record, merge: str, branch: str, repo: str, pushed: lis
                      f"not labelled `{LABEL}`.")
     elif is_partial:
         refs = f" (`Refs {issue.ref}`)" if rule.fixes_trailer else ""
-        if remaining:
-            notes.append(f"partial: this merge does part of {issue.ref}{refs}; remaining: {remaining}; the issue "
-                         f"stays open and is not labelled `{LABEL}`.")
-        else:
-            notes.append(f"Partial: this merge does part of {issue.ref}{refs}; the issue stays open and is not "
-                         f"labelled `{LABEL}`.")
+        rem = f"; remaining: {remaining}" if remaining else ""
+        notes.append(f"Partial: this merge does part of {issue.ref}{refs}{rem}; the issue stays open and is not "
+                     f"labelled `{LABEL}`.")
     else:
         if rule.integrated_label:
             notes.append(f"Labelled `{LABEL}`: done and landed in `{branch}`, not yet on the default branch or "
@@ -372,12 +394,33 @@ def mark_issue(store: state.Store, record: Record, issue: scope.Issue, repo: str
         warn(what, problems, store=store)
 
 
-def _partial_landed_tickets(store: state.Store, cwd: str, common: str, base: str, head: str,
-                            default_repo: str) -> set[str]:
-    """Normalized ticket keys that only landed partially in `base..head`, excluding any completed by another lane."""
+def _fixed_issue_commits(cwd: str, base: str, head: str, *, repo: str = "") -> list[tuple[str, str, set[str]]]:
+    """Each ticket named by a `Fixes #N` or `Fixes owner/repo#N` line in base..head, oldest commit first, as
+    `(key, folded, commit_shas)`."""
+    log = git(cwd, "log", "--reverse", "--format=%H%x01%B%x00", f"{base}..{head}")
+    by_folded: dict[str, tuple[str, set[str]]] = {}
+    for entry in log.split("\0"):
+        sha, _, body = entry.strip("\n").partition("\x01")
+        if not sha:
+            continue
+        for ref in FIXES.findall(body):
+            key = _key(ref)
+            if key is None:
+                continue
+            folded = _norm(key, repo)
+            if folded not in by_folded:
+                by_folded[folded] = (key, {sha})
+            else:
+                by_folded[folded][1].add(sha)
+    return [(key, folded, shas) for folded, (key, shas) in by_folded.items()]
+
+
+def _partial_lane_commits(store: state.Store, cwd: str, common: str, base: str, head: str,
+                          default_repo: str, candidate_keys: set[str]) -> dict[str, set[str]]:
+    """Map each normalized ticket key in `candidate_keys` to commit SHAs inside `previous..merge` of lanes in
+    `base..head` that landed that ticket partially."""
     real_common = os.path.realpath(common)
-    partial: set[str] = set()
-    completed: set[str] = set()
+    by_ticket: dict[str, set[str]] = {}
     for record in store.lanes():
         rec_common = record.get("common_dir")
         if not isinstance(rec_common, str) or not rec_common or os.path.realpath(rec_common) != real_common:
@@ -385,27 +428,35 @@ def _partial_landed_tickets(store: state.Store, cwd: str, common: str, base: str
         raw_landed: Any = record.get("landed")
         if not isinstance(raw_landed, dict):
             continue
-        merge_sha = cast(dict[str, Any], raw_landed).get("merge")
+        landed_info = cast(dict[str, Any], raw_landed)
+        merge_sha = landed_info.get("merge")
+        prev_sha = landed_info.get("previous")
         if not isinstance(merge_sha, str) or not merge_sha:
+            continue
+        land_partial = landed_info.get("partial") is True
+        relevant = [
+            folded for issue in scope.issues(record)
+            if (land_partial or issue.partial) and (folded := _norm(issue.number, default_repo)) in candidate_keys
+        ]
+        if not relevant:
             continue
         if not git_ok(cwd, "merge-base", "--is-ancestor", merge_sha, head):
             continue
         if git_ok(cwd, "merge-base", "--is-ancestor", merge_sha, base):
             continue
-        land_partial = cast(dict[str, Any], raw_landed).get("partial") is True
-        for issue in scope.issues(record):
-            folded = _norm(issue.number, default_repo)
-            if land_partial or issue.partial:
-                partial.add(folded)
-            else:
-                completed.add(folded)
-    return partial - completed
+        if isinstance(prev_sha, str) and prev_sha and git_ok(cwd, "rev-parse", "--verify", "--quiet", prev_sha):
+            lane_shas = set(git(cwd, "rev-list", f"{prev_sha}..{merge_sha}", check=False).splitlines())
+        else:
+            lane_shas = {merge_sha}
+        for folded in relevant:
+            by_ticket.setdefault(folded, set()).update(lane_shas)
+    return by_ticket
 
 
 def release_comments(store: state.Store, cwd: str, common: str, base: str, head: str, version: str | None) -> int:
     """Comment the version (or the main SHA) on each issue a `Fixes #N` or `Fixes owner/repo#N` line in base..head
-    names, in its own repository; the number commented. Umbrella tickets and tickets that only landed partially
-    in the range are skipped. A failure warns."""
+    names, in its own repository; the number commented. Umbrella tickets and tickets whose `Fixes` commits all lie
+    inside partial lanes in the range are skipped. A failure warns."""
     rule = store.project.tickets
     if not rule.release_comment:
         return 0
@@ -415,10 +466,19 @@ def release_comments(store: state.Store, cwd: str, common: str, base: str, head:
         return 0
     repo = repository(common, rule)
     default_repo = repo or rule.repo
-    skip_partial = _partial_landed_tickets(store, cwd, common, base, head, default_repo)
+    candidates = [
+        (key, folded, shas)
+        for key, folded, shas in _fixed_issue_commits(cwd, base, head, repo=default_repo)
+        if not is_umbrella(key, rule, default_repo)
+    ]
+    if not candidates:
+        return 0
+    partial_commits = _partial_lane_commits(
+        store, cwd, common, base, head, default_repo, {folded for _, folded, _ in candidates}
+    )
     numbers = [
-        key for key in fixed_issues(cwd, base, head, repo=default_repo)
-        if not is_umbrella(key, rule, default_repo) and _norm(key, default_repo) not in skip_partial
+        key for key, folded, shas in candidates
+        if not (folded in partial_commits and shas <= partial_commits[folded])
     ]
     if not numbers:
         return 0

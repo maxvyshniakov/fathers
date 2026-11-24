@@ -103,7 +103,9 @@ parent's ID in the string `review_fix_of` for older Lanefather versions. The com
 A lane started with `--fix-of` has its own worktree, counts toward the cap like any lane, and runs its own check
 plan even with one parent. `start` refuses an id containing `review-fixes` that names no parent (`--fix-of`,
 overridable with `--force-reason`; fathers#252). A batch fix lane's
-scope is what its own `--ticket` and `--partial` name: `--partial N` keeps its merge from closing N a second time.
+scope is what its own `--ticket` and `--partial` name: `--partial N` keeps its merge from closing N a second time,
+and any ticket a `--fix-of` parent landed partially (via `land --partial` or a partial scope entry) automatically
+inherits partial scope on the fix lane (fathers#64).
 
 ### Accepted scope
 
@@ -447,8 +449,9 @@ have yet (a remote-tracking branch, as last fetched, that contains it) is said t
 red smoke leaves the issue unmarked for the fix's land. The issues a release closes are those a `Fixes #N` line in
 the shipped range names: origin's `main` before the push to the SHA for `promote --ship`, `--since` to `--head` for
 `lanefather shipped <version>`, which a project's release process runs after it publishes, skipping any umbrella
-ticket and any ticket that only landed partially in that range. Each closed issue loses its `integrated` label, which
-no longer holds once it is released. `gh` runs without a
+ticket and any ticket whose `Fixes` commits in that range all lie inside partial lanes (a completing lane or
+external commit with `Fixes #N` in the same range overrides the partial skip). Each closed issue loses its
+`integrated` label, which no longer holds once it is released. `gh` runs without a
 prompt with `--repo`; a failure warns and goes to the ledger and never fails the land, promote or release. `start`
 and `next --start` warn about a lane registered with `--ticket none` while any rule is on, and `done` does not count
 land's comment as the lane's evidence. The capability is `tickets.lifecycle`.

@@ -420,11 +420,16 @@ def merge(
                 raise LaneError(f"land --repair refused: no merge commit for {record['branch']} ({tip[:10]}) "
                                 f"found in {integration}")
             merge_sha, prev_sha = found
+            merge_body = git(integration, "log", "-1", "--format=%B", merge_sha, check=False)
+            repo = tickets.repository(record["common_dir"], store.project.tickets) or ""
+            repair_partial = tickets.check_repair_partial(
+                merge_sha, merge_body, scope.issues(record), store.project.tickets, repo, partial
+            )
             keep_flag = bool(keep or record.get("keep"))
             return _finish_land_transition(
                 store, lane_id, merge_sha=merge_sha, previous=prev_sha, tip=tip, tree=tree,
                 integration=integration, onto=onto, keep=keep_flag, new_overrides=new_overrides, receipt=receipt,
-                partial=partial, remaining=remaining,
+                partial=repair_partial, remaining=remaining if repair_partial else None,
             )
         issues = scope.issues(record)
         effective_issues = [scope.Issue(issue.number, True) for issue in issues] if partial else issues

@@ -547,11 +547,11 @@ def activate_planned(store: state.Store, lane_id: str, *, base: str | None = Non
 
 
 def _inherit_partial_scope(store: state.Store, parents: Sequence[str],
-                           items: Sequence[scope.Item]) -> tuple[scope.Item, ...]:
+                           items: Sequence[scope.Item]) -> tuple[tuple[scope.Item, ...], list[scope.Issue]]:
     """Any ticket of `items` that a fix parent landed partially (via `land --partial` or a partial scope entry)
     stays partial on the follow-up fix lane, so its merge says `Refs` instead of `Fixes` (fathers#64)."""
     if not parents:
-        return tuple(items)
+        return tuple(items), []
     default_repo = store.project.tickets.repo
     partial_keys: set[str] = set()
     for parent_id in parents:
@@ -566,14 +566,18 @@ def _inherit_partial_scope(store: state.Store, parents: Sequence[str],
             if landed_partial or issue.partial:
                 partial_keys.add(tickets.norm_key(issue.number, default_repo))
     if not partial_keys:
-        return tuple(items)
-    return tuple(
-        scope.Issue(item.number, True)
-        if isinstance(item, scope.Issue) and not item.partial
-        and tickets.norm_key(item.number, default_repo) in partial_keys
-        else item
-        for item in items
-    )
+        return tuple(items), []
+    updated: list[scope.Item] = []
+    inherited: list[scope.Issue] = []
+    for item in items:
+        if (isinstance(item, scope.Issue) and not item.partial
+                and tickets.norm_key(item.number, default_repo) in partial_keys):
+            partial_issue = scope.Issue(item.number, True)
+            updated.append(partial_issue)
+            inherited.append(partial_issue)
+        else:
+            updated.append(item)
+    return tuple(updated), inherited
 
 
 def start(args: Any, store: state.Store) -> int:
@@ -593,7 +597,7 @@ def start(args: Any, store: state.Store) -> int:
     after = list(dict.fromkeys(option_list(getattr(args, "after", None))))
     given = getattr(args, "fix_of", None) or ()
     parents = list(dict.fromkeys(name for value in given for name in value.replace(",", " ").split()))
-    items = _inherit_partial_scope(
+    items, inherited_partial = _inherit_partial_scope(
         store, parents,
         scope.from_options(raw_issues, option_list(getattr(args, "decision", None)),
                            option_list(getattr(args, "spec", None))),
@@ -607,6 +611,10 @@ def start(args: Any, store: state.Store) -> int:
         review_reason=getattr(args, "review_reason", None),
     )
     register(store, record, rules, args.force_reason, args.create, agent=getattr(args, "agent", None))
+    if inherited_partial:
+        refs = ", ".join(issue.ref for issue in inherited_partial)
+        print(f"lane: inherited partial scope from {', '.join(parents)} for {refs} (merge will say Refs)",
+              file=sys.stderr)
     return 0
 
 
