@@ -170,27 +170,34 @@ def recheck(args: Any, store: state.Store) -> int:
             )
         else:
             tip = rplan.tip
-            with worktrees.smoke_checkout(record["common_dir"], tip, store.project) as checkout:
-                postmerge.PostMergeRecord.start_smoke(
-                    store, args.id, merge_sha=merge_sha, checkout=checkout, write_receipt=False,
+            smoke_recorded = False
+            try:
+                with worktrees.smoke_checkout(record["common_dir"], tip, store.project) as checkout:
+                    postmerge.PostMergeRecord.start_smoke(
+                        store, args.id, merge_sha=merge_sha, checkout=checkout, write_receipt=False,
+                    )
+                    toolchain = plan.toolchain_state(checkout, store.project)
+                    decision, results, check_results, triaged, _stamp, status = run_smoke(
+                        store, record, checkout, suites, selected, f"recheck-{args.id}", args.slots, toolchain
+                    )
+                    tree = git(checkout, "rev-parse", "HEAD^{tree}")
+                status = status if results else "red"
+                payload: dict[str, Any] = {
+                    "version": 1, "lane": args.id, "kind": "recheck", "merge": merge_sha, "sha": tip,
+                    "tree": tree, "checkout": checkout, "platform": result_store.host_platform(store.project),
+                    "red_receipt": red_path, "suites": suites, "checks": selected,
+                    "check_results": check_results, "results": results, "triage": triaged,
+                    "status": status, "jobs": decision["jobs"], "jobs_decision": decision,
+                    "leases": verify.leases_of(results), "host": host(store.project), "finished": journal.now(),
+                }
+                pm, path = postmerge.PostMergeRecord.record_recheck(
+                    store, args.id, merge_sha=merge_sha, tip=tip, status=status, payload=payload,
+                    red_receipt_path=red_path,
                 )
-                toolchain = plan.toolchain_state(checkout, store.project)
-                decision, results, check_results, triaged, _stamp, status = run_smoke(
-                    store, record, checkout, suites, selected, f"recheck-{args.id}", args.slots, toolchain
-                )
-                tree = git(checkout, "rev-parse", "HEAD^{tree}")
-            status = status if results else "red"
-            payload: dict[str, Any] = {
-                "version": 1, "lane": args.id, "kind": "recheck", "merge": merge_sha, "sha": tip,
-                "tree": tree, "checkout": checkout, "platform": result_store.host_platform(store.project),
-                "red_receipt": red_path, "suites": suites, "checks": selected,
-                "check_results": check_results, "results": results, "triage": triaged,
-                "status": status, "jobs": decision["jobs"], "jobs_decision": decision,
-                "leases": verify.leases_of(results), "host": host(store.project), "finished": journal.now(),
-            }
-            pm, path = postmerge.PostMergeRecord.record_recheck(
-                store, args.id, merge_sha=merge_sha, tip=tip, status=status, payload=payload, red_receipt_path=red_path,
-            )
+                smoke_recorded = True
+            finally:
+                if not smoke_recorded:
+                    postmerge.PostMergeRecord.abort_smoke(store, args.id, merge_sha=merge_sha)
             record = pm.record
             result_store.record(store, tree, verify.recordable(check_results), source="post-merge",
                                 toolchain=toolchain, lane=args.id, sha=tip, receipt=str(path), phase="post-merge")
@@ -401,77 +408,83 @@ def post_merge(store: state.Store, landed: Landed, slots: int | None) -> Smoke:
     merge_sha = landed.merge
     previous = landed.previous
     receipt = landed.receipt
-    with worktrees.smoke_checkout(record["common_dir"], merge_sha, store.project) as checkout:
-        postmerge.PostMergeRecord.start_smoke(store, lane_id, merge_sha=merge_sha, checkout=checkout)
-        inspector = plan.Checkout(store.project, checkout)
-        merge_tree = git(checkout, "rev-parse", "HEAD^{tree}")
-        toolchain = inspector.toolchain()
-        exact_verified, exact_narrowing, reasons, prep_reason = plan.exact_tree_reuse(
-            inspector, receipt, record["landed"], merge_tree, previous, toolchain, record.get("worktree")
+    smoke_recorded = False
+    try:
+        with worktrees.smoke_checkout(record["common_dir"], merge_sha, store.project) as checkout:
+            postmerge.PostMergeRecord.start_smoke(store, lane_id, merge_sha=merge_sha, checkout=checkout)
+            inspector = plan.Checkout(store.project, checkout)
+            merge_tree = git(checkout, "rev-parse", "HEAD^{tree}")
+            toolchain = inspector.toolchain()
+            exact_verified, exact_narrowing, reasons, prep_reason = plan.exact_tree_reuse(
+                inspector, receipt, record["landed"], merge_tree, previous, toolchain, record.get("worktree")
+            )
+            if exact_verified is not None and exact_narrowing is not None:
+                merged_paths = [p for p in git(
+                    checkout, "-c", "core.quotePath=false", "diff", "--no-renames", "--name-only",
+                    previous, merge_sha, "--",
+                ).splitlines() if p]
+                docs_only = review.documentation_only(merged_paths, store.project)
+                record = store.update(lane_id, lambda rec: rec["landed"].update(docs_only=docs_only))
+                print(f"lane: {review.start_lane_review(store, record)}", flush=True)
+                print(f"lane: post-merge smoke skipped: exact merge tree {merge_tree[:10]} already verified by lane "
+                      f"receipt ({len(exact_verified)} checks); no plan bootstrap needed", flush=True)
+                kind = "skip"
+                rows: list[dict[str, Any]] | None = []
+                lane_verified, narrowing = exact_verified, exact_narrowing
+                tree_verified: dict[str, dict[str, Any]] = {}
+                skips: dict[str, str] = {}
+                suites: list[str] = []
+                selected: dict[str, list[str]] | None = {}
+                decision, results, check_results, triaged, stamp, status = run_smoke(
+                    store, record, checkout, suites, selected, f"post-merge-{lane_id}", slots, toolchain
+                )
+                jobs = decision["jobs"]
+            else:
+                print(f"lane: preparing post-merge plan for {lane_id} in {checkout} ({prep_reason}); "
+                      "queue: slotfather status", flush=True)
+                merged_plan = inspector.plan_for(previous)
+                plan_docs_only = review.documentation_only(merged_plan["paths"], store.project)
+                record = store.update(lane_id, lambda rec: rec["landed"].update(docs_only=plan_docs_only))
+                print(f"lane: {review.start_lane_review(store, record)}", flush=True)
+                kind, rows = inspector.post_merge_selection(merged_plan)
+                kind, rows, narrowing, lane_verified = plan.narrow_smoke(
+                    inspector, receipt, record["landed"], merge_tree, kind, rows, record.get("worktree"),
+                    toolchain=toolchain,
+                )
+                kind, rows, tree_verified, skips = smoke_reuse(
+                    store, kind, rows, merge_tree, toolchain, merged_plan,
+                    git(checkout, "rev-parse", previous + "^{tree}"),
+                )
+                reasons = merged_plan["reasons"]
+                suites, selected = ((merged_plan["selected"], None) if rows is None
+                                    else (plan.suites_of(rows), plan.by_suite(rows)))
+                left = (f"{len(rows)} check{'s' if len(rows) != 1 else ''} to run" if rows
+                        else f"suites {', '.join(suites)} to run" if rows is None and suites else "nothing to run")
+                print(f"lane: post-merge plan for {lane_id} prepared ({kind}): {left}", flush=True)
+                decision, results, check_results, triaged, stamp, status = run_smoke(
+                    store, record, checkout, suites, selected, f"post-merge-{lane_id}", slots, toolchain
+                )
+                jobs = decision["jobs"]
+        info = host(store.project)
+        payload: dict[str, Any] = {
+            "version": 1, "lane": lane_id, "merge": merge_sha, "base": previous,
+            "tree": merge_tree, "checkout": checkout, "kind": kind,
+            "platform": result_store.host_platform(store.project),
+            "jobs": jobs, "jobs_decision": decision, "suites": suites, "full": False,
+            "reasons": reasons, "checks": selected, "selection": rows,
+            "narrowing": narrowing, "skipped": skips,
+            "check_results": {**lane_verified, **tree_verified, **check_results},
+            "results": results, "triage": triaged, "status": status, "verified_tree": stamp,
+            "leases": verify.leases_of(results),
+            "host": info, "finished": journal.now(),
+        }
+        pm, post = postmerge.PostMergeRecord.record_smoke(
+            store, lane_id, merge_sha=merge_sha, status=status, payload=payload,
         )
-        if exact_verified is not None and exact_narrowing is not None:
-            merged_paths = [p for p in git(
-                checkout, "-c", "core.quotePath=false", "diff", "--no-renames", "--name-only",
-                previous, merge_sha, "--",
-            ).splitlines() if p]
-            docs_only = review.documentation_only(merged_paths, store.project)
-            record = store.update(lane_id, lambda rec: rec["landed"].update(docs_only=docs_only))
-            print(f"lane: {review.start_lane_review(store, record)}", flush=True)
-            print(f"lane: post-merge smoke skipped: exact merge tree {merge_tree[:10]} already verified by lane "
-                  f"receipt ({len(exact_verified)} checks); no plan bootstrap needed", flush=True)
-            kind = "skip"
-            rows: list[dict[str, Any]] | None = []
-            lane_verified, narrowing = exact_verified, exact_narrowing
-            tree_verified: dict[str, dict[str, Any]] = {}
-            skips: dict[str, str] = {}
-            suites: list[str] = []
-            selected: dict[str, list[str]] | None = {}
-            decision, results, check_results, triaged, stamp, status = run_smoke(
-                store, record, checkout, suites, selected, f"post-merge-{lane_id}", slots, toolchain
-            )
-            jobs = decision["jobs"]
-        else:
-            print(f"lane: preparing post-merge plan for {lane_id} in {checkout} ({prep_reason}); "
-                  "queue: slotfather status", flush=True)
-            merged_plan = inspector.plan_for(previous)
-            plan_docs_only = review.documentation_only(merged_plan["paths"], store.project)
-            record = store.update(lane_id, lambda rec: rec["landed"].update(docs_only=plan_docs_only))
-            print(f"lane: {review.start_lane_review(store, record)}", flush=True)
-            kind, rows = inspector.post_merge_selection(merged_plan)
-            kind, rows, narrowing, lane_verified = plan.narrow_smoke(
-                inspector, receipt, record["landed"], merge_tree, kind, rows, record.get("worktree"),
-                toolchain=toolchain,
-            )
-            kind, rows, tree_verified, skips = smoke_reuse(
-                store, kind, rows, merge_tree, toolchain, merged_plan,
-                git(checkout, "rev-parse", previous + "^{tree}"),
-            )
-            reasons = merged_plan["reasons"]
-            suites, selected = ((merged_plan["selected"], None) if rows is None
-                                else (plan.suites_of(rows), plan.by_suite(rows)))
-            left = (f"{len(rows)} check{'s' if len(rows) != 1 else ''} to run" if rows
-                    else f"suites {', '.join(suites)} to run" if rows is None and suites else "nothing to run")
-            print(f"lane: post-merge plan for {lane_id} prepared ({kind}): {left}", flush=True)
-            decision, results, check_results, triaged, stamp, status = run_smoke(
-                store, record, checkout, suites, selected, f"post-merge-{lane_id}", slots, toolchain
-            )
-            jobs = decision["jobs"]
-    info = host(store.project)
-    payload: dict[str, Any] = {
-        "version": 1, "lane": lane_id, "merge": merge_sha, "base": previous,
-        "tree": merge_tree, "checkout": checkout, "kind": kind,
-        "platform": result_store.host_platform(store.project),
-        "jobs": jobs, "jobs_decision": decision, "suites": suites, "full": False,
-        "reasons": reasons, "checks": selected, "selection": rows,
-        "narrowing": narrowing, "skipped": skips,
-        "check_results": {**lane_verified, **tree_verified, **check_results},
-        "results": results, "triage": triaged, "status": status, "verified_tree": stamp,
-        "leases": verify.leases_of(results),
-        "host": info, "finished": journal.now(),
-    }
-    pm, post = postmerge.PostMergeRecord.record_smoke(
-        store, lane_id, merge_sha=merge_sha, status=status, payload=payload,
-    )
+        smoke_recorded = True
+    finally:
+        if not smoke_recorded:
+            postmerge.PostMergeRecord.abort_smoke(store, lane_id, merge_sha=merge_sha)
     record = pm.record
     result_store.record(store, merge_tree, verify.recordable({**lane_verified, **tree_verified, **check_results}),
                         source="post-merge", toolchain=toolchain, lane=lane_id, sha=merge_sha, receipt=str(post),

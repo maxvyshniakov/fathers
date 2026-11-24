@@ -460,6 +460,91 @@ class PostMergeSmokeLifecycleTests(LaneCase):
         self.assertIn("post-merge smoke is not run", refused)
         self.assertTrue(wt_miss.exists())
 
+    def test_killed_recheck_preserves_red_for_clearing_and_accept_audit(self) -> None:
+        import subprocess
+        import sys
+        import time
+
+        wt_a = self._checked("a", "lib/a.txt")
+        self.integration_moves()
+        self.env["FIXTURE_STATUS"] = "post-merge-a:lib-check=failed"
+        self.assertIn("post-merge red", self.lane("land", "a", ok=False))
+        del self.env["FIXTURE_STATUS"]
+
+        # Start recheck held on a flag, then kill its holder mid-run.
+        hold = self.tmp / "hold-recheck-kill"
+        recheck_proc = subprocess.Popen(
+            [sys.executable, "-m", "lanefather", "recheck", "a"],
+            cwd=self.integration,
+            env={**self.env, "FIXTURE_HOLD": f"recheck-a:{hold}"},
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        try:
+            started = pathlib.Path(f"{hold}.started")
+            deadline = time.monotonic() + 30
+            while not started.exists():
+                self.assertIsNone(recheck_proc.poll(), "recheck exited before holding")
+                # load-tolerant: waiting for fixture recheck process to reach hold file.
+                self.assertLess(time.monotonic(), deadline, "recheck did not reach hold")
+                time.sleep(0.05)
+            self.assertEqual(self.record("a")["post_merge"]["status"], "running")
+            recheck_proc.kill()
+            recheck_proc.wait(timeout=10)
+        finally:
+            if recheck_proc.poll() is None:
+                recheck_proc.kill()
+                recheck_proc.wait(timeout=10)
+            if recheck_proc.stdout is not None:
+                recheck_proc.stdout.close()
+
+        # Dead recheck resolves back to `red` (not `killed`), so a later green smoke clears it and `done` passes.
+        self.assertIn("post-merge red", self.lane("list"))
+        wt_b = self._checked("b", "tooling/b.txt")
+        self.commit(self.integration, {"tooling/moved-b.txt": "moved\n"}, "integration moves")
+        self.assertIn("post-merge green", self.lane("land", "b"))
+        self.assertTrue(wt_b.exists())
+        done_out = self.lane("done", "a")
+        self.assertIn("Lane a done", done_out)
+        self.assertIn("cleared by the post-merge smoke of b", done_out)
+        self.assertFalse(wt_a.exists())
+
+    def test_in_process_exception_in_run_smoke_resets_running_status(self) -> None:
+        import os
+        from unittest import mock
+
+        from lanefather import config, land, postmerge, state
+
+        # Case 1: initial `land.post_merge` raises -> `running` resets to `killed`.
+        self._checked("e1", "lib/e1.txt")
+        self.integration_moves()
+        with mock.patch.dict(os.environ, self.env, clear=False):
+            cfg = config.load(self.integration / ".lanefather.toml")
+            store = state.Store(cfg, directory=self.state)
+            landed_obj = land.merge(store, "e1", None, None, True, None, 0)
+            with (mock.patch.object(land, "run_smoke", side_effect=RuntimeError("boom")),
+                  self.assertRaises(RuntimeError)):
+                land.post_merge(store, landed_obj, None)
+            self.assertEqual(store.load("e1")["post_merge"]["status"], "killed")
+            self.assertEqual(postmerge.live_phase(store.load("e1")), (postmerge.PostMergePhase.KILLED, "killed"))
+
+        # Case 2: `land.recheck` raises -> `running` resets back to `red`.
+        self._checked("e2", "lib/e2.txt")
+        self.commit(self.integration, {"tooling/moved-e2.txt": "moved again\n"}, "integration moves again")
+        self.env["FIXTURE_STATUS"] = "post-merge-e2:lib-check=failed"
+        self.assertIn("post-merge red", self.lane("land", "e2", ok=False))
+        del self.env["FIXTURE_STATUS"]
+        with mock.patch.dict(os.environ, self.env, clear=False):
+            cfg = config.load(self.integration / ".lanefather.toml")
+            store = state.Store(cfg, directory=self.state)
+            recheck_args = mock.MagicMock(id="e2", slots=None)
+            with (mock.patch.object(land, "run_smoke", side_effect=RuntimeError("recheck boom")),
+                  self.assertRaises(RuntimeError)):
+                land.recheck(recheck_args, store)
+            self.assertEqual(store.load("e2")["post_merge"]["status"], "red")
+            self.assertEqual(postmerge.live_phase(store.load("e2")), (postmerge.PostMergePhase.RED, "red"))
+
 
 if __name__ == "__main__":
     unittest.main()

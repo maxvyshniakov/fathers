@@ -9,6 +9,7 @@ Never consults `config.current()` or `state.state_dir()`.
 """
 from __future__ import annotations
 
+import contextlib
 from dataclasses import dataclass
 from enum import StrEnum
 import os
@@ -369,7 +370,7 @@ def _holder_identity(pid: int | None = None) -> tuple[int, str | None]:
     """Return `(pid, utc_lstart)` for the smoke holder process using `fathers_common.proc`."""
     actual_pid = os.getpid() if pid is None else pid
     try:
-        found = proc.identities([actual_pid], clock="utc", timeout=5)
+        found = proc.identities([actual_pid], clock="utc", timeout=5, strict=True)
     except proc.ProcTableError:
         return actual_pid, None
     entry = found.get(actual_pid)
@@ -395,7 +396,7 @@ def _smoke_holder_alive(post: dict[str, Any]) -> bool:
     elif raw_start is not None:
         return False
     try:
-        live = proc.identities([raw_pid], clock="utc", timeout=5)
+        live = proc.identities([raw_pid], clock="utc", timeout=5, strict=True)
     except proc.ProcTableError:
         # Fail-closed (fathers#121): never claim a running smoke was killed when ps cannot be read.
         return True
@@ -406,11 +407,20 @@ def _smoke_holder_alive(post: dict[str, Any]) -> bool:
         return proc.same_process(started_epoch, None, entry)
     if unparsed_start is not None:
         return proc.norm(unparsed_start) == entry.start
+    # `start` missing/empty: if the live process started after the smoke began, the PID was reused.
+    raw_started_at = post.get("started")
+    if isinstance(raw_started_at, str) and raw_started_at and entry.started is not None:
+        try:
+            smoke_epoch = journal.parse_time(raw_started_at).timestamp()
+        except ValueError:
+            smoke_epoch = None
+        if smoke_epoch is not None and entry.started > smoke_epoch + proc.EPOCH_SLACK:
+            return False
     return True
 
 
 def live_phase(record: Record) -> tuple[PostMergePhase, str | None]:
-    """Evaluate `persisted_phase(record)` and resolve a dead `running` holder to `(KILLED, 'killed')`."""
+    """Evaluate `persisted_phase(record)` and resolve a dead `running` holder to `KILLED` (or `RED` for a recheck)."""
     post = post_merge(record)
     raw = post.get("status")
     raw_status = raw if isinstance(raw, str) else None
@@ -418,6 +428,8 @@ def live_phase(record: Record) -> tuple[PostMergePhase, str | None]:
     if phase is PostMergePhase.RUNNING:
         if _smoke_holder_alive(post):
             return PostMergePhase.RUNNING, "running"
+        if post.get("previous_status") == "red":
+            return PostMergePhase.RED, "red"
         return PostMergePhase.KILLED, "killed"
     return phase, raw_status
 
@@ -802,6 +814,13 @@ class PostMergeRecord:
             current_phase, _ = live_phase(latest)
             target_phase = apply_post_merge_event(lane_id, current_phase, PostMergeEvent.SMOKE_START)
             lane_created = state.lane_created_of(latest)
+            started_at = journal.now()
+            prev_post = post_merge(latest)
+            previous_status = (
+                "red"
+                if current_phase is PostMergePhase.RED or prev_post.get("previous_status") == "red"
+                else None
+            )
             target: Path | None = None
             receipt_ref: str | None = None
             if write_receipt:
@@ -813,20 +832,22 @@ class PostMergeRecord:
                     "checkout": checkout,
                     "pid": actual_pid,
                     **({"start": actual_start} if actual_start is not None else {}),
-                    "started": journal.now(),
+                    "started": started_at,
                     "status": "running",
                 }
                 target = _write_receipt(store, lane_id, "post-merge", receipt_data)
                 receipt_ref = str(target)
             else:
-                prev_receipt = post_merge(latest).get("receipt")
+                prev_receipt = prev_post.get("receipt")
                 if isinstance(prev_receipt, str):
                     receipt_ref = prev_receipt
             pm_entry: dict[str, Any] = {
                 "status": "running",
                 "pid": actual_pid,
                 **({"start": actual_start} if actual_start is not None else {}),
+                "started": started_at,
                 "checkout": checkout,
+                **({"previous_status": previous_status} if previous_status else {}),
                 **({"lane_created": lane_created} if lane_created else {}),
                 **({"receipt": receipt_ref} if receipt_ref else {}),
             }
@@ -847,6 +868,35 @@ class PostMergeRecord:
                 ),
                 target,
             )
+
+    @classmethod
+    def abort_smoke(cls, store: state.Store, lane_id: str, *, merge_sha: str) -> None:
+        """Reset a `running` smoke on an in-process exception: restore `red` for a recheck, else mark `killed`."""
+        with contextlib.suppress(LaneError), store.locked("state"):
+            latest = store.load(lane_id)
+            if (
+                lifecycle.finished(latest)
+                or not lifecycle.awaiting_done(latest)
+                or landed(latest).get("merge") != merge_sha
+            ):
+                return
+            post = post_merge(latest)
+            if post.get("status") != "running":
+                return
+            lane_created = state.lane_created_of(latest)
+            receipt_ref = post["receipt"] if isinstance(post.get("receipt"), str) else None
+            if post.get("previous_status") == "red":
+                restored: dict[str, Any] = {
+                    "status": "red",
+                    **({"receipt": receipt_ref} if receipt_ref else {}),
+                    **({"lane_created": lane_created} if lane_created else {}),
+                }
+            else:
+                restored = {
+                    **post,
+                    "status": "killed",
+                }
+            lifecycle.transition(store, lane_id, "record_smoke", post_merge=restored)
 
     @classmethod
     def accept_smoke(
@@ -925,9 +975,9 @@ class PostMergeRecord:
         payload: Receipt,
     ) -> tuple[PostMergeRecord, Path]:
         """Validate fencing & phase transition, write `<id>.post-merge.json`, and persist `record["post_merge"]`."""
-        if status not in ("green", "skipped", "red"):
+        if status not in ("green", "red"):
             raise LaneError(f"post-merge {lane_id}: invalid smoke status {status!r}")
-        event = PostMergeEvent.SMOKE_GREEN if status in ("green", "skipped") else PostMergeEvent.SMOKE_RED
+        event = PostMergeEvent.SMOKE_GREEN if status == "green" else PostMergeEvent.SMOKE_RED
         with store.locked("state"):
             latest = store.load(lane_id)
             _check_not_stale(latest, merge_sha, action="record post-merge smoke")

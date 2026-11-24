@@ -367,6 +367,82 @@ class DecideCompletionExhaustiveTests(unittest.TestCase):
         self.assertEqual(checked, 8960)
 
 
+class SmokeLivenessAndAbortUnitTests(unittest.TestCase):
+    """Stubbed-`ps` liveness rules and `record_smoke` / `abort_smoke` contracts (fathers#56 review)."""
+
+    def _running_record(self, **post_fields: Any) -> dict[str, Any]:
+        return {
+            "id": "a",
+            "status": "landed",
+            "created": "2026-11-24T00:00:00Z",
+            "landed": {"merge": "1" * 40, "integration": "/tmp"},
+            "post_merge": {"status": "running", **post_fields},
+        }
+
+    def test_proc_table_error_and_strict_ps_error_fail_closed_as_running(self) -> None:
+        from fathers_common import proc
+
+        rec = self._running_record(pid=4242, start="Tue Nov 24 00:00:00 2026")
+        with mock.patch.object(proc, "identities", side_effect=proc.ProcTableError("ps failed")) as mocked:
+            phase, status = postmerge.live_phase(rec)
+            self.assertEqual((phase, status), (PostMergePhase.RUNNING, "running"))
+            self.assertEqual(mocked.call_args.kwargs.get("strict"), True)
+
+        # Also exercise `proc.identities(..., strict=True)` through a stubbed `ps` exiting 1 with stderr.
+        err_result = subprocess.CompletedProcess(args=["ps"], returncode=1, stdout="", stderr="ps: illegal option\n")
+        with mock.patch.object(subprocess, "run", return_value=err_result):
+            self.assertEqual(postmerge.live_phase(rec), (PostMergePhase.RUNNING, "running"))
+
+    def test_reused_pid_with_different_start_reads_killed(self) -> None:
+        from fathers_common import proc
+
+        rec = self._running_record(pid=4242, start="Tue Nov 24 00:00:00 2026")
+        other = proc.Proc(pid=4242, ppid=1, pgid=4242, uid=501, tty="", start="Tue Nov 24 01:00:00 2026", cmd="other")
+        with mock.patch.object(proc, "identities", return_value={4242: other}):
+            self.assertEqual(postmerge.live_phase(rec), (PostMergePhase.KILLED, "killed"))
+
+    def test_zombie_process_reads_killed(self) -> None:
+        rec = self._running_record(pid=4242, start="Tue Nov 24 00:00:00 2026")
+        zombie_row = "4242 Z+ Tue Nov 24 00:00:00 2026 python3 -m lanefather land a\n"
+        ok_result = subprocess.CompletedProcess(args=["ps"], returncode=0, stdout=zombie_row, stderr="")
+        with mock.patch.object(subprocess, "run", return_value=ok_result):
+            self.assertEqual(postmerge.live_phase(rec), (PostMergePhase.KILLED, "killed"))
+
+    def test_missing_start_treats_process_started_after_smoke_as_killed(self) -> None:
+        from fathers_common import proc
+
+        rec = self._running_record(pid=4242, started="2026-11-24T00:00:00Z")
+        reused = proc.Proc(pid=4242, ppid=1, pgid=4242, uid=501, tty="", start="Tue Nov 24 00:05:00 2026", cmd="other")
+        with mock.patch.object(proc, "identities", return_value={4242: reused}):
+            self.assertEqual(postmerge.live_phase(rec), (PostMergePhase.KILLED, "killed"))
+
+        earlier = proc.Proc(pid=4242, ppid=1, pgid=4242, uid=501, tty="", start="Mon Nov 23 23:59:50 2026", cmd="lane")
+        with mock.patch.object(proc, "identities", return_value={4242: earlier}):
+            self.assertEqual(postmerge.live_phase(rec), (PostMergePhase.RUNNING, "running"))
+
+    def test_killed_recheck_resolves_back_to_red(self) -> None:
+        from fathers_common import proc
+
+        rec = self._running_record(pid=4242, start="Tue Nov 24 00:00:00 2026", previous_status="red")
+        with mock.patch.object(proc, "identities", return_value={}):
+            self.assertEqual(postmerge.live_phase(rec), (PostMergePhase.RED, "red"))
+            self.assertEqual(postmerge.effective_status(rec), "red")
+
+    def test_record_smoke_rejects_skipped_write_status(self) -> None:
+        tmp = pathlib.Path(tempfile.mkdtemp(prefix="lane-pm-skip-"))
+        self.addCleanup(shutil.rmtree, tmp, True)
+        store = state.Store(config.Config(project="Alpha"), directory=tmp / "state")
+        store.save({
+            "id": "a", "ticket": "42", "branch": "lane/a", "base": "main", "base_sha": "0" * 40,
+            "claims": ["lib/**"], "after": [], "common_dir": str(tmp), "integration": str(tmp),
+            "worktree": str(tmp / "a"), "status": "landed", "created": "2026-11-24T00:00:00Z",
+            "scratch": [], "cargo_targets": [], "overrides": [], "agents": [], "rules": [],
+            "landed": {"merge": "1" * 40, "integration": str(tmp)},
+        })
+        with self.assertRaises(LaneError):
+            PostMergeRecord.record_smoke(store, "a", merge_sha="1" * 40, status="skipped", payload={"tree": "a" * 40})
+
+
 class CrashedRecheckAndCrossProjectTests(LaneCase):
     """Real-repo integration tests for crashed green `<id>.recheck.json` recovery and cross-project `gate_platform`."""
 
