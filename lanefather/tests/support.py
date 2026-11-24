@@ -96,7 +96,7 @@ FIXTURE_CONFIG = textwrap.dedent("""\
     """)
 
 FAKE_VERIFY = r'''#!/usr/bin/env python3
-import json, os, pathlib, subprocess, sys, time, uuid
+import hashlib, json, os, pathlib, subprocess, sys, time, uuid
 SUITES = ("structure", "lib", "native", "host-journeys")
 # A stand-in verification graph: each check's suite and the path prefixes it reads.
 CHECKS = {"structure-check": ("structure", ("",)), "lib-check": ("lib", ("lib/", "calls/")),
@@ -221,6 +221,11 @@ for index, (id, suite) in enumerate(run_checks):
     # Like verify.py, each row carries its duration (fathers#92).
     rows.append({"id": id, "status": "passed" if code == 0 else "failed", "exit": code, "log": str(check_log),
                  "seconds": round(time.monotonic() - began, 6)})
+    if code and os.environ.get("FIXTURE_FAILURE_EVIDENCE"):
+        # Explicit producer opt-in: this tiny verifier's runtime is fixed by its test fixture.
+        rows[-1]["failure_evidence"] = {
+            "version": 1, "comparable": not bool(environment), "context": "fixture-verifier-v1",
+            "cases": [{"id": id, "signature": hashlib.sha256(check_log.read_bytes()).hexdigest()}]}
     status = status or code
     # Like verify.py (#639), the structure check is the cheap tier: red, it stops the run before the other checks.
     if id == "structure-check" and code and run_checks[index + 1:]:

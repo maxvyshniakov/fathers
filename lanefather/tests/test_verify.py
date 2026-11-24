@@ -482,9 +482,16 @@ class PureClassificationTableTests(unittest.TestCase):
 
             # 2. First-tier stopped (#639): skips alone rerun (`still_red` populated immediately);
             #    pre-existing base failure makes classification `green=True` and `first=True`.
+            stop_evidence: dict[str, Any] = {
+                "version": 1,
+                "comparable": True,
+                "context": "unit-v1",
+                "cases": [{"id": "structure-check", "signature": "assert: structure"}],
+            }
             stop_report: dict[str, Any] = {
+                "exit": 1,
                 "stopped": {"failed": ["structure-check"], "not_run": 2},
-                "checks": [{"id": "structure-check", "status": "failed"}],
+                "checks": [{"id": "structure-check", "status": "failed", "failure_evidence": stop_evidence}],
             }
             stop_fresh: list[dict[str, Any]] = [
                 {"suite": "structure", "status": "failed", "failed_checks": ["structure-check"]},
@@ -496,13 +503,19 @@ class PureClassificationTableTests(unittest.TestCase):
             self.assertEqual(stop_plan.active_rerun, ["structure-check"])
             self.assertEqual(stop_plan.still_red, ["structure-check"])
             self.assertEqual(stop_plan.entries["structure-check"]["alone"]["status"], "not rerun")
+            stop_base_report: dict[str, Any] = {
+                "exit": 1,
+                "checks": [{"id": "structure-check", "status": "failed", "exit": 1, "failure_evidence": stop_evidence}],
+            }
             base_pre = verify.evaluate_base_row(
                 "structure-check",
                 stop_plan.entries["structure-check"],
                 base=base_sha,
                 present=True,
-                row={"status": "failed", "exit": 1},
+                row=stop_base_report["checks"][0],
                 base_log=log_path,
+                comparison_reports=[stop_report, stop_base_report],
+                selected=stop_plan.candidates,
             )
             self.assertEqual(base_pre["class"], verify.CheckClass.PRE_EXISTING)
             stop_out = verify.finalize_classification(
@@ -514,6 +527,7 @@ class PureClassificationTableTests(unittest.TestCase):
             )
             self.assertTrue(stop_out["first"])
             self.assertTrue(stop_out["green"])
+            self.assertEqual(stop_out["raw_status"], "red")
 
             # 3. Reruns cap + dependency-blocked (#195) + --only (#147) outside_failed_tests on initial report.
             mixed_report: dict[str, Any] = {
@@ -633,13 +647,25 @@ class PureClassificationTableTests(unittest.TestCase):
             )
             self.assertEqual(reg_entry["class"], verify.CheckClass.REGRESSION)
 
+            c1_evidence: dict[str, Any] = {
+                "version": 1,
+                "comparable": True,
+                "context": "unit-v1",
+                "cases": [{"id": "t1.ts", "signature": "assert: boom"}],
+            }
+            c1_report: dict[str, Any] = {
+                "exit": 1,
+                "checks": [{"id": "c1", "status": "failed", "exit": 1, "failure_evidence": c1_evidence}],
+            }
             pre_entry = verify.evaluate_base_row(
                 "c1",
                 entry_fail,
                 base=base_sha,
                 present=True,
-                row={"status": "failed", "exit": 1},
+                row=c1_report["checks"][0],
                 base_log=log_path,
+                comparison_reports=[c1_report, c1_report, c1_report],
+                selected=["c1"],
             )
             self.assertEqual(pre_entry["class"], verify.CheckClass.PRE_EXISTING)
 
@@ -683,13 +709,19 @@ class DependencyBlockedClassificationTests(unittest.TestCase):
 
     BASE = "abcdef0123456789" * 2 + "abcdef01"
     LOAD: dict[str, Any] = {"first_run": [0.1, 0.2, 0.3], "alone": [0.2, 0.3, 0.4]}
-    REPORT: dict[str, Any] = {"checks": [
-        {"id": "unit", "status": "failed", "blocked_by": []},
+    REPORT: dict[str, Any] = {"exit": 1, "checks": [
+        {"id": "unit", "status": "failed", "blocked_by": [], "failure_evidence": {
+            "version": 1, "comparable": True, "context": "browser-v1",
+            "cases": [{"id": "unit-case", "signature": "assert: unit"}]}},
         {"id": "build", "status": "blocked", "blocked_by": ["unit"]},
         {"id": "storybook", "status": "blocked", "blocked_by": ["build"]},
         {"id": "baseline", "status": "skipped", "blocked_by": ["build"]},
-        {"id": "control", "status": "failed", "blocked_by": []},
-        {"id": "story", "status": "failed", "blocked_by": []},
+        {"id": "control", "status": "failed", "blocked_by": [], "failure_evidence": {
+            "version": 1, "comparable": True, "context": "browser-v1",
+            "cases": [{"id": "control-case", "signature": "assert: control"}]}},
+        {"id": "story", "status": "failed", "blocked_by": [], "failure_evidence": {
+            "version": 1, "comparable": True, "context": "browser-v1",
+            "cases": [{"id": "story-case", "signature": "assert: story"}]}},
     ]}
     CHILDREN = ("build", "storybook", "baseline")
 
@@ -705,13 +737,29 @@ class DependencyBlockedClassificationTests(unittest.TestCase):
         assert isinstance(cplan, verify.ClassificationPlan)
         entries = dict(cplan.entries)
         for check_id in cplan.active_rerun:
+            first_row = verify.report_row(self.REPORT, check_id)
+            alone_row: dict[str, Any] = {
+                "id": check_id,
+                "status": "failed",
+                "failure_evidence": first_row["failure_evidence"],
+            }
+            alone_report: dict[str, Any] = {"exit": 1, "checks": [alone_row]}
             alone, needs_base = verify.evaluate_alone_row(
-                check_id, {"status": "failed"}, first_row=verify.report_row(self.REPORT, check_id),
+                check_id, alone_row, first_row=first_row,
                 log="/nonexistent/alone.log", problem=None, load=self.LOAD)
             self.assertTrue(needs_base)
+            b_status = base_status[check_id]
+            base_row: dict[str, Any] = {
+                "id": check_id,
+                "status": b_status,
+                **({"failure_evidence": first_row["failure_evidence"]} if b_status == "failed" else {}),
+            }
+            base_report: dict[str, Any] = {"exit": 0 if b_status == "passed" else 1, "checks": [base_row]}
             entries[check_id] = verify.evaluate_base_row(
-                check_id, alone, base=self.BASE, present=True, row={"status": base_status[check_id]},
-                base_log="/nonexistent/base.log")
+                check_id, alone, base=self.BASE, present=True, row=base_row,
+                base_log="/nonexistent/base.log",
+                comparison_reports=[self.REPORT, alone_report, base_report],
+                selected=cplan.candidates)
         return cplan, verify.finalize_classification(self.BASE, cplan, entries, load=self.LOAD, runs=[])
 
     def test_only_executed_failures_take_the_rerun_slots(self) -> None:

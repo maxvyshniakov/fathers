@@ -7,7 +7,7 @@ log, parses the report and verified-tree stamp, records run history, and runs ga
 """
 from __future__ import annotations
 
-from collections.abc import Generator, Iterable
+from collections.abc import Generator, Iterable, Sequence
 import contextlib
 from dataclasses import dataclass
 from enum import StrEnum
@@ -269,12 +269,46 @@ def terminable() -> Generator[None]:
         signal.signal(signal.SIGTERM, previous)
 
 
+_VALID_ROW_STATUSES = (*PASSING, "failed", "blocked", "unrun", "void", "cancelled")
+
+
+def _string_list(value: Any) -> list[str] | None:
+    """Return a list of strings when `value` is None or list[str], else None on malformed types."""
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        return None
+    items: list[str] = []
+    for entry in cast(list[Any], value):
+        if not isinstance(entry, str):
+            return None
+        items.append(entry)
+    return items
+
+
+def _report_rows(report: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """Safely extract dict rows with non-empty string `id` from a possibly malformed report."""
+    if not isinstance(report, dict):
+        return []
+    raw_checks: Any = report.get("checks")
+    if not isinstance(raw_checks, list):
+        return []
+    rows: list[dict[str, Any]] = []
+    for item in cast(list[Any], raw_checks):
+        if isinstance(item, dict):
+            row = cast(dict[str, Any], item)
+            if isinstance(row.get("id"), str) and row["id"]:
+                rows.append(row)
+    return rows
+
+
 def is_dependency_blocked(row: dict[str, Any]) -> bool:
     """Whether a verify report row was skipped or blocked because a dependency failed (fathers#195)."""
     status = row.get("status")
     if status == "blocked":
         return True
-    return status == "skipped" and bool(row.get("blocked_by"))
+    blockers = _string_list(row.get("blocked_by"))
+    return status == "skipped" and bool(blockers)
 
 
 def is_executed_failure(row: dict[str, Any]) -> bool:
@@ -521,6 +555,9 @@ class Run:
         if self.lease is not None and self.argv != self.verify_argv and status == slots.TIMED_OUT and not reports:
             wait = f"{self.lease.wait:g} s" if self.lease.wait is not None else "its wait"
             raise LeaseTimedOut(f"no lease of {self.jobs} slot(s) within {wait} (slotfather status)")
+        if isinstance(report, dict):
+            # Transient process observation; preserve the verifier's on-disk report unchanged.
+            report = dict(report, _lanefather_process_exit=status)
         report_path = Path(reports[-1].strip()) if reports else None
         ids = list(self.selection.items) if self.selection.kind == "checks" else None
         granted_jobs = report_jobs(report)
@@ -530,13 +567,23 @@ class Run:
                                seconds=seconds, checks=ids, jobs=granted_jobs)
         failed_checks: list[str] = []
         blocked_by_id: dict[str, list[str]] = {}
-        if report:
-            failed_checks = [row["id"] for row in report.get("checks", []) if is_executed_failure(row)]
-            blocked_by_id = {row["id"]: list(row.get("blocked_by") or []) for row in report.get("checks", [])
-                             if is_dependency_blocked(row)}
-        env_info: dict[str, Any] = (report or {}).get("environment") or {}
-        environment: str | None = env_info.get("class")
-        stopped = (report or {}).get("stopped")
+        for row in _report_rows(report):
+            if is_executed_failure(row):
+                failed_checks.append(row["id"])
+            elif is_dependency_blocked(row):
+                blocked_by_id[row["id"]] = _string_list(row.get("blocked_by")) or []
+        raw_env: Any = report.get("environment") if isinstance(report, dict) else None
+        if isinstance(raw_env, dict):
+            env_class = cast(dict[str, Any], raw_env).get("class")
+            environment: str | None = env_class if isinstance(env_class, str) and env_class else None
+        elif isinstance(raw_env, str) and raw_env:
+            environment = raw_env
+        else:
+            environment = None
+        raw_stopped: Any = report.get("stopped") if isinstance(report, dict) else None
+        stopped: dict[str, Any] | None = (
+            cast(dict[str, Any], raw_stopped) if isinstance(raw_stopped, dict) else None
+        )
         triage = (
             plan.triage(self.root, report_path.parent, self.project)
             if status and report_path is not None
@@ -739,7 +786,7 @@ def suite_outcomes(
     failed = (list(suites) if environment
               else ([s for s in suites if failing[s]] or ([] if any(blocking.values()) else suites)) if status else [])
     blocked_suites = [s for s in suites if s not in failed and blocking[s]]
-    rows = {row.get("id"): row for row in (outcome.report or {}).get("checks", [])}
+    rows = {row["id"]: row for row in _report_rows(outcome.report)}
     # A run that stopped at its first checks (#639) did not start the others: a suite with one of them not run and
     # none red neither passed nor failed.
     stopped = outcome.stopped
@@ -774,8 +821,9 @@ def suite_outcomes(
             "log": str(outcome.log),
             **lease,
         }
-        if blocked and row.get("blocked_by"):
-            entry["blocked_by"] = list(row["blocked_by"])
+        blockers = _string_list(row.get("blocked_by"))
+        if blocked and blockers:
+            entry["blocked_by"] = blockers
         if isinstance(row.get("seconds"), (int, float)):
             entry["seconds"] = row["seconds"]
         return entry
@@ -1001,12 +1049,153 @@ def red_checks(results: Rows) -> list[str]:
     return found
 
 
-def rerun_problem(report: dict[str, Any] | None, log: Path | None) -> str | None:
+@dataclass(frozen=True)
+class ComparisonRun:
+    """One attempt passed to `comparison_problem`, with its phase label, log path, selected ids, and process exit."""
+    label: str
+    report: dict[str, Any] | None
+    log: Path | str | None = None
+    selected: Sequence[str] | None = None
+    process_exit: int | None = None
+
+
+def rerun_problem(
+    report: object,
+    log: Path | str | None,
+    *,
+    label: str = "the rerun",
+    require_exit: bool = False,
+    process_exit: int | None = None,
+) -> str | None:
     """Why a rerun says nothing about its checks, or None."""
+    suffix = f" ({log})" if log is not None else ""
     if report is None:
-        return f"the rerun wrote no verification report ({log})"
+        return f"{label} wrote no verification report{suffix}"
+    if not isinstance(report, dict):
+        return f"{label} wrote a malformed verification report{suffix}"
+    report = cast(dict[str, Any], report)
+    raw_rows = report.get("checks")
+    malformed = f"{label} wrote a malformed verification report{suffix}"
+    has_exit = "exit" in report and report.get("exit") is not None
+    if (require_exit and not has_exit) or (has_exit and type(report["exit"]) is not int):
+        return malformed
+    if not isinstance(raw_rows, list):
+        return malformed
+    rows: Rows = []
+    seen: set[str] = set()
+    for value in cast(list[Any], raw_rows):
+        if not isinstance(value, dict):
+            return malformed
+        row = cast(dict[str, Any], value)
+        check_id = row.get("id")
+        if (not isinstance(check_id, str) or not check_id or check_id in seen
+                or row.get("status") not in _VALID_ROW_STATUSES):
+            return malformed
+        if "blocked_by" in row and _string_list(row.get("blocked_by")) is None:
+            return malformed
+        seen.add(check_id)
+        rows.append(row)
+    observed_exit: Any = process_exit if process_exit is not None else report.get("_lanefather_process_exit")
+    if observed_exit is not None and (type(observed_exit) is not int or (has_exit and observed_exit != report["exit"])):
+        return f"{label} process exit differs from its report exit{suffix}"
     if report.get("environment"):
-        return f"the rerun failed on its environment: {report['environment'].get('class')} ({log})"
+        env_val: Any = report["environment"]
+        if isinstance(env_val, dict):
+            env_map = cast(dict[str, Any], env_val)
+            env_desc: Any = env_map.get("class") or env_map
+        else:
+            env_desc = env_val
+        return f"{label} failed on its environment: {env_desc}{suffix}"
+    if report.get("interrupted") or report.get("cleanup_error"):
+        return f"{label} was interrupted or its cleanup failed{suffix}"
+    effective_exit: Any = report["exit"] if has_exit else observed_exit
+    if effective_exit == 0 and any(row["status"] == "failed" for row in rows):
+        return f"{label} report contradicts its failed check status{suffix}"
+    if (
+        effective_exit
+        and not any(row["status"] == "failed" or is_dependency_blocked(row) for row in rows)
+        and (require_exit or not rows or any(row["status"] in PASSING for row in rows))
+    ):
+        return f"{label} failed outside any check{suffix}"
+    return None
+
+
+def failure_evidence(row: dict[str, Any]) -> dict[str, Any] | None:
+    """Verifier-owned v1 failure evidence, never inferred from a shared check name or arbitrary log text."""
+    evidence = row.get("failure_evidence")
+    if row.get("status") != "failed" or not isinstance(evidence, dict):
+        return None
+    evidence = cast(dict[str, Any], evidence)
+    if (set(evidence) != {"version", "comparable", "context", "cases"}
+            or type(evidence["version"]) is not int or evidence["version"] != 1
+            or evidence["comparable"] is not True
+            or not isinstance(evidence["context"], str) or not evidence["context"].strip()
+            or not isinstance(evidence["cases"], list) or not evidence["cases"]):
+        return None
+    cases: dict[str, str] = {}
+    for raw_case in cast(list[Any], evidence["cases"]):
+        if not isinstance(raw_case, dict):
+            return None
+        case = cast(dict[str, Any], raw_case)
+        if (set(case) != {"id", "signature"}
+                or not isinstance(case["id"], str) or not case["id"].strip()
+                or not isinstance(case["signature"], str) or not case["signature"].strip()
+                or case["id"] in cases):
+            return None
+        cases[case["id"]] = case["signature"]
+    return {"context": evidence["context"], "cases": cases}
+
+
+def comparison_problem(
+    reports: Sequence[ComparisonRun | dict[str, Any] | None],
+    check_id: str,
+    selected: Sequence[str] | None = None,
+) -> str | None:
+    """A failed base is usable only with valid, comparable failure evidence from every attempt where every
+    failing case on the candidate is also present (matching id + signature and context) on the base."""
+    if len(reports) < 2:
+        return "candidate and base evidence are both required"
+    default_selected = list(selected) if selected is not None else [check_id]
+    runs: list[ComparisonRun] = []
+    last_index = len(reports) - 1
+    for idx, item in enumerate(reports):
+        if isinstance(item, ComparisonRun):
+            runs.append(item)
+        else:
+            default_label = (
+                "the initial run" if idx == 0 else "the base rerun" if idx == last_index else "the alone rerun"
+            )
+            runs.append(ComparisonRun(default_label, item, selected=default_selected))
+    compared: list[dict[str, Any]] = []
+    for run in runs:
+        problem = rerun_problem(
+            run.report, run.log, label=run.label, require_exit=True, process_exit=run.process_exit,
+        )
+        if problem:
+            return problem
+        assert run.report is not None
+        run_selected = set(run.selected if run.selected is not None else default_selected)
+        suffix = f" ({run.log})" if run.log is not None else ""
+        if any(row["id"] not in run_selected and is_executed_failure(row) for row in run.report["checks"]):
+            return f"{run.label} failed outside the selected check{suffix}"
+        evidence = failure_evidence(report_row(run.report, check_id))
+        if evidence is None:
+            return f"{run.label} has missing or invalid comparable failure_evidence (v1){suffix}"
+        compared.append(evidence)
+    first_ev = compared[0]
+    base_ev = compared[-1]
+    candidate_reruns = compared[1:-1]
+    if any(ev["context"] != first_ev["context"] for ev in compared[1:]):
+        return "the runtime/input context differs across candidate and base runs"
+    if any(ev["cases"] != first_ev["cases"] for ev in candidate_reruns):
+        return "the alone rerun failing cases/signatures differ from the initial run"
+    base_cases: dict[str, str] = base_ev["cases"]
+    unmatched = [cid for cid, sig in first_ev["cases"].items() if base_cases.get(cid) != sig]
+    if unmatched:
+        return (
+            "the candidate failing cases/signatures differ from the base "
+            f"(not matched on base: {', '.join(unmatched)})"
+        )
     return None
 
 
@@ -1016,7 +1205,15 @@ def not_run(row: dict[str, Any]) -> str:
 
 
 def report_row(report: dict[str, Any] | None, check_id: str) -> dict[str, Any]:
-    return next((r for r in (report or {}).get("checks", []) if r.get("id") == check_id), {"status": "not_run"})
+    rows = report.get("checks") if isinstance(report, dict) else None
+    if not isinstance(rows, list):
+        return {"status": "not_run"}
+    for value in cast(list[Any], rows):
+        if isinstance(value, dict):
+            row = cast(dict[str, Any], value)
+            if row.get("id") == check_id:
+                return row
+    return {"status": "not_run"}
 
 
 def failed_prerequisites(check_id: str, blocked: dict[str, list[str]]) -> list[str]:
@@ -1162,12 +1359,43 @@ def plan_classification(
     stopped_first = bool((report or {}).get("stopped"))
     environment = next((r["environment"] for r in failed if r.get("environment")), None)
     if environment:
-        return {"skipped": f"environment: {environment}: the run's results do not count, so nothing reran",
+        return {"raw_status": "red",
+                "skipped": f"environment: {environment}: the run's results do not count, so nothing reran",
                 "checks": [], "green": False}
+    if isinstance(report, dict):
+        if report.get("interrupted") or report.get("cleanup_error"):
+            return {
+                "raw_status": "red",
+                "skipped": (
+                    "the initial run was interrupted or its cleanup failed: "
+                    "the run's results do not count, so nothing reran"
+                ),
+                "checks": [],
+                "green": False,
+            }
+        raw_report_exit: Any = report.get("exit")
+        raw_proc_exit: Any = report.get("_lanefather_process_exit")
+        if raw_proc_exit is None and fresh and "exit" in fresh[0]:
+            raw_proc_exit = fresh[0].get("exit")
+        if (
+            (raw_report_exit is not None and type(raw_report_exit) is not int)
+            or (raw_proc_exit is not None and type(raw_proc_exit) is not int)
+            or (type(raw_report_exit) is int and type(raw_proc_exit) is int and raw_proc_exit != raw_report_exit)
+        ):
+            return {
+                "raw_status": "red",
+                "skipped": (
+                    "the initial run process exit differs from its report exit: "
+                    "the run's results do not count, so nothing reran"
+                ),
+                "checks": [],
+                "green": False,
+            }
     candidates = red_checks(failed)
-    blocked_rows = {row["id"]: list(row.get("blocked_by") or []) for row in (report or {}).get("checks", [])
+    safe_rows = _report_rows(report)
+    blocked_rows = {row["id"]: _string_list(row.get("blocked_by")) or [] for row in safe_rows
                     if is_dependency_blocked(row)}
-    unaccounted = sorted({row["id"] for row in (report or {}).get("checks", []) if is_executed_failure(row)}
+    unaccounted = sorted({row["id"] for row in safe_rows if is_executed_failure(row)}
                          - set(candidates)) + [r["suite"] for r in failed if not r.get("failed_checks")]
     effective_budget = cap if budget is None else max(0, budget)
     rerun = candidates[:effective_budget]
@@ -1307,6 +1535,8 @@ def evaluate_base_row(
     kept_dir: Path | None = None,
     problem: str | None = None,
     check_tests: list[str] | None = None,
+    comparison_reports: Sequence[ComparisonRun | dict[str, Any] | None] | None = None,
+    selected: Sequence[str] | None = None,
 ) -> dict[str, Any]:
     """Pure transition for one check's `base` rerun row: returns the completed classification entry."""
     entry = dict(prior_entry)
@@ -1339,7 +1569,34 @@ def evaluate_base_row(
     elif actual_row["status"] == "passed":
         entry.update({"class": str(CheckClass.REGRESSION), "base": evidence})
     elif actual_row["status"] == "failed":
-        entry.update({"class": str(CheckClass.PRE_EXISTING), "base": evidence})
+        comparison = (
+            comparison_problem(comparison_reports, check_id, selected if selected is not None else [check_id])
+            if comparison_reports is not None
+            else "candidate and base evidence are both required"
+        )
+        if comparison:
+            entry.update({"class": str(CheckClass.UNCLASSIFIED), "base": evidence, "reason": comparison})
+        else:
+            assert comparison_reports is not None
+            first_item = comparison_reports[0]
+            first_report = first_item.report if isinstance(first_item, ComparisonRun) else first_item
+            matched_evidence = failure_evidence(report_row(first_report, check_id))
+            comparison_payload: dict[str, Any] = {
+                "version": 1,
+                **(
+                    {
+                        "context": matched_evidence["context"],
+                        "cases": [{"id": cid, "signature": sig} for cid, sig in matched_evidence["cases"].items()],
+                    }
+                    if matched_evidence
+                    else {}
+                ),
+            }
+            entry.update({
+                "class": str(CheckClass.PRE_EXISTING),
+                "base": evidence,
+                "failure_comparison": comparison_payload,
+            })
     else:
         entry.update({
             "class": str(CheckClass.UNCLASSIFIED),
@@ -1378,6 +1635,7 @@ def finalize_classification(
     green = bool(checks) and not cplan.unaccounted and all(e["class"] in LANDABLE for e in checks)
     return {
         "base": base,
+        "raw_status": "red",
         "checks": checks,
         "load": load,
         "unaccounted": cplan.unaccounted,
@@ -1409,6 +1667,10 @@ def classify_failures(
         return planned
     entries = dict(planned.entries)
     still_red = list(planned.still_red)
+    initial_log = next((r.get("log") for r in fresh if r.get("log")), None)
+    candidate_runs: list[ComparisonRun] = [
+        ComparisonRun("the initial run", report, log=initial_log, selected=planned.candidates),
+    ]
     load: dict[str, Any] = {"first_run": host.load_averages(store.project)}
     runs: list[dict[str, Any]] = []
     if planned.active_rerun and not planned.first:
@@ -1418,6 +1680,9 @@ def classify_failures(
             store, worktree, planned.active_rerun, f"lane-{record['id']}-alone", alone_jobs,
             meta=lane_meta(store, record), ticket=lane_ticket(record), toolchain=toolchain,
             only=planned.alone_tests,
+        )
+        candidate_runs.append(
+            ComparisonRun("the alone rerun", alone_report, log=log, selected=planned.active_rerun),
         )
         runs.append({"run": alone_run_id, "rerun": "alone",
                      **({"tests": planned.alone_tests} if planned.alone_tests else {})})
@@ -1458,6 +1723,7 @@ def classify_failures(
                 runs.append({"run": base_run_id, "rerun": "base",
                              **({"tests": base_tests} if base_tests else {})})
                 kept = keep_run(store, base_dir, base_label)
+        base_run = ComparisonRun("the base rerun", base_report, log=base_log, selected=present)
         for check_id in still_red:
             is_present = check_id in present
             row = report_row(base_report, check_id) if is_present else None
@@ -1465,6 +1731,7 @@ def classify_failures(
             entries[check_id] = evaluate_base_row(
                 check_id, entries[check_id], base=base, present=is_present, row=row, base_log=base_log,
                 kept_dir=kept, problem=base_problem, check_tests=check_tests,
+                comparison_reports=[*candidate_runs, base_run], selected=planned.candidates,
             )
     return finalize_classification(base, planned, entries, load=load, runs=runs)
 
@@ -1486,7 +1753,7 @@ def classification_lines(classification: dict[str, Any]) -> list[str]:
             detail = ("the base defines no such check" if entry["base"]["status"] == "absent"
                       else f"fails on the lane{again}, the base {base} passes it")
         elif kind == CheckClass.PRE_EXISTING:
-            detail = f"the base {base} fails it too ({entry['base']['log']})"
+            detail = f"the base {base} fails it too, with equivalent failure evidence ({entry['base']['log']})"
         elif kind == CheckClass.FLAKY_UNDER_LOAD:
             detail = (f"passes rerun by itself; load averages {'/'.join(map(str, entry['load']['first_run']))} "
                       f"after the lane run, {'/'.join(map(str, entry['load']['alone']))} after its rerun")
@@ -1505,8 +1772,8 @@ def classification_lines(classification: dict[str, Any]) -> list[str]:
                      f"{' behind ' + ', '.join(behind) if behind else ''}; they used no rerun and count as "
                      "neither passed nor regressed")
     if classification["green"]:
-        lines.append("lane: every red check is flaky-under-load or pre-existing: the receipt is green; a flake "
-                     "ticket cites these lines")
+        lines.append("lane: raw verification RED; every red check is flaky-under-load or pre-existing: "
+                     "the classified receipt is green; a flake ticket cites these lines")
     return lines
 
 
@@ -1579,7 +1846,9 @@ def joined_classification(
     first_unaccounted: list[str] = list(first_cls.get("unaccounted", []))
     if second_cls is not None and second_cls.get("skipped"):
         runs = first_runs + list(second_cls.get("runs", []))
-        return dict(first_cls, checks=first_checks, skipped=second_cls["skipped"], runs=runs, green=False)
+        return dict(
+            first_cls, raw_status="red", checks=first_checks, skipped=second_cls["skipped"], runs=runs, green=False,
+        )
     kept: list[dict[str, Any]] = [
         e for e in first_checks
         if not (e.get("class") == CheckClass.DEPENDENCY_BLOCKED and e.get("check") in resolved_set)
@@ -1627,6 +1896,7 @@ def joined_classification(
     base_dict = first_cls if second_cls is None else second_cls
     return dict(
         base_dict,
+        raw_status="red",
         checks=combined_checks,
         unaccounted=unaccounted,
         runs=runs,
