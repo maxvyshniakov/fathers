@@ -21,7 +21,7 @@ protected=()
 common=""
 while read -r old new ref; do
   case "$ref" in
-    refs/heads/main | refs/heads/dev)
+    refs/heads/[Mm][Aa][Ii][Nn] | refs/heads/[Dd][Ee][Vv])
       if [[ "$new" =~ ^0+$ ]]; then
         # pack-refs prunes a loose ref after packing it: old is non-zero, packed-refs is
         # unlocked and already records the exact same OID, and the loose file still holds old.
@@ -49,15 +49,15 @@ while read -r old new ref; do
       fi
       ;;
     ORIG_HEAD)
-      [[ "$old" == "$new" && ! "$new" =~ ^0+$ ]] && continue
+      [[ "$old" == "$new" || "$new" =~ ^0+$ ]] && continue
       orig_head=1
       ;;
   esac
 done
 if [[ -n "${orig_head:-}" ]]; then
   case "$(git symbolic-ref -q HEAD 2>/dev/null)" in
-    refs/heads/main) protected+=("ORIG_HEAD (a merge, pull or reset of main)") ;;
-    refs/heads/dev) protected+=("ORIG_HEAD (a merge, pull or reset of dev)") ;;
+    refs/heads/[Mm][Aa][Ii][Nn]) protected+=("ORIG_HEAD (a merge, pull or reset of main)") ;;
+    refs/heads/[Dd][Ee][Vv]) protected+=("ORIG_HEAD (a merge, pull or reset of dev)") ;;
   esac
 fi
 [[ ${#protected[@]} -gt 0 ]] || exit 0
