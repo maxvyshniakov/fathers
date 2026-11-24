@@ -1145,7 +1145,11 @@ def _review_prompt(cfg: Config, request: Request, diff: str | None) -> str:
 def _parse_findings(text: str) -> list[dict[str, Any]]:
     """The findings of the last json block that has them. An answer without one is a single finding to read, so
     an unreadable review never passes as clean."""
-    for block in reversed(re.findall(r"```json[ \t]*\n(.*?)```", text, re.S)):
+    blocks = list(reversed(re.findall(r"```json[ \t]*\n(.*?)```", text, re.S)))
+    stripped = text.strip()
+    if not blocks and stripped.startswith("{") and stripped.endswith("}"):
+        blocks = [stripped]
+    for block in blocks:
         try:
             data: Any = json.loads(block)
         except ValueError:
@@ -1161,19 +1165,28 @@ def _parse_findings(text: str) -> list[dict[str, Any]]:
                 category = str(entry.get("category") or "").strip().lower()
                 package = entry.get("package") if category == "package-misuse" else None
                 line = entry.get("line")
-                found.append({"n": len(found) + 1, "severity": severity if severity in SEVERITIES else "P2",
+                found.append({"n": len(found) + 1, "severity": severity if severity in ("P0", *SEVERITIES) else "P2",
                               "category": category if category in CATEGORIES else None,
                               # An npm name is at most 214 characters.
                               "package": (package.strip()[:214] if isinstance(package, str) and package.strip()
                                           else None),
                               "file": entry.get("file") if isinstance(entry.get("file"), str) else None,
-                              "line": line if isinstance(line, int) else None,
+                              "line": line if isinstance(line, int) and not isinstance(line, bool) else None,
                               "title": str(entry.get("title") or "").strip()[:300],
                               "detail": str(entry.get("detail") or "").strip()[:4000], "mark": None})
             return found
     if re.search(r"\bno findings\b", text, re.I) and len(text) < 400:
         return []
     return _unreadable_answer(text)
+
+
+parse_findings = _parse_findings
+
+
+def resolve_reviewer(spec: str, project: Config) -> Model | None:
+    """Resolve a reviewer alias or model spec against the project's models table."""
+    models, choices = _models(project)
+    return _resolve_reviewer(spec, models, choices)
 
 
 

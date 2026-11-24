@@ -64,6 +64,24 @@ class Tickets:
 
 
 @dataclass(frozen=True)
+class ReviewClasses:
+    """`[review.classes]` (fathers#252): risk-class path globs, size bounds and post-hoc audit sampling."""
+    none: tuple[str, ...] = ()
+    evidence: tuple[str, ...] = ()
+    full: tuple[str, ...] = ()
+    double: tuple[str, ...] = ()
+    max_lines: int | None = None
+    max_files: int | None = None
+    audit_every: int = 5
+
+    def has_rules(self) -> bool:
+        return bool(
+            self.none or self.evidence or self.full or self.double
+            or self.max_lines is not None or self.max_files is not None
+        )
+
+
+@dataclass(frozen=True)
 class Config:
     path: Path | None = None
     project: str = "this project"
@@ -107,6 +125,7 @@ class Config:
     # holds the gate.
     review_panel: tuple[str, ...] = ()
     review_panel_required: bool = False
+    review_classes: ReviewClasses = ReviewClasses()
     # [done] auto (fathers#157): a lane that becomes finished runs done by itself, and start below the disk floor
     # runs done on the machine's finished lanes; false leaves both to `done`.
     done_auto: bool = True
@@ -281,7 +300,7 @@ TABLE_KEYS = {
     "gc": ("after_remove", "after_remove_report", "dirs", "branches", "collect_uncommitted_sessions", "disposable"),
     "tickets": ("integrated_label", "land_comment", "fixes_trailer", "release_comment", "preview", "repo"),
     "slots": ("priority",),
-    "review": ("blocks", "panel", "panel_required"),
+    "review": ("blocks", "panel", "panel_required", "classes"),
     "done": ("auto", "stop_inside"),
 }
 
@@ -317,6 +336,39 @@ def _panel(table: dict[str, Any]) -> tuple[str, ...]:
         raise LaneError(f"{CONFIG_NAME}: [review] panel takes two reviewers or more; one is the single reviewer, "
                         "which the models file chooses")
     return found
+
+
+def _review_classes(review_table: dict[str, Any]) -> ReviewClasses:
+    """`[review.classes]` (fathers#252): globs for none/evidence/full/double, size bounds, and audit_every."""
+    raw = review_table.get("classes")
+    if raw is None:
+        return ReviewClasses()
+    if not isinstance(raw, dict):
+        raise LaneError(f"{CONFIG_NAME}: [review.classes] must be a table")
+    table = cast(dict[str, Any], raw)
+    _known(table, "review.classes", ("none", "evidence", "full", "double", "max_lines", "max_files", "audit_every"))
+    none_globs = _patterns(table, "none", (), "review.classes")
+    evidence_globs = _patterns(table, "evidence", (), "review.classes")
+    full_globs = _patterns(table, "full", (), "review.classes")
+    double_globs = _patterns(table, "double", (), "review.classes")
+    max_lines = table.get("max_lines")
+    if max_lines is not None and (type(max_lines) is not int or max_lines < 1):
+        raise LaneError(f"{CONFIG_NAME}: [review.classes] max_lines must be a positive integer")
+    max_files = table.get("max_files")
+    if max_files is not None and (type(max_files) is not int or max_files < 1):
+        raise LaneError(f"{CONFIG_NAME}: [review.classes] max_files must be a positive integer")
+    audit_every = table.get("audit_every", 5)
+    if type(audit_every) is not int or audit_every < 0:
+        raise LaneError(f"{CONFIG_NAME}: [review.classes] audit_every must be a non-negative integer")
+    return ReviewClasses(
+        none=none_globs,
+        evidence=evidence_globs,
+        full=full_globs,
+        double=double_globs,
+        max_lines=max_lines,
+        max_files=max_files,
+        audit_every=audit_every,
+    )
 
 
 def _patterns(table: dict[str, Any], key: str, default: tuple[str, ...], section: str = "gc") -> tuple[str, ...]:
@@ -440,6 +492,7 @@ def parse(data: dict[str, Any], path: Path | None = None) -> Config:
         review_blocks=_severities(review),
         review_panel=_panel(review),
         review_panel_required=panel_required,
+        review_classes=_review_classes(review),
         done_auto=done_auto,
         done_stop_inside=done_stop_inside,
         slot_priority=_slot_priority(slot_table),

@@ -14,7 +14,7 @@ runs several reviewers at once, their findings numbered in one list for marks an
 """
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator, Sequence
 import os
 from pathlib import Path
 import posixpath
@@ -33,6 +33,7 @@ from . import (
     lifecycle,
     postmerge,
     receipts,
+    review_class,
     review_record,
     reviewer,
     scope,
@@ -136,6 +137,19 @@ def review_exemption(record: Record, store: state.Store | None = None) -> str | 
         )
     raw_landed: Any = record.get("landed")
     landed_info = cast(dict[str, Any], raw_landed) if isinstance(raw_landed, dict) else {}
+    raw_cls = landed_info.get("review_class")
+    eff_cls = raw_cls if isinstance(raw_cls, str) and raw_cls in review_class.CLASS_RANK else None
+    raw_why = landed_info.get("review_class_reason")
+    eff_why = raw_why.strip() if isinstance(raw_why, str) and raw_why.strip() else ""
+    if eff_cls == "none":
+        declared = review_class.declared_class(record)
+        has_rules = store is not None and store.project.review_classes.has_rules()
+        if landed_info.get("docs_only") and declared is None and not has_rules:
+            return "documentation only: it changes only *.md and docs/** outside the steering files"
+        return f"review class none: {eff_why}" if eff_why else "review class none"
+    if eff_cls == "evidence":
+        detail = eff_why or review_class.evidence_summary(record)
+        return f"review class evidence: {detail}"
     if landed_info.get("docs_only"):
         return "documentation only: it changes only *.md and docs/** outside the steering files"
     return None
@@ -546,11 +560,20 @@ def start_lane_review(store: state.Store, record: Record, *, force_fresh: bool =
         return f"review kept: {rev.summary()[1]}"
     exempt = review_exemption(record, store)
     if exempt:
+        raw_landed: Any = record.get("landed")
+        landed_info = cast(dict[str, Any], raw_landed) if isinstance(raw_landed, dict) else {}
+        eff_cls = landed_info.get("review_class")
+        eff_why = landed_info.get("review_class_reason")
+        extra_fields: dict[str, Any] = {}
+        if isinstance(eff_cls, str) and eff_cls in review_class.CLASS_RANK:
+            extra_fields["review_class"] = eff_cls
+        if isinstance(eff_why, str) and eff_why:
+            extra_fields["review_reason"] = eff_why
         review_record.ReviewRecord.exempt(
             store,
             lane_id,
             exempt,
-            fields=_lane_review_fields(record),
+            fields=_lane_review_fields(record, **extra_fields),
         )
         journal.ledger(
             f"review {lane_id} exempt: {exempt}",
@@ -571,6 +594,316 @@ def start_lane_review(store: state.Store, record: Record, *, force_fresh: bool =
     )
     started_raw = started.raw or {}
     return f"review started in the background (pid {started_raw.get('pid')}, log {started_raw.get('log')})"
+
+
+def _audit_review_override(store: state.Store, record: Record | None, force_reason: str | None) -> None:
+    journal.override("review", record, force_reason, ["reviewed again"], audited=False, store=store)
+
+
+def _effective_lane_review_class(record: Record) -> str | None:
+    raw_landed: Any = record.get("landed")
+    if isinstance(raw_landed, dict):
+        cls = cast(dict[str, Any], raw_landed).get("review_class")
+        if isinstance(cls, str) and cls in review_class.CLASS_RANK:
+            return cls
+    return review_class.declared_class(record)
+
+
+def _read_external_report(
+    report_path: str, alias: str, project: config.Config
+) -> tuple[str, list[dict[str, Any]], dict[str, Any]]:
+    path = Path(report_path)
+    if not path.is_file():
+        raise LaneError(f"--record {report_path}: file does not exist")
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as error:
+        raise LaneError(f"--record {report_path}: could not read file ({error})") from None
+    findings = reviewer.parse_findings(text)
+    resolved = reviewer.resolve_reviewer(alias, project)
+    if resolved is not None:
+        meta: dict[str, Any] = {
+            "reviewer": resolved.alias,
+            "model": resolved.id,
+            "effort": resolved.effort,
+            "provider": resolved.provider,
+            "cli": resolved.cli,
+            "options": resolved.options,
+        }
+    else:
+        cleaned = alias.strip()
+        meta = {
+            "reviewer": cleaned,
+            "model": cleaned,
+            "effort": "external",
+            "provider": None,
+            "cli": "external",
+            "options": None,
+        }
+    return text, findings, meta
+
+
+def _parse_lanes_option(raw: Any) -> list[str]:
+    if not isinstance(raw, list):
+        return []
+    return list(dict.fromkeys(
+        name
+        for value in cast(list[Any], raw)
+        if isinstance(value, str)
+        for name in value.replace(",", " ").split()
+        if name
+    ))
+
+
+def _record_external_review(
+    store: state.Store,
+    label: str,
+    fields: dict[str, Any],
+    *,
+    base: str,
+    tip: str,
+    tree: str,
+    report_path: str,
+    alias: str,
+    force: bool = False,
+) -> review_record.ReviewRecord:
+    text, findings, meta = _read_external_report(report_path, alias, store.project)
+    reviews = store.reviews_dir
+    reviews.mkdir(parents=True, exist_ok=True)
+    output = reviews / f"{label}.md"
+    output.write_text(text, encoding="utf-8")
+    finished_at = journal.now()
+    payload: dict[str, Any] = {
+        **fields,
+        **meta,
+        "base": base,
+        "tip": tip,
+        "tree": tree,
+        "output": str(output),
+        "source_file": str(Path(report_path).resolve()),
+        "findings": findings,
+        "seconds": 0.0,
+        "fallback": None,
+        "finished": finished_at,
+    }
+    completed = review_record.ReviewRecord.record_external(
+        store, label, payload, force=force, finished=finished_at,
+    )
+    raw = completed.raw or {}
+    counts = " ".join(f"{s.lower()}={sum(1 for f in findings if f['severity'] == s)}" for s in SEVERITIES)
+    journal.ledger(
+        f"review {label} finished reviewer={raw.get('reviewer', '-')} "
+        f"model={raw.get('model', '-')} effort={raw.get('effort', '-')} "
+        f"left=- seconds=0 findings={len(findings)} {counts} (recorded)",
+        kind="review.finished",
+        level="info",
+        **review_about(label, fields),
+        details={
+            "status": "finished",
+            "recorded": True,
+            "source_file": payload["source_file"],
+            "reviewer": raw.get("reviewer"),
+            "provider": raw.get("provider"),
+            "cli": raw.get("cli"),
+            "model": raw.get("model"),
+            "effort": raw.get("effort"),
+            "options": raw.get("options"),
+            "seconds": 0.0,
+            "findings": len(findings),
+            "severities": {s.lower(): sum(1 for f in findings if f["severity"] == s) for s in SEVERITIES},
+            "fallback": None,
+            "error": None,
+        },
+        store=store,
+    )
+    return completed
+
+
+def _report_audit_findings(
+    store: state.Store,
+    record: Record,
+    completed: review_record.ReviewRecord,
+    cls: str,
+    reason: str,
+) -> list[dict[str, Any]]:
+    severe = [f for f in completed.findings if f.get("severity") in review_class.AUDIT_SEVERITIES]
+    if not severe:
+        return []
+    lane_id = str(record["id"])
+    for finding in severe:
+        print(
+            f"Audit alert: lane {lane_id} (allowed through by review class {cls!r}: {reason}) "
+            f"has {finding['severity']} finding #{finding['n']}: {finding.get('title', '')}",
+            file=sys.stderr,
+        )
+    journal.ledger(
+        f"audit-alert {lane_id} class={cls} findings={len(severe)}",
+        kind="review.audit_alert",
+        level="warn",
+        lane=record,
+        details={
+            "lane": lane_id,
+            "review_class": cls,
+            "review_reason": reason,
+            "findings": [
+                {"n": f.get("n"), "severity": f.get("severity"), "title": f.get("title")}
+                for f in severe
+            ],
+        },
+        store=store,
+    )
+    return severe
+
+
+def audit_lane(args: Any, store: state.Store) -> int:
+    """Non-blocking post-hoc audit review of a `none` or `evidence` lane (fathers#252)."""
+    record = store.load(args.id)
+    if lifecycle.planned(record):
+        raise LaneError(f"audit refused: lane {args.id} is planned; it has not landed")
+    label = review_class.audit_label(args.id)
+    existing = review_record.ReviewRecord.load(store, label, record=record)
+    verdict = existing.verdict
+    elsewhere = isinstance(verdict, review_record.Running) and verdict.pid != os.getpid()
+    already_finished = isinstance(verdict, (review_record.Unmarked, review_record.Complete))
+    if (already_finished or elsewhere) and not args.force_reason:
+        print("\n".join(review_lines(existing, record=record, prog=store.prog)))
+        return 0
+    raw_landed: Any = record.get("landed")
+    landed_info = cast(dict[str, Any], raw_landed) if isinstance(raw_landed, dict) else {}
+    raw_cls = landed_info.get("review_class")
+    cls = raw_cls if isinstance(raw_cls, str) and raw_cls in review_class.CLASS_RANK else (
+        review_class.declared_class(record) or "none"
+    )
+    raw_why = landed_info.get("review_class_reason")
+    reason = raw_why if isinstance(raw_why, str) and raw_why else (
+        review_class.evidence_summary(record) if cls == "evidence" else "no review required"
+    )
+    tip, base = review_range(record)
+    main = main_checkout(record["common_dir"])
+    fields: dict[str, Any] = {
+        "kind": "audit",
+        "lane": args.id,
+        "ticket": record["ticket"],
+        "review_class": cls,
+        "review_reason": reason,
+        **({"lane_created": state.lane_created_of(record)} if state.lane_created_of(record) else {}),
+    }
+    record_file = getattr(args, "record", None)
+    if record_file:
+        alias = getattr(args, "reviewer", None)
+        if not alias:
+            raise LaneError("--record requires --reviewer <alias>")
+        tree = git(main, "rev-parse", tip + "^{tree}")
+        completed = _record_external_review(
+            store, label, fields, base=base, tip=tip, tree=tree,
+            report_path=record_file, alias=alias, force=bool(args.force_reason),
+        )
+    else:
+        resolved = scope.resolve(record, base, store.project)
+        completed = perform_review(
+            store, label, fields, main, base, tip, scope.prompt_text(resolved),
+            family=implementer_family(store, args.id),
+            reviewers=asked_reviewers(args, store.project),
+            force=bool(args.force_reason),
+        )
+    print("\n".join(review_lines(completed, record=record, prog=store.prog)))
+    if completed.has_finished_receipt:
+        _report_audit_findings(store, record, completed, cls, reason)
+        return 0
+    return 1
+
+
+def start_audit_reviews(store: state.Store, cwd: str, exempt_lanes: Sequence[dict[str, Any]]) -> list[str]:
+    """Deterministically pick 1-in-N `none`/`evidence` lanes for non-blocking post-hoc audit at promote."""
+    every = store.project.review_classes.audit_every
+    if every <= 0 or not exempt_lanes:
+        return []
+    messages: list[str] = []
+    for entry in exempt_lanes:
+        lane_id = str(entry.get("lane") or "")
+        merge_sha = str(entry.get("merge") or "")
+        cls = str(entry.get("review_class") or "none")
+        reason = str(entry.get("reason") or "")
+        if not lane_id or not merge_sha or not review_class.should_audit(lane_id, merge_sha, every):
+            continue
+        record = state.read_json(store.record_path(lane_id))
+        if record is None:
+            continue
+        label = review_class.audit_label(lane_id)
+        existing = review_record.ReviewRecord.load(store, label, record=record)
+        if isinstance(
+            existing.verdict,
+            (review_record.Running, review_record.Unmarked, review_record.Complete, review_record.PartialPanel),
+        ):
+            continue
+        if review_start_manual(store.project):
+            messages.append(
+                f"audit sample (1 in {every}): lane {lane_id} (class={cls}) not started "
+                f"({review_start_source(store.project)}): run {store.prog} review {lane_id} --audit"
+            )
+            continue
+        fields: dict[str, Any] = {
+            "kind": "audit",
+            "lane": lane_id,
+            "ticket": record["ticket"],
+            "review_class": cls,
+            "review_reason": reason,
+            **({"lane_created": state.lane_created_of(record)} if state.lane_created_of(record) else {}),
+        }
+        started = spawn_review(store, label, fields, [lane_id, "--audit"], cwd)
+        started_raw = started.raw or {}
+        messages.append(
+            f"audit sample (1 in {every}): lane {lane_id} (class={cls}) review started in background "
+            f"(pid {started_raw.get('pid')}, log {started_raw.get('log')})"
+        )
+    return messages
+
+
+def record_lane_review(args: Any, store: state.Store) -> int:
+    """`lanefather review <id> --record <report file> --reviewer <alias>` (fathers#252)."""
+    alias = getattr(args, "reviewer", None)
+    if not alias:
+        raise LaneError("--record requires --reviewer <alias>")
+    record = store.load(args.id)
+    if lifecycle.planned(record):
+        raise LaneError(f"review refused: lane {args.id} is planned; create its worktree and commit changes first")
+    existing = review_record.ReviewRecord.load(store, args.id, record=record)
+    verdict = existing.verdict
+    elsewhere = isinstance(verdict, review_record.Running) and verdict.pid != os.getpid()
+    already_finished = isinstance(verdict, (review_record.Unmarked, review_record.Complete))
+    incomplete_panel = isinstance(verdict, review_record.PartialPanel)
+    has_existing = already_finished or incomplete_panel or isinstance(verdict, review_record.Exempt) or elsewhere
+    if has_existing and not args.force_reason:
+        print("\n".join(review_lines(existing, record=record, prog=store.prog)))
+        if already_finished:
+            print(f"Lane {args.id} is already reviewed: one review per lane (--force-reason reviews again, logged)")
+        return 1 if incomplete_panel else 0
+    is_pre_land = lifecycle.active(record)
+    main = main_checkout(record["common_dir"])
+    tip, base = review_range(record)
+    if is_pre_land and tip == base:
+        raise LaneError(f"review refused: lane {args.id} has no commits beyond {record['base']}")
+    if already_finished or incomplete_panel:
+        _audit_review_override(store, record, args.force_reason)
+    tree = git(main, "rev-parse", tip + "^{tree}")
+    fields = _lane_review_fields(record, **({"pre_land": True} if is_pre_land else {}))
+    completed = _record_external_review(
+        store,
+        args.id,
+        fields,
+        base=base,
+        tip=tip,
+        tree=tree,
+        report_path=args.record,
+        alias=alias,
+        force=bool(args.force_reason),
+    )
+    if record.get("pre_land_fix"):
+        record = store.update(args.id, lambda latest: latest.pop("pre_land_fix", None) is not None)
+    print("\n".join(review_lines(completed, record=record, prog=store.prog)))
+    if completed.allows_promote:
+        done.settle_lane(store, args.id, mode=postmerge.CompletionMode.AUTO_AFTER_REVIEW)
+    return 0
 
 
 def review_lane(args: Any, store: state.Store) -> int:
@@ -613,7 +946,10 @@ def review_lane(args: Any, store: state.Store) -> int:
     if is_pre_land and tip == base:
         raise LaneError(f"review refused: lane {args.id} has no commits beyond {record['base']}")
     if already_finished or incomplete_panel:
-        journal.override("review", record, args.force_reason, ["reviewed again"], audited=False, store=store)
+        _audit_review_override(store, record, args.force_reason)
+    chosen_reviewers = asked_reviewers(args, store.project)
+    if not chosen_reviewers and _effective_lane_review_class(record) == "double":
+        chosen_reviewers = store.project.review_panel or ("sol", "opus")
     # The accepted scope as the reviewer reads it, once for every panel member; the receipt keeps what was read.
     resolved = scope.resolve(record, base, store.project)
     completed = perform_review(
@@ -630,7 +966,7 @@ def review_lane(args: Any, store: state.Store) -> int:
         tip,
         scope.prompt_text(resolved),
         family=implementer_family(store, args.id),
-        reviewers=asked_reviewers(args, store.project),
+        reviewers=chosen_reviewers,
         force=bool(args.force_reason),
     )
     if record.get("pre_land_fix"):
@@ -990,12 +1326,53 @@ def overall_review(args: Any, store: state.Store) -> int:
     common = common_dir(cwd)
     sha = git(cwd, "rev-parse", "--verify", args.overall + "^{commit}")
     label = ship_review_label(sha)
+    if args.mark:
+        result = review_record.ReviewRecord.mark_label(store, label, common, args.mark)
+        for app in result.applied:
+            journal.ledger(
+                f"review-mark {label} {app.finding_n} "
+                + (f"fixed:{(app.merge or '')[:10]}" if app.kind == "fixed" else f"rejected: {app.reason}"),
+                kind="finding.marked",
+                subject={"type": "review", "id": label},
+                details={"finding": app.finding_n, "mark": app.kind, "merge": app.merge, "reason": app.reason},
+                store=store,
+            )
+        print("\n".join(review_lines(result.review, prog=prog)))
+        complete, words = result.review.summary()
+        if complete:
+            journal.ledger(
+                f"review-marked {label} fixed={result.fixed_count} rejected={result.rejected_count}",
+                kind="review.marked",
+                subject={"type": "review", "id": label},
+                details={"fixed": result.fixed_count, "rejected": result.rejected_count},
+                store=store,
+            )
+        else:
+            print(f"Overall review {label}: {words}")
+        return 0
+    covered_ids = _parse_lanes_option(getattr(args, "lanes", None))
+    covered_records: list[Record] = []
+    for lane_id in covered_ids:
+        rec = store.load(lane_id)
+        if rec.get("common_dir") != common:
+            raise LaneError(f"--lanes {lane_id}: lane belongs to another repository")
+        raw_landed: Any = rec.get("landed")
+        landed_info = cast(dict[str, Any], raw_landed) if isinstance(raw_landed, dict) else {}
+        merge_sha = landed_info.get("merge")
+        if not isinstance(merge_sha, str) or not merge_sha:
+            raise LaneError(f"--lanes {lane_id}: lane is not landed")
+        if not git_ok(cwd, "merge-base", "--is-ancestor", merge_sha, sha):
+            raise LaneError(f"--lanes {lane_id}: landed merge {merge_sha[:10]} is not an ancestor of {sha[:10]}")
+        covered_records.append(rec)
     existing = review_record.ReviewRecord.load(store, label)
     verdict = existing.verdict
     if isinstance(verdict, (review_record.Unmarked, review_record.Complete)) and not args.force_reason:
-        retried = retry_ticket(store, label, common)
-        print("\n".join(review_lines(retried, prog=prog)))
-        return 1 if (retried.raw or {}).get("issue_error") else 0
+        if not covered_ids:
+            retried = retry_ticket(store, label, common)
+            print("\n".join(review_lines(retried, prog=prog)))
+            return 1 if (retried.raw or {}).get("issue_error") else 0
+        print("\n".join(review_lines(existing, prog=prog)))
+        return 0
     if isinstance(verdict, review_record.PartialPanel) and not args.force_reason:
         print("\n".join(review_lines(existing, prog=prog)))
         print(f"Overall review {label}: {existing.summary()[1]}")
@@ -1006,18 +1383,61 @@ def overall_review(args: Any, store: state.Store) -> int:
     # A rerun of a failed or killed review keeps its base.
     saved_base = str(existing.raw["base"]) if existing.raw and existing.raw.get("base") else None
     since = args.since or saved_base
+    if not since and covered_records:
+        prevs = [
+            str(cast(dict[str, Any], r["landed"]).get("previous") or "")
+            for r in covered_records
+            if isinstance(r.get("landed"), dict) and cast(dict[str, Any], r["landed"]).get("previous")
+        ]
+        if prevs:
+            since = prevs[0]
+            for prev in prevs[1:]:
+                mb = git(cwd, "merge-base", since, prev, check=False)
+                if mb:
+                    since = mb
     if not since:
         raise LaneError(
             "give --since <base>: the overall review covers <base>..<sha> (promote --ship gives origin/main)"
         )
     base = git(cwd, "merge-base", git(cwd, "rev-parse", "--verify", since + "^{commit}"), sha)
-    subject = (
-        f"The overall review before main ({prog} promote --ship): every change from {base[:10]} to "
-        f"{sha[:10]}, many lanes at once. Look for seams between them as well as bugs in each."
-    )
+    for rec in covered_records:
+        merge_sha = str(cast(dict[str, Any], rec["landed"])["merge"])
+        if git_ok(cwd, "merge-base", "--is-ancestor", merge_sha, base):
+            raise LaneError(
+                f"--lanes {rec['id']}: landed merge {merge_sha[:10]} is already in base {base[:10]}; "
+                "give an earlier --since base"
+            )
+    fields: dict[str, Any] = {
+        "kind": "overall",
+        "sha": sha,
+        **({"covers": covered_ids} if covered_ids else {}),
+    }
+    record_file = getattr(args, "record", None)
+    if record_file:
+        alias = getattr(args, "reviewer", None)
+        if not alias:
+            raise LaneError("--record requires --reviewer <alias>")
+        main = main_checkout(common)
+        tree = git(main, "rev-parse", sha + "^{tree}")
+        completed = _record_external_review(
+            store, label, fields, base=base, tip=sha, tree=tree,
+            report_path=record_file, alias=alias, force=bool(args.force_reason),
+        )
+        print("\n".join(review_lines(completed, prog=prog)))
+        return 0
+    if covered_ids:
+        subject = (
+            f"Batch review covering lanes {', '.join(covered_ids)}: every change from {base[:10]} to "
+            f"{sha[:10]}. Review each covered lane's changes and the seams between them."
+        )
+    else:
+        subject = (
+            f"The overall review before main ({prog} promote --ship): every change from {base[:10]} to "
+            f"{sha[:10]}, many lanes at once. Look for seams between them as well as bugs in each."
+        )
 
     def _finalize_overall(finished: dict[str, Any]) -> None:
-        if isinstance(
+        if not covered_ids and isinstance(
             review_record.derive_verdict(finished, panel_required=panel_required),
             (review_record.Unmarked, review_record.Complete),
         ):
@@ -1026,7 +1446,7 @@ def overall_review(args: Any, store: state.Store) -> int:
     completed = perform_review(
         store,
         label,
-        {"kind": "overall", "sha": sha},
+        fields,
         main_checkout(common),
         base,
         sha,
@@ -1048,9 +1468,17 @@ def review(args: Any, store: state.Store) -> int:
         return overall_review(args, store)
     if not args.id:
         raise LaneError("give a lane id, or --overall <sha> --since <base>")
+    record_file = getattr(args, "record", None)
+    is_audit = bool(getattr(args, "audit", False))
     reviewer_flag = getattr(args, "reviewer", None)
-    if reviewer_flag and (args.mark or getattr(args, "compare", False) or args.fix_lane):
+    if record_file and (args.mark or getattr(args, "compare", False) or args.fix_lane):
+        raise LaneError("--record does not combine with --mark, --compare or --fix-lane")
+    if reviewer_flag and not record_file and (args.mark or getattr(args, "compare", False) or args.fix_lane):
         raise LaneError("--reviewer chooses who reviews; it does not combine with --mark, --compare or --fix-lane")
+    if is_audit:
+        return audit_lane(args, store)
+    if record_file:
+        return record_lane_review(args, store)
     if getattr(args, "compare", False):
         return compare(args, store)
     if args.mark:

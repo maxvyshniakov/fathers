@@ -73,7 +73,8 @@ class Command:
 COMMANDS: dict[str, Command] = {
     "start": Command("register a lane, or activate a planned lane with --create",
                      "<id> --ticket N --claims GLOB... [--ticket N|--partial N...] [--decision URL...] "
-                     "[--spec PATH...] [--base REF] [--after ID...] [--fix-of ID,ID] [--create] | <id> --create",
+                     "[--spec PATH...] [--review none|evidence|full|double] [--gate NAME] "
+                     "[--base REF] [--after ID...] [--fix-of ID,ID] [--create] | <id> --create",
                      "fix-login --ticket 12 --claims 'app/**' --create"),
     "next": Command("the first ready queue entry; --start registers it", "[--start] [--base REF] [--create]",
                     "--start --create"),
@@ -93,7 +94,8 @@ COMMANDS: dict[str, Command] = {
                     "fix-login --into .claude/worktrees/integrate"),
     "review": Command("a lane's review, its marks and its fix lane",
                       "<id> [--mark N fixed:<merge>|rejected:<reason>] [--fix-lane] [--compare] "
-                      "[--reviewer ALIAS|both] | --overall <sha> --since <base>",
+                      "[--record FILE --reviewer ALIAS] [--reviewer ALIAS|both] [--audit] | "
+                      "--overall <sha> [--since <base>] [--lanes ID,ID] [--record FILE --reviewer ALIAS]",
                       "fix-login --mark 1 fixed:fix-login-review-fixes"),
     "findings": Command("whether a review holds a SHA, for a publish", "<sha> [--since REF] [--json]",
                         "HEAD --json"),
@@ -234,6 +236,14 @@ def parser(project: config.Config = config.DEFAULT) -> Parser:
                    help="create the worktree now instead of adopting one (or activate an existing planned lane)")
     p.add_argument("--fix-of", action="append", metavar="ID,ID",
                    help="a fix lane for the review findings of these landed lanes: its land is exempt from review")
+    p.add_argument("--review", choices=("none", "evidence", "full", "double"),
+                   help="review risk class checked at land (none, evidence, full, double)")
+    p.add_argument("--review-decision", metavar="TEXT",
+                   help="with --review evidence: owner decision quote and date (or use --decision URL)")
+    p.add_argument("--gate", metavar="NAME",
+                   help="with --review evidence: check or test name that guards the change")
+    p.add_argument("--review-reason", metavar="TEXT",
+                   help="optional reason for review class none or evidence, listed at promote")
     p.add_argument("--agent", type=agent_kind,
                    help="the agent starting the lane (e.g. claude-code, codex, antigravity, t3-code)")
     p.add_argument("--force-reason", help="start despite the lane cap or disk floor; logged")
@@ -322,9 +332,15 @@ def parser(project: config.Config = config.DEFAULT) -> Parser:
                         "both: the configured panel, else sol and opus")
     p.add_argument("--compare", action="store_true",
                    help="each reviewer's findings side by side with their marks (fixed or rejected)")
+    p.add_argument("--record", metavar="FILE",
+                   help="record a review report written outside lanefather (requires --reviewer)")
+    p.add_argument("--audit", action="store_true",
+                   help="run or record a non-blocking post-hoc audit review of a none/evidence lane")
     p.add_argument("--overall", metavar="SHA",
                    help="the overall review of --since..SHA; its findings become one ticket")
     p.add_argument("--since", metavar="BASE", help="with --overall: the base, origin/main for promote --ship")
+    p.add_argument("--lanes", action="append", metavar="ID,ID",
+                   help="with --overall: landed lane ids covered by this batch review (satisfies each in review gate)")
     p.add_argument("--force-reason", help="review again although the lane has a review, or register the fix lane "
                                           "over the lane cap; logged")
     p.set_defaults(run=review.review)

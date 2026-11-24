@@ -45,6 +45,7 @@ class ReviewEvent(StrEnum):
     FINISH = "finish"
     FAIL = "fail"
     EXEMPT = "exempt"
+    RECORD = "record"
     MARK = "mark"
     PRE_LAND_FIX = "pre_land_fix"
     FIX_LANE = "fix_lane"
@@ -60,6 +61,9 @@ REVIEW_TRANSITIONS: dict[tuple[ReceiptPhase, ReviewEvent], ReceiptPhase] = {
     (ReceiptPhase.ABSENT, ReviewEvent.EXEMPT): ReceiptPhase.EXEMPT,
     (ReceiptPhase.DIED, ReviewEvent.EXEMPT): ReceiptPhase.EXEMPT,
     (ReceiptPhase.FAILED, ReviewEvent.EXEMPT): ReceiptPhase.EXEMPT,
+    (ReceiptPhase.ABSENT, ReviewEvent.RECORD): ReceiptPhase.FINISHED,
+    (ReceiptPhase.DIED, ReviewEvent.RECORD): ReceiptPhase.FINISHED,
+    (ReceiptPhase.FAILED, ReviewEvent.RECORD): ReceiptPhase.FINISHED,
     (ReceiptPhase.FINISHED, ReviewEvent.MARK): ReceiptPhase.FINISHED,
     (ReceiptPhase.FINISHED, ReviewEvent.PRE_LAND_FIX): ReceiptPhase.FINISHED,
     (ReceiptPhase.FINISHED, ReviewEvent.FIX_LANE): ReceiptPhase.FINISHED,
@@ -661,6 +665,8 @@ class ReviewRecord:
                 and existing.get("pid") == owner_pid
             ):
                 target = ReceiptPhase.RUNNING
+            elif force and event is ReviewEvent.RECORD:
+                target = ReceiptPhase.FINISHED
             elif (phase, event) in REVIEW_TRANSITIONS:
                 target = REVIEW_TRANSITIONS[(phase, event)]
             else:
@@ -832,20 +838,74 @@ class ReviewRecord:
         )
 
     @classmethod
+    def record_external(
+        cls,
+        store: state.Store,
+        label: str,
+        payload: dict[str, Any],
+        *,
+        force: bool = False,
+        finished: str | None = None,
+    ) -> ReviewRecord:
+        """Record a finished review performed outside lanefather (`review --record`, fathers#252)."""
+        raw_created = payload.get("lane_created")
+        lane_created = raw_created if isinstance(raw_created, str) and raw_created else None
+
+        def _build(_existing: Receipt | None) -> Receipt:
+            merged: Receipt = {
+                "version": 1,
+                "label": label,
+                **payload,
+                "status": ReceiptPhase.FINISHED.value,
+                "recorded": True,
+            }
+            merged.setdefault("fallback", None)
+            merged.setdefault("seconds", 0.0)
+            merged["finished"] = finished or str(merged.get("finished") or journal.now())
+            return merged
+
+        return cls._transition(
+            store,
+            label,
+            ReviewEvent.RECORD,
+            _build,
+            force=force,
+            lane_created=lane_created,
+        )
+
+    @classmethod
     def mark(
         cls,
         store: state.Store,
         record: Record,
         raw_marks: Sequence[tuple[str, str]],
     ) -> MarkResult:
-        lane_id = str(record["id"])
-        common = str(record["common_dir"])
+        return cls.mark_label(
+            store,
+            str(record["id"]),
+            str(record["common_dir"]),
+            raw_marks,
+            record=record,
+        )
+
+    @classmethod
+    def mark_label(
+        cls,
+        store: state.Store,
+        label: str,
+        common: str,
+        raw_marks: Sequence[tuple[str, str]],
+        *,
+        record: Record | None = None,
+    ) -> MarkResult:
         applied: list[MarkApplication] = []
-        lane_created = state.lane_created_of(record)
-        with store.locked(f"review-{lane_id}"):
-            loaded = cls.load(store, lane_id, record=record)
+        lane_created = state.lane_created_of(record) if record is not None else None
+        marking_lane_id = str(record["id"]) if record is not None else None
+        with store.locked(f"review-{label}"):
+            loaded = cls.load(store, label, record=record)
             if not loaded.has_finished_receipt or loaded.raw is None:
-                raise LaneError(f"lane {lane_id} has no finished review to mark ({loaded.summary()[1]})")
+                subject = f"lane {label}" if record is not None else f"review {label}"
+                raise LaneError(f"{subject} has no finished review to mark ({loaded.summary()[1]})")
             pre_land = loaded.pre_land_fix(record)
 
             def _build(existing: Receipt | None) -> Receipt:
@@ -856,11 +916,11 @@ class ReviewRecord:
                     finding = by_number.get(int(number)) if number.isdigit() else None
                     if finding is None:
                         available = ", ".join(str(n) for n in by_number) or "none"
-                        raise LaneError(f"--mark {number}: the review of {lane_id} has findings {available}")
+                        raise LaneError(f"--mark {number}: the review of {label} has findings {available}")
                     kind, _, detail = value.partition(":")
                     detail = detail.strip()
                     if kind == "fixed":
-                        fix_sha = _resolve_fix_merge(store, common, detail, marking_lane_id=lane_id)
+                        fix_sha = _resolve_fix_merge(store, common, detail, marking_lane_id=marking_lane_id)
                         reviewed_sha = (
                             pre_land.reviewed_sha
                             if pre_land is not None
@@ -911,7 +971,7 @@ class ReviewRecord:
                     by_number[app.finding_n]["mark"] = app.to_dict()
                 return {**existing, "findings": findings_copy}
 
-            updated_rev = cls._transition(store, lane_id, ReviewEvent.MARK, _build, lane_created=lane_created)
+            updated_rev = cls._transition(store, label, ReviewEvent.MARK, _build, lane_created=lane_created)
         return MarkResult(review=updated_rev, applied=tuple(applied))
 
     @classmethod

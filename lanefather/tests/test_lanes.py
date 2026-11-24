@@ -582,7 +582,7 @@ class QueueTests(LaneCase):
                       "native/straylight-core/src/**/ledger*.rs"]
             """)
         self.start("428-slice4", "native/straylight-core/src/access/desktop_methods.json")
-        self.start("474-review-fixes", "native/straylight-core/src/keyboard/indication.rs")
+        self.start("474-indication", "native/straylight-core/src/keyboard/indication.rs")
         self.assertIn("Lane 480-busy-errors", self.lane("next"))
 
     def test_a_directory_claim_still_covers_the_files_under_it(self):

@@ -27,6 +27,7 @@ from . import (
     review,
     review_gate,
     review_record,
+    scope,
     slots,
     state,
     tickets,
@@ -235,6 +236,7 @@ class PromoteRun:
     pushed: bool = False
     record: dict[str, Any] | None = None
     step_evidence: dict[str, dict[str, Any]] = field(default_factory=dict[str, dict[str, Any]])
+    exempt_lanes: list[dict[str, Any]] = field(default_factory=list[dict[str, Any]])
 
 
 def substitute(text: str, values: dict[str, str]) -> str:
@@ -474,6 +476,15 @@ def step_ship_refusal(run: PromoteRun) -> None:
 def step_review_gate(run: PromoteRun) -> None:
     prog = run.store.prog
     report = review_gate.gate_report(run.store, run.cwd, run.common, run.sha)
+    run.exempt_lanes = list(report.get("exempt_lanes") or [])
+    for entry in run.exempt_lanes:
+        print(
+            f"lane: review class {entry['review_class']}: lane {entry['lane']} "
+            f"({scope.display_ticket(entry['ticket'])}): {entry['reason']}",
+            flush=True,
+        )
+    for alert in cast(list[dict[str, Any]], report.get("audit_alerts") or []):
+        print(f"lane: audit alert: {alert['text']}", flush=True)
     for entry in report["reported"]:
         print(f"lane: reported, does not block: {entry['text']}", flush=True)
     blocking = [e["text"] for e in report["blocking"]]
@@ -585,6 +596,8 @@ def step_publish_refs(run: PromoteRun) -> int:
 
 def step_after_promote(run: PromoteRun) -> None:
     after_promote(run.cwd, run.sha, run.store.project)
+    for message in review.start_audit_reviews(run.store, run.cwd, run.exempt_lanes):
+        print(f"lane: {message}", flush=True)
 
 
 def step_release_comments(run: PromoteRun) -> None:

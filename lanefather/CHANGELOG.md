@@ -8,6 +8,24 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
 
 ### Added
 
+- Risk-based review classes decided at lane start and checked at land (fathers#252):
+  - `lanefather start --review none|evidence|full|double` stores `review_class` on the lane record (with optional
+    `--review-decision`, `--gate` and `--review-reason`). At `land`, Lanefather computes the minimum required review
+    class from the diff's changed paths and size under `[review.classes]` (`none`, `evidence`, `full`, `double`,
+    `max_lines`, `max_files`, `audit_every`) and refuses a lane declared lower than computed (overridable via
+    `--force-reason`, audited in the ledger).
+  - `evidence` class lands without independent review when the lane carries both an owner decision (`--decision URL`
+    or `--review-decision`) and a guarding check/test (`--gate`), and is refused at `land` if either is missing.
+  - `lanefather review <id> --record <report file> --reviewer <alias>` records an external review (Markdown or JSON),
+    parsing findings so they can be marked with `--mark` and satisfy the review gate.
+  - Batch coverage: `lanefather review --overall <sha> [--since <base>] --lanes ID,ID [--record FILE --reviewer ALIAS]`
+    covers multiple landed lanes as one diff; `review --overall <sha> --mark ...` marks its findings, and a clean or
+    fully marked batch review satisfies each covered lane in `review_gate` / `promote`.
+  - Anti-shirking audit sampling: `promote` lists every `none`/`evidence` lane with its class and reason, and
+    deterministically samples 1 in `audit_every` (default 5) for a non-blocking post-hoc audit (`review <id> --audit`);
+    P0/P1 findings on an audited lane emit a `review.audit_alert` naming the class that let it through.
+  - Starting a lane whose id contains `review-fixes` without `--fix-of` is now refused at `start` (overridable via
+    `--force-reason`) instead of merely printing a warning.
 - Pre-land lane review (fathers#242): `lanefather review <id>` works on an active lane with a clean worktree and
   commits beyond its base, recording `tip`, `tree` and `pre_land: true` on the review receipt. Findings can be fixed
   in the same lane and marked with `--mark N fixed:<sha|id>` or `rejected:<reason>` before landing. When the pre-land
