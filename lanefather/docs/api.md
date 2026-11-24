@@ -56,10 +56,16 @@ ledger.log.
  "reported": [{"severity": "P3", "...": "..."}], "unknown": []}
 ```
 
-- `unfinished`: a review missing, running or failed. `blocking`: a finding of a severity `[review] blocks` names (P1
+- `unfinished`: a review missing, running, failed, stale, partial panel, or partial recovered historical evidence
+  (fathers#179). `blocking`: a finding of a severity `[review] blocks` names (P1
   and P2 by default) that is unmarked or marked fixed by a merge not in the SHA. `reported`: the same of other
   severities, shown, never blocking. `text` is what to print, with the two commands that mark the finding; `line` is
   the finding's line in its file.
+- In `lanefather show <id> --json` and `lanefather status --json`, a lane with recovered historical review evidence
+  reports `review.status` as `"recovered"` (complete) or `"recovered (partial)"` (incomplete), along with
+  `review.recovered: true`, `review.evidence_source: "historical"`, `review.complete`, `review.sources`,
+  `review.missing_facts`, and `review.summary`. A landed lane without an executed review receipt also includes
+  `review.recovery_hint` pointing to `lanefather review <id> --recover`.
 - `unknown`: merges in the range when this state directory knows no lane landed there. Run the command where the
   lanes' state lives (the machine and `state_dir` that landed them); a CI clone without it is held, not cleared.
 - `promote` refuses the batch gate on `blocking` (a running review does not hold the gate) and the move of dev on

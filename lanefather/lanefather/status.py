@@ -163,6 +163,8 @@ def status(args: Any) -> int:
                 if isinstance(review_info.get("summary"), str) and review_info["summary"]
                 else f"review {review_info['status']}"
             )
+            if isinstance(review_info.get("recovery_hint"), str) and review_info["recovery_hint"]:
+                review_text += f" ({review_info['recovery_hint']})"
             print(f"    {lane['id']}  {lane['status']}  receipt {lane['receipt']['status']}"
                   f"{post}  {review_text}" + (f"  gone: {admission.GONE}" if lane.get("gone") else ""))
         for row in project.get("damaged", []):

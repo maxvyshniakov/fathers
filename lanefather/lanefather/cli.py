@@ -99,7 +99,8 @@ COMMANDS: dict[str, Command] = {
                     "fix-login --into .claude/worktrees/integrate"),
     "review": Command("a lane's review, its marks and its fix lane",
                       "<id> [--mark N fixed:<merge>|rejected:<reason>] [--fix-lane] [--compare] "
-                      "[--record FILE --reviewer ALIAS] [--reviewer ALIAS|both] [--audit] | "
+                      "[--record FILE --reviewer ALIAS] [--recover [--source URL...] [--target REF] "
+                      "[--reviewed-range BASE..TIP]] [--reviewer ALIAS|both] [--audit] | "
                       "--overall <sha> [--since <base>] [--lanes ID,ID] [--paths GLOB... | --areas FILE | --area NAME] "
                       "[--record FILE --reviewer ALIAS]",
                       "fix-login --mark 1 fixed:fix-login-review-fixes"),
@@ -367,6 +368,14 @@ def parser(project: config.Config = config.DEFAULT) -> Parser:
                    help="each reviewer's findings side by side with their marks (fixed or rejected)")
     p.add_argument("--record", metavar="FILE",
                    help="record a review report written outside lanefather (requires --reviewer)")
+    p.add_argument("--recover", action="store_true",
+                   help="recover historical review evidence from GitHub issue comments without rerunning the review")
+    p.add_argument("--source", action="append", metavar="URL",
+                   help="with --recover: GitHub issue comment URL with historical review dispositions (repeatable)")
+    p.add_argument("--target", metavar="REF",
+                   help="with --recover: target ref to verify fix commit ancestry against")
+    p.add_argument("--reviewed-range", metavar="BASE..TIP",
+                   help="with --recover: reviewed commit range to verify against the lane's landed scope")
     p.add_argument("--audit", action="store_true",
                    help="run or record a non-blocking post-hoc audit review of a none/evidence lane")
     p.add_argument("--overall", metavar="SHA",

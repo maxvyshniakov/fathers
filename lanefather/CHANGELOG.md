@@ -8,6 +8,21 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
 
 ### Added
 
+- Historical review evidence recovery without rerunning completed reviews (fathers#179):
+  - `lanefather review <id> --recover [--source URL...] [--target REF] [--reviewed-range BASE..TIP]` fetches historical
+    review dispositions from explicit GitHub issue/PR comment URLs (or auto-discovers them from linked tickets), verifies
+    each named fix commit's git ancestry against the target ref, and checks reviewed/landed scope against the lane record
+    (rejecting scope mismatches and reused lane IDs whose fix commits predate the lane's landed base).
+  - Recovered receipts record `recovered: true`, `evidence_source: "historical"`, `complete`, `sources`,
+    `reviewed_scope`, `landed_scope`, `dispositions`, `missing_facts` (never fabricating missing `model`, `reviewer`,
+    `severity`, or `tree`), `recovered_by`, and `recovered_at`; any prior interrupted duplicate review is preserved under
+    `preserved_artifacts`, complete executed reviews are refused without overwriting, and repeated `--recover` runs are
+    idempotent.
+  - Partial or unverified evidence (`PartialEvidence`) is recorded visibly as `recovered (partial)` and never satisfies
+    `review_gate`, `promote`, or `done`; complete verified evidence satisfies the gate while remaining visibly
+    distinguished in `list`, `show`, and `status` (text and JSON), with `done` preserving provenance. `show`, `status`,
+    `review_gate`, `done`, and `review` surface `lanefather review <id> --recover` for landed lanes lacking an executed
+    review before recommending a duplicate review.
 - CLI convention conformance and versioned JSON replies (fathers#130):
   - Every `--json` reply now carries top-level `"v": 1`: added `"v": 1` to `list --json` and `show --json` (keeping
     legacy `"version": 1` beside `"v"` on `show --json` for existing readers), and added `--json` structured replies

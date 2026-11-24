@@ -215,6 +215,8 @@ def distinct_finished_reviewers(raw: dict[str, Any] | None) -> list[str]:
     """Distinct non-empty reviewer aliases that finished in a review receipt."""
     if not isinstance(raw, dict) or raw.get("status") != "finished":
         return []
+    if raw.get("recovered") is True or raw.get("evidence_source") == "historical":
+        return []
     raw_panel: Any = raw.get("panel")
     if isinstance(raw_panel, list) and raw_panel:
         found: list[str] = []

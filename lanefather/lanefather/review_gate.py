@@ -331,12 +331,19 @@ def gate_report(store: state.Store, cwd: str, common: str, sha: str,
             verdict,
             (review_record.Absent, review_record.Running, review_record.Died, review_record.Failed),
         ):
+            hint = (
+                f" (or recover historical evidence: {store.prog} review {lane_id} --recover)"
+                if not isinstance(verdict, review_record.Running)
+                else ""
+            )
             report["unfinished"].append({"lane": record["id"], "ticket": record["ticket"],
-                                         "text": f"lane {record['id']} ({ticket_ref}): {words}"})
+                                         "text": f"lane {record['id']} ({ticket_ref}): {words}{hint}"})
             continue
-        if isinstance(verdict, (review_record.PartialPanel, review_record.Stale)):
+        if isinstance(verdict, (review_record.PartialPanel, review_record.PartialEvidence, review_record.Stale)):
             report["unfinished"].append({"lane": record["id"], "ticket": record["ticket"],
                                          "text": f"lane {record['id']} ({ticket_ref}): {words}"})
+            if isinstance(verdict, review_record.PartialEvidence):
+                continue
         if eff_cls == "double":
             double_err = review_class.double_review_problem(rev.raw, label=lane_id, prog=store.prog)
             if double_err is not None:
