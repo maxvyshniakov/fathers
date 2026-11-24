@@ -48,23 +48,35 @@ def clip(text: str, most: int) -> str:
 
 def family(cmd: str) -> str:
     """The command's family: the outermost app bundle it runs from (every helper of a browser is the browser), else
-    its program's base name, a login shell's dash and a process title's colon dropped; "?" for none."""
-    bundle = _APP.search(cmd)
+    its program's base name (a bracketed Linux kernel thread kept as [name] without its /worker suffix), a login
+    shell's dash and a process title's colon dropped; "?" for none."""
+    program = _lineage.program(cmd)
+    bundle = _APP.search(program)
     if bundle:
         name = bundle[1]
+    elif program.startswith("[") and program.endswith("]"):
+        head = program[1:-1].split("/", 1)[0].strip()
+        name = f"[{head}]" if head else ""
     else:
-        program = _lineage.program(cmd)
         name = "" if _AGENT.search(program) is None else "claude"
         name = name or os.path.basename(program).lstrip("-").rstrip(":")
     return clip(name, FAMILY_MAX) or "?"
 
 
-def spawn_owners(spawned: Sequence[Mapping[str, Any]]) -> tuple[dict[int, str], dict[int, str]]:
+def spawn_owners(spawned: Sequence[Any]) -> tuple[dict[int, str], dict[int, str]]:
     """Spawnfather entries as owners: their pids and their process groups, each -> "spawnfather LABEL"."""
     by_pid: dict[int, str] = {}
     by_group: dict[int, str] = {}
-    for entry in spawned:
-        name = clip(f"spawnfather {entry.get('label') or entry.get('id') or ''}".strip(), OWNER_MAX)
+    for raw in spawned:
+        if not isinstance(raw, Mapping):
+            continue
+        entry = cast(Mapping[str, Any], raw)
+        raw_label = entry.get("label")
+        raw_id = entry.get("id")
+        tag = raw_label.strip() if isinstance(raw_label, str) and raw_label.strip() else (
+            raw_id.strip() if isinstance(raw_id, str) and raw_id.strip() else ""
+        )
+        name = clip(f"spawnfather {tag}".strip(), OWNER_MAX)
         pid, group = entry.get("pid"), entry.get("pgid")
         if type(pid) is int and pid > 1:
             by_pid.setdefault(pid, name)
@@ -99,11 +111,12 @@ def measure(procs: Mapping[int, Proc], leases: Sequence[_process.Lease], *,
     fault there leaves the session owners."""
     parents = {pid: row.ppid for pid, row in procs.items()}
     commands = {pid: row.cmd for pid, row in procs.items()} if _platform.macos() else None
-    busy = sorted((pid for pid, row in procs.items() if row.cpu >= MARK_MIN), key=lambda pid: -procs[pid].cpu)
-    looked = set(busy[:MARK_MAX])
 
     def bounded(pids: Sequence[int], paths: Iterable[str]) -> tuple[dict[int, set[str]], list[int]]:
-        wanted = [pid for pid in pids if pid in looked]
+        # `pids` are already outside every lease's tree (detached_only=True); rank only those for the MARK_MAX budget.
+        busy = sorted((pid for pid in pids if procs[pid].cpu >= MARK_MIN), key=lambda pid: (-procs[pid].cpu, pid))
+        wanted = busy[:MARK_MAX]
+        looked = set(wanted)
         found, hidden = markers(wanted, paths) if wanted else ({}, [])
         return {**{pid: set() for pid in pids if pid not in looked}, **found}, hidden
 

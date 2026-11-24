@@ -117,6 +117,23 @@ class StatsTests(SlotCase):
         self.assertEqual(0, json.loads(self.stats("--json"))["outside"]["samples"])
         self.assertNotIn("outside leases", self.stats())
 
+    def test_outside_ignores_bool_numbers_and_non_string_fields(self):
+        base = 1_800_000_000.0
+        self.write("machine.jsonl", [
+            {"v": 2, "at": True, "outside": {"cpu": 5.0, "top": [{"family": "bogus", "owner": "x", "cpu": 5.0}]}},
+            {"v": 2, "at": base, "outside": {"cpu": True, "top": [{"family": "bool-top", "owner": None, "cpu": 2.0}]}},
+            {"v": 2, "at": base + 60, "outside": {"cpu": 2.0, "top": [
+                {"family": "bool-cpu", "owner": "a", "cpu": True},
+                {"family": "false-cpu", "owner": "a", "cpu": False},
+                {"family": True, "owner": 123, "cpu": 1.0},
+                {"family": ["bad"], "owner": False, "cpu": 1.0},
+            ]}},
+        ])
+        found = json.loads(self.stats("--json"))["outside"]
+        self.assertEqual(1, found["samples"])
+        self.assertEqual([("?", 0.033)], [(row["family"], row["core_hours"]) for row in found["families"]])
+        self.assertEqual([(None, 0.033)], [(row["owner"], row["core_hours"]) for row in found["owners"]])
+
     def test_a_gap_with_no_lease_running_is_not_busy_time(self):
         base = 1_800_000_000.0
         # Two samples 15 s apart fully busy, then an idle hour before the next sample.

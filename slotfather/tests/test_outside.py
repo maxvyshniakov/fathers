@@ -77,11 +77,18 @@ class FamilyTests(unittest.TestCase):
             WEBCONTENT: "Playwright",
             "/Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Helpers/"
             "Google Chrome Helper (GPU).app/Contents/MacOS/Google Chrome Helper (GPU) --type=gpu-process": "Google Chrome",
+            "tool --token=secret /Applications/Foo.app/Contents/MacOS/Foo": "tool",
+            "tool --token=secret Foo.app/Contents/MacOS/Foo": "tool",
+            "[kworker/u16:2-events]": "[kworker]",
+            "[ksoftirqd/0]": "[ksoftirqd]",
+            "[rcu_preempt]": "[rcu_preempt]",
+            "[]": "?",
             "": "?",
         }
         for cmd, family in cases.items():
             with self.subTest(cmd=cmd):
                 self.assertEqual(family, sf_outside.family(cmd))
+                self.assertNotIn("--token", sf_outside.family(cmd))
         self.assertLessEqual(len(sf_outside.family("/bin/" + "x" * 200)), sf_outside.FAMILY_MAX)
 
 
@@ -159,6 +166,41 @@ class MeasureTests(unittest.TestCase):
         found = self.measure(BUSY, spawned=broken)
         assert found is not None
         self.assertIn("claude 100", {row["owner"] for row in found["top"]})
+
+    def test_busy_in_tree_processes_do_not_exhaust_the_marker_budget_for_escaped_processes(self) -> None:
+        rows = [proc(1, 0, "/sbin/launchd"), proc(300, 1, "python3 -m slotfather run", 1.0)]
+        rows += [proc(301 + n, 300, "/usr/bin/clang -c a.c", 200.0 + n) for n in range(sf_outside.MARK_MAX + 8)]
+        rows += [
+            proc(500, 1, "/Users/dev/w/node_modules/esbuild/bin/esbuild --service=0.25", 120.0),
+            proc(501, 1, "/usr/bin/gradle --daemon", 110.0),
+            proc(600, 1, "/usr/bin/node unleased.js", 105.0),
+        ]
+        asked: list[int] = []
+
+        def markers(pids: Sequence[int], leases: Any) -> tuple[dict[int, set[str]], list[int]]:
+            asked.extend(pids)
+            return {pid: ({LEASE} if pid in (500, 501) else set()) for pid in pids}, []
+
+        found = self.measure(table(*rows), markers=markers)
+        assert found is not None
+        self.assertIn(500, asked)
+        self.assertIn(501, asked)
+        families = {row["family"] for row in found["top"]}
+        self.assertNotIn("esbuild", families)
+        self.assertNotIn("gradle", families)
+        self.assertEqual({"node"}, families)
+        self.assertEqual(1.05, found["cpu"])
+
+    def test_spawn_owners_ignores_malformed_non_string_fields(self) -> None:
+        entries: Any = [
+            {"pid": 800, "pgid": 800, "label": True, "id": "sf-1"},
+            {"pid": 801, "pgid": 801, "label": ["bad"], "id": 123},
+            {"pid": True, "pgid": False, "label": "ignored"},
+            "not-a-mapping",
+        ]
+        by_pid, by_group = sf_outside.spawn_owners(entries)
+        self.assertEqual({800: "spawnfather sf-1", 801: "spawnfather"}, by_pid)
+        self.assertEqual({800: "spawnfather sf-1", 801: "spawnfather"}, by_group)
 
 
 class SpawnfatherTests(unittest.TestCase):
