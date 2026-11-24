@@ -383,17 +383,19 @@ def _resolve_fix_merge(store: state.Store, common: str, value: str) -> str:
         landed_info = cast(dict[str, Any], raw_landed) if isinstance(raw_landed, dict) else {}
         if landed_info.get("merge"):
             return str(landed_info["merge"])
-        if lifecycle.active(target) and ReviewRecord.load(store, value, record=target).pre_land_fix(target) is not None:
-            tip = gitops.git(
-                main_checkout(common),
-                "rev-parse",
-                "--verify",
-                "--quiet",
-                str(target["branch"]) + "^{commit}",
-                check=False,
-            )
-            if tip:
-                return tip
+        if lifecycle.active(target):
+            target_rev = ReviewRecord.load(store, value, record=target)
+            if target_rev.is_pre_land or target_rev.pre_land_fix(target) is not None:
+                tip = gitops.git(
+                    main_checkout(common),
+                    "rev-parse",
+                    "--verify",
+                    "--quiet",
+                    str(target["branch"]) + "^{commit}",
+                    check=False,
+                )
+                if tip:
+                    return tip
     sha = gitops.git(main_checkout(common), "rev-parse", "--verify", "--quiet", value + "^{commit}", check=False)
     if not value or not sha:
         raise LaneError(f"fixed:{value}: not a commit or a landed lane here; give the follow-up merge")
@@ -413,6 +415,24 @@ class ReviewRecord:
     @property
     def exists(self) -> bool:
         return self.raw is not None
+
+    @property
+    def is_pre_land(self) -> bool:
+        return self.raw is not None and self.raw.get("pre_land") is True
+
+    @property
+    def reviewed_tip(self) -> str:
+        if self.raw is None:
+            return ""
+        tip = self.raw.get("tip")
+        return tip if isinstance(tip, str) else ""
+
+    @property
+    def reviewed_tree(self) -> str:
+        if self.raw is None:
+            return ""
+        tree = self.raw.get("tree")
+        return tree if isinstance(tree, str) else ""
 
     @property
     def allows_promote(self) -> bool:
@@ -827,7 +847,11 @@ class ReviewRecord:
                     detail = detail.strip()
                     if kind == "fixed":
                         fix_sha = _resolve_fix_merge(store, common, detail)
-                        reviewed_sha = pre_land.reviewed_sha if pre_land is not None else ""
+                        reviewed_sha = (
+                            pre_land.reviewed_sha
+                            if pre_land is not None
+                            else (loaded.reviewed_tip if loaded.is_pre_land else "")
+                        )
                         if reviewed_sha and (
                             fix_sha == reviewed_sha
                             or not git_ok(

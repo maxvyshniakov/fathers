@@ -1059,6 +1059,111 @@ class ReusedLaneIdReviewTests(LaneCase):
         self.assertIn("land refused", out_land)
         self.assertIn("main", out_land)
 
+    def test_pre_land_review_fix_in_same_lane_and_land_once(self):
+        # fathers#242 (a): active lane -> review -> findings -> fix commit in same lane -> --mark -> land.
+        self.review_text.write_text(TWO_FINDINGS)
+        worktree = self.created("a", "lib/**", "calls/**")
+        reviewed_sha = self.commit(worktree, {"lib/api.txt": "foo\nbaz\n"})
+        reviewed_tree = self.git(worktree, "rev-parse", f"{reviewed_sha}^{{tree}}")
+        self.lane("check", "a")
+        self.lane("review", "a")
+        receipt = self.review("a")
+        self.assertTrue(receipt["pre_land"])
+        self.assertEqual(receipt["tip"], reviewed_sha)
+        self.assertEqual(receipt["tree"], reviewed_tree)
+
+        # Unmarked pre-land findings refuse land.
+        refused = self.lane("land", "a", ok=False)
+        self.assertIn("land refused", refused)
+        self.assertIn("unmarked findings", refused)
+
+        # Fix finding 1 in the same lane without --fix-lane, reject finding 2, recheck, and land.
+        fix_sha = self.commit(worktree, {"calls/main.txt": "foo\nbaz\n"}, "fix finding 1")
+        self.lane("check", "a")
+        self.lane("review", "a", "--mark", "1", f"fixed:{fix_sha}", "--mark", "2", "rejected:out of scope")
+        self.assertEqual(self.review("a")["findings"][0]["mark"]["merge"], fix_sha)
+
+        land_out = self.lane("land", "a")
+        self.assertIn("review kept", land_out)
+        self.assertNotIn("kept for its review", land_out)
+        self.assertEqual(sum(1 for c in self.codex_calls() if c[2] == "exec"), 1, "no post-land review started")
+        self.assertEqual(self.record("a")["status"], "done")
+
+    def test_pre_land_review_refuses_planned_dirty_or_empty_active_lane(self):
+        self.start("p", "docs/**")
+        self.assertIn("is planned", self.lane("review", "p", ok=False))
+
+        worktree = self.created("a", "lib/**")
+        self.assertIn("no commits beyond", self.lane("review", "a", ok=False))
+
+        self.commit(worktree, {"lib/api.txt": "foo\nbar\n"})
+        self.write(worktree, "lib/api.txt", "uncommitted\n")
+        self.assertIn("uncommitted changes", self.lane("review", "a", ok=False))
+
+    def test_pre_land_review_extra_unreviewed_commit_refuses_land_unless_forced(self):
+        # fathers#242 (b): extra unreviewed commit after pre-land review refuses land; --force-reason audits override.
+        worktree = self.created("a", "lib/**")
+        reviewed_sha = self.commit(worktree, {"lib/api.txt": "foo\nbar\n"})
+        self.lane("check", "a")
+        self.lane("review", "a")
+
+        extra_sha = self.commit(worktree, {"lib/api.txt": "foo\nbar\nextra\n"}, "unreviewed extra commit")
+        self.lane("check", "a")
+
+        refused = self.lane("land", "a", ok=False)
+        self.assertIn("land refused", refused)
+        self.assertIn("unreviewed commits since pre-land review", refused)
+        self.assertIn(reviewed_sha[:10], refused)
+        self.assertIn(extra_sha[:10], refused)
+        self.assertEqual(self.record("a")["status"], "active")
+
+        forced = self.lane("land", "a", "--force-reason", "trivial comment tweak")
+        self.assertIn("post-merge green", forced)
+        self.assertIn("override land a: trivial comment tweak", (self.state / "ledger.log").read_text())
+
+    def test_pre_land_review_integration_merge_does_not_invalidate_review(self):
+        # fathers#242 (c): clean integration-branch merge after pre-land review keeps review valid.
+        worktree = self.created("a", "lib/**")
+        self.commit(worktree, {"lib/api.txt": "foo\nbar\n"})
+        self.lane("check", "a")
+        self.lane("review", "a")
+
+        # Advance the integration branch with another commit, then merge it into lane a.
+        self.commit(self.integration, {"docs/other.md": "other lane\n"}, "other integration change")
+        self.git(worktree, "merge", "--no-ff", "-m", "Merge integrate/q into lane/a", "integrate/q")
+        self.lane("check", "a")
+
+        land_out = self.lane("land", "a")
+        self.assertIn("review kept", land_out)
+        self.assertNotIn("kept for its review", land_out)
+        self.assertEqual(sum(1 for c in self.codex_calls() if c[2] == "exec"), 1, "no post-land review started")
+        self.assertEqual(self.record("a")["status"], "done")
+
+    def test_list_status_and_show_display_reviewed_before_land_at_short_sha(self):
+        # fathers#242 (d): list / status / show display "reviewed before land at <sha>" for completed pre-land review.
+        worktree = self.created("a", "lib/**")
+        reviewed_sha = self.commit(worktree, {"lib/api.txt": "foo\nbar\n"})
+        self.lane("check", "a")
+        self.lane("review", "a")
+        expected = f"reviewed before land at {reviewed_sha[:10]}"
+
+        list_text = self.lane("list")
+        self.assertIn(expected, list_text)
+        list_json = json.loads(self.lane("list", "--json"))
+        self.assertIn(expected, list_json["lanes"][0]["receipt"])
+
+        status_text = self.lane("status", cwd=self.tmp)
+        self.assertIn(expected, status_text)
+        status_json = json.loads(self.lane("status", "--json", cwd=self.tmp))
+        self.assertEqual(status_json["projects"][0]["lanes"][0]["review"]["summary"], expected)
+        self.assertTrue(status_json["projects"][0]["lanes"][0]["review"]["pre_land"])
+
+        show_text = self.lane("show", "a")
+        self.assertIn(expected, show_text)
+        show_json = json.loads(self.lane("show", "a", "--json"))
+        self.assertEqual(show_json["review"]["summary"], expected)
+        self.assertTrue(show_json["review"]["pre_land"])
+
 
 if __name__ == "__main__":
     unittest.main()

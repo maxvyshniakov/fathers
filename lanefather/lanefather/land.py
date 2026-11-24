@@ -321,11 +321,17 @@ def merge(
                 store, lane_id, merge_sha=merge_sha, previous=previous, tip=tip, tree=tree,
                 integration=integration, onto=onto, keep=keep_flag, new_overrides=new_overrides, receipt=receipt,
             )
+        problems: list[str] = []
         problem = merge_problem(lane_id, tip, tree, receipt, record=record, prog=prog)
-        if problem and not force_reason:
-            raise LaneError("land refused: " + problem)
         if problem:
-            new_overrides.append(journal.override("land", record, force_reason, [problem], store=store))
+            problems.append(problem)
+        pre_land_problem = review.pre_land_review_problem(store, record, main, tip, tree, integration, prog=prog)
+        if pre_land_problem:
+            problems.append(pre_land_problem)
+        if problems and not force_reason:
+            raise LaneError("land refused: " + "; ".join(problems))
+        if problems:
+            new_overrides.append(journal.override("land", record, force_reason, problems, store=store))
         if dirty(integration) or os.path.exists(git(integration, "rev-parse", "--git-path", "MERGE_HEAD")):
             raise LaneError(f"land refused: {integration} has uncommitted changes or a merge in progress")
         if onto in store.project.promoted:

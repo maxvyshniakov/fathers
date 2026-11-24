@@ -151,6 +151,20 @@ was not seen, and a warning when the lane's scope changed since the review. An i
 gate yet; it shows in the output and the receipt. A lane without a ticket, decision or spec reads `The lane has no
 ticket.`
 
+### Review before landing
+
+`lanefather review <id>` also works on an active lane with a clean worktree and commits beyond its base, beside
+`lanefather check` (fathers#242). The review receipt records `tip`, `tree` and `pre_land: true`. Findings can be fixed
+in the same lane and marked with `--mark N fixed:<sha|id>` or `rejected:<reason>` before landing.
+
+- When a lane's pre-land review is finished and every finding is marked, `land` counts the lane as reviewed: no
+  post-land review is started and the lane is not held for its review (unless `--keep` was passed).
+- `land` refuses if the pre-land review is still running, incomplete, or has unmarked findings, or if the lane has
+  unreviewed commits after the reviewed SHA that are not referenced by a `fixed:<sha>` mark (a clean merge of the
+  integration branch that leaves the lane's own diff unchanged does not invalidate the review). `--force-reason`
+  overrides and is logged.
+- `list`, `status` and `show` display `reviewed before land at <sha>` for a lane with a completed pre-land review.
+
 ### Review findings before landing
 
 `land` refuses if another lane in the same repository has a finished review with an unmarked P1 or P2 finding

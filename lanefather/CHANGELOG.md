@@ -8,6 +8,15 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
 
 ### Added
 
+- Pre-land lane review (fathers#242): `lanefather review <id>` works on an active lane with a clean worktree and
+  commits beyond its base, recording `tip`, `tree` and `pre_land: true` on the review receipt. Findings can be fixed
+  in the same lane and marked with `--mark N fixed:<sha|id>` or `rejected:<reason>` before landing. When the pre-land
+  review is complete and every finding is marked, `land` counts the lane as reviewed without starting a post-land
+  review or keeping the lane for review; `land` refuses (overridable with `--force-reason`) if the pre-land review is
+  still running, incomplete, has unmarked findings, or if unreviewed commits were added after the reviewed SHA (while
+  allowing clean integration-branch merges that leave the lane's own diff unchanged). `list`, `status` and `show`
+  report `reviewed before land at <sha>`.
+
 - Recorded and resumable promote/ship runs (fathers#58): `lanefather promote` records each run's step outcomes and
   evidence in `<state>/promote/promote-<sha>.json`, including `ship_base` captured before push and per-step status
   for `[[promote.install]]` and `[[promote.deploy]]`. Rerunning an unfinished promote or `--ship` resumes from the

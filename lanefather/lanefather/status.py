@@ -154,8 +154,14 @@ def status(args: Any) -> int:
               + (f"  gate {gate_info['status']} {str(gate_info['sha'])[:10]}" if gate_info else "")
               + f"  {project['state_dir']}")
         for lane in project["lanes"]:
+            review_info = lane["review"]
+            review_text = (
+                review_info["summary"]
+                if isinstance(review_info.get("summary"), str) and review_info["summary"]
+                else f"review {review_info['status']}"
+            )
             print(f"    {lane['id']}  {lane['status']}  receipt {lane['receipt']['status']}"
-                  f"  review {lane['review']['status']}" + (f"  gone: {admission.GONE}" if lane.get("gone") else ""))
+                  f"  {review_text}" + (f"  gone: {admission.GONE}" if lane.get("gone") else ""))
         for row in project.get("damaged", []):
             print(f"    damaged {row['path']}: restore the record or remove the file; start, land, promote and gc "
                   "refuse until then")

@@ -215,5 +215,73 @@ class ReviewGateTableTests(LaneCase):
         self.assertRegex((self.state / "ledger.log").read_text(), rf"override findings {self.sha}: release of a hotfix")
 
 
+class PreLandReviewGateTests(LaneCase):
+    """Pre-land review gating on `land` (fathers#242): running, unmarked, unreviewed commits, and clean merges."""
+
+    def test_running_pre_land_review_refuses_land_unless_forced(self):
+        worktree = self.created("a", "lib/**")
+        tip = self.commit(worktree, {"lib/api.txt": "foo\nbar\n"})
+        self.lane("check", "a")
+        rec = self.record("a")
+        (self.state / "a.review.json").write_text(
+            json.dumps({
+                "version": 1, "label": "a", "kind": "lane", "lane": "a", "ticket": "404",
+                "lane_created": rec["created"], "pre_land": True, "tip": tip,
+                "tree": self.git(worktree, "rev-parse", f"{tip}^{{tree}}"),
+                "status": "running", "pid": os.getpid(), "started": "2026-11-24T00:00:00Z",
+                "log": str(self.state / "logs" / "review-a.log"), "effort": "medium",
+            })
+        )
+        refused = self.lane("land", "a", ok=False)
+        self.assertIn("land refused", refused)
+        self.assertIn("pre-land review is still running", refused)
+        self.assertEqual(self.record("a")["status"], "active")
+
+        forced = self.lane("land", "a", "--force-reason", "urgent hotfix")
+        self.assertIn("post-merge green", forced)
+        self.assertIn("override land a: urgent hotfix", (self.state / "ledger.log").read_text())
+
+    def test_amended_commit_after_pre_land_review_refuses_land(self):
+        worktree = self.created("a", "lib/**")
+        reviewed_sha = self.commit(worktree, {"lib/api.txt": "foo\nbar\n"})
+        self.lane("check", "a")
+        self.lane("review", "a")
+
+        # Rewrite history so reviewed_sha is no longer an ancestor of tip.
+        self.write(worktree, "lib/api.txt", "foo\namended\n")
+        self.git(worktree, "add", "lib/api.txt")
+        self.git(worktree, "commit", "--amend", "-qm", "amended commit")
+        self.lane("check", "a")
+
+        refused = self.lane("land", "a", ok=False)
+        self.assertIn("land refused", refused)
+        self.assertIn(f"does not contain pre-land reviewed commit {reviewed_sha[:10]}", refused)
+
+    def test_previous_generation_pre_land_review_does_not_block_new_lane(self):
+        # Generation 1: pre-land reviewed with unmarked findings, then dropped after clearing.
+        wt1 = self.created("a", "lib/**")
+        tip1 = self.commit(wt1, {"lib/api.txt": "foo\ngen1\n"})
+        rec1 = self.record("a")
+        self.lane("check", "a")
+        self.lane("land", "a")
+        self.lane("review", "a")
+        self.assertEqual(self.record("a")["status"], "done")
+        # Plant a gen-1 pre-land running review receipt on disk.
+        (self.state / "a.review.json").write_text(
+            json.dumps({
+                "version": 1, "label": "a", "kind": "lane", "lane": "a", "ticket": "404",
+                "lane_created": rec1["created"], "pre_land": True, "tip": tip1,
+                "status": "running", "pid": os.getpid(), "started": "2026-11-24T00:00:00Z",
+                "log": str(self.state / "logs" / "review-a.log"), "effort": "medium",
+            })
+        )
+        # Generation 2: new lane with same id must ignore gen-1's receipt and land normally.
+        wt2 = self.created("a", "lib/**")
+        self.commit(wt2, {"lib/api.txt": "foo\ngen1\ngen2\n"})
+        self.lane("check", "a")
+        land_out = self.lane("land", "a")
+        self.assertIn("post-merge green", land_out)
+
+
 if __name__ == "__main__":
     unittest.main()
