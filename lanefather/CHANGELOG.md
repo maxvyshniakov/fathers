@@ -14,7 +14,6 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
   first unfinished step and reuses the recorded `ship_base`, so a rerun after a failed local branch move still runs
   `release_comments` and `overall_review` over the original `ship_base..sha`, and a rerun of `--install` after a
   failed later step resumes from that step without repeating earlier succeeded steps.
-
 - `lanefather list --all-projects` shows every repository's lanes in a shared Store, each row naming its project;
   `list --json` gives each lane its `project` (fathers#236).
 - Gone lanes (fathers#237): a planned or active lane whose repository exists but whose branch and worktree are both

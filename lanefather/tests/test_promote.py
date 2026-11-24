@@ -426,23 +426,23 @@ class PromoteInstallDeployTests(LaneCase):
         record_path = self.state / "promote" / f"promote-{tip}.json"
         record = json.loads(record_path.read_text())
         self.assertEqual(record["status"], "failed")
-        self.assertEqual(record["steps"]["step:install"]["status"], "ok")
-        self.assertEqual(record["steps"]["step:install"]["exit"], 0)
-        self.assertEqual(record["steps"]["step:check-installed"]["status"], "failed")
-        self.assertEqual(record["steps"]["step:check-installed"]["exit"], 7)
+        self.assertEqual(record["steps"]["install:install"]["status"], "ok")
+        self.assertEqual(record["steps"]["install:install"]["exit"], 0)
+        self.assertEqual(record["steps"]["install:check-installed"]["status"], "failed")
+        self.assertEqual(record["steps"]["install:check-installed"]["exit"], 7)
         # Fix step 2, clear the step log, and rerun --install.
         del self.env["FIXTURE_FAIL_STEP"]
         self.steps.unlink()
         rerun = self.lane("promote", tip, "--install", "--wait", "0")
-        self.assertIn(f"resuming promote of {tip[:10]} from step:check-installed", rerun)
+        self.assertIn(f"resuming promote of {tip[:10]} from install:check-installed", rerun)
         self.assertIn(f"Installed {tip[:10]}", rerun)
         self.assertEqual([row[0].split()[0] for row in self.ran()], ["check-installed"],
                          "step 1 (install) must not re-execute on rerun")
         finished = json.loads(record_path.read_text())
         self.assertEqual(finished["status"], "completed")
-        self.assertEqual(finished["steps"]["step:install"]["status"], "ok")
-        self.assertEqual(finished["steps"]["step:check-installed"]["status"], "ok")
-        self.assertEqual(finished["steps"]["step:check-installed"]["exit"], 0)
+        self.assertEqual(finished["steps"]["install:install"]["status"], "ok")
+        self.assertEqual(finished["steps"]["install:check-installed"]["status"], "ok")
+        self.assertEqual(finished["steps"]["install:check-installed"]["exit"], 0)
 
     def test_install_and_deploy_need_the_push_and_deploy_needs_the_install(self):
         tip = self.landed("a", {"lib/extra.txt": "a\n"})
