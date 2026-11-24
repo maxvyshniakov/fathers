@@ -33,11 +33,6 @@ state location; it is not a distributed scheduler or a sandbox.
 
 ## Dashboard
 
-<picture>
-  <source media="(prefers-color-scheme: light)" srcset="assets/dashboard-light.webp">
-  <img alt="Godfather showing Slotfather's queue: navigating running and waiting requests" src="assets/dashboard.webp">
-</picture>
-
 The live dashboard is [Godfather](../godfather), which reads Slotfather through its
 [JSON contracts](docs/api.md#dashboard-contracts). Install it beside Slotfather; `slotfather` in a terminal (or
 `slotfather dashboard ARGS`) then runs `godfather ARGS`. [More](docs/dashboard.md).

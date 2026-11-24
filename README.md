@@ -3,6 +3,11 @@
 Four small command-line tools for a development machine shared by several terminals, projects and coding agents.
 Each is a separate package with its own version, changelog, documentation and tests, and installs on its own.
 
+<picture>
+  <source media="(prefers-color-scheme: light)" srcset="assets/dashboard-light.webp">
+  <img alt="Godfather: unified terminal dashboard for Slotfather, Lanefather and Spawnfather" src="assets/dashboard.webp">
+</picture>
+
 | Package | What it does |
 | --- | --- |
 | [slotfather](slotfather) | One queue for expensive work: builds, tests and agents request machine capacity (slots) before starting. |

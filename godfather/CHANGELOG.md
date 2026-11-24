@@ -123,6 +123,10 @@ Versions and release rules: [README.md](README.md#versions).
 
 ### Changed
 
+- README screenshots and animations moved to root `assets/` and are now captured via external `screen-kit`
+  (`tools/screen-kit.config.mjs`), removing the in-repo `tools/raster.py`, `tools/compare_media.py`, bundled fonts
+  and `pillow` dev dependency.
+
 - Removed the tool summary strip from SLOTS' bottom border so the frame stays clean. Moved the `1 2 3 pages` hint
   to the front of the footer controls and underlined the active page's key (`1`, `2`, or `3`).
 

@@ -6,14 +6,14 @@ One terminal dashboard for the tools that share a development machine:
 processes and resources agents spawn).
 
 <picture>
-  <source media="(prefers-color-scheme: light)" srcset="assets/dashboard-light.webp">
-  <img alt="Godfather: Slotfather's dashboard, navigating running and waiting requests" src="assets/dashboard.webp">
+  <source media="(prefers-color-scheme: light)" srcset="../assets/dashboard-light.webp">
+  <img alt="Godfather: unified terminal dashboard for Slotfather, Lanefather and Spawnfather" src="../assets/dashboard.webp">
 </picture>
 
 **Status: 0.1.0, with the next release's work on `main`** ([SPEC.md, Status](SPEC.md#status) item by item,
 [CHANGELOG.md](CHANGELOG.md) in full). The overview is Slotfather's dashboard as it moved here: SLOTS, QUEUE,
-DETAILS, EVENTS and MACHINE. SLOTS' bottom border sums up the other tools, `2 lanes 3 active · 2 reviews` and
-`3 spawns 7 · 1 orphan`; `2` and `3` (or a click on a summary) open the Lanes and Spawns pages, each a table, its
+DETAILS, EVENTS and MACHINE. When Lanefather or Spawnfather is present, the footer leads with `1 2 3 pages` (active
+page underlined); `2` and `3` (or clicking a digit) open the Lanes and Spawns pages, each a table, its
 details and its tool's events. EVENTS shows one tool's log at a time, its title the switch (`❮ SLOTS LOG ❯`: ← →, `f`
 or a click), one row per Slotfather run with trends as marks, its rows selectable into DETAILS, `/` to filter.
 Enter, `a` or a right-click on a row offers the actions its tool advertises (reprioritize, ask to yield, reap,
@@ -73,15 +73,12 @@ the same by `tests/test_events.py`), because an installed command cannot import 
 python3 -m unittest discover -s tests -t tests     # unit, golden, fixture and live PTY tests
 python3 tools/check.py                              # Ruff and strict Pyright against tools/type-baseline.json
 python3 tools/goldens.py                            # rewrite tests/goldens/ after a deliberate visible change
-python3 tools/dashboard-demo.py                     # the README scene, live; --screenshot / --animation: media
-python3 tools/raster.py --goldens OUTDIR            # every golden screen as a PNG, for review
-python3 tools/compare_media.py OLD.png NEW.png OUT.png  # cell-by-cell screenshot diff, side by side
+python3 tools/dashboard-demo.py                     # the README scene, live
+screen-kit capture --config tools/screen-kit.config.mjs --out ../assets  # regenerate README screenshots & animations
 ```
 
-Pictures come from `tools/raster.py` (Pillow, in requirements-dev.txt), with no terminal or browser: it draws the
-colour text Godfather prints, box drawing and blocks as geometry snapped to the cell and emoji from the system's
-colour emoji font, the same pixels for the same cells. A live screen:
-`godfather --once --color --width 100 --height 40 | python3 tools/raster.py - screen.png`.
+README media (dark Seti and light Pro Light stills and animations in `../assets/`) is captured from the real terminal
+dashboard through [screen-kit](https://github.com/maxvyshniakov/screen-kit) using `tools/screen-kit.config.mjs`.
 
 `GODFATHER_FIXTURES=DIR` replaces every tool call with recorded replies (`tests/fixtures/scene/` is the README
 scene) and records writes instead of making them.

@@ -57,8 +57,8 @@ The installed commands use only Python's standard library (3.11+: each package's
 
 ## Browser and visual
 
-- No browser checks. Godfather's screens are text goldens (`godfather/tests/goldens/`) and pictures from
-  `godfather/tools/raster.py` ([Godfather's README](../../godfather/README.md#develop)).
+- No browser checks. Godfather's screens are text goldens (`godfather/tests/goldens/`) and README media captured via
+  `screen-kit` using `godfather/tools/screen-kit.config.mjs` ([Godfather's README](../../godfather/README.md#develop)).
 
 ## Pins
 

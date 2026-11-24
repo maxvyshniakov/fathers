@@ -1,6 +1,6 @@
 # Checks
 
-The installed command uses only Python's standard library (3.11+). Ruff, Pyright and Pillow (pictures only) are
+The installed command uses only Python's standard library (3.11+). Ruff and Pyright are
 development tools, pinned in `requirements-dev.txt`.
 
 ## Gate
@@ -23,8 +23,8 @@ module table and Status.
 - `tests/goldens/` holds every `--once` screen as text and a curated palette-representative subset as colour escapes
   in Seti and Pro Light. After a deliberate visible change, `python3 tools/goldens.py` rewrites them: read every diff
   it makes before committing it.
-- `python3 tools/raster.py --goldens OUTDIR` draws the colour goldens as PNGs; `tools/compare_media.py` diffs two
-  pictures.
+- README screenshots and animations (`../assets/dashboard*.webp`, `.png`) are generated via external
+  `screen-kit capture --config tools/screen-kit.config.mjs --out ../assets`.
 
 ## Live tests
 

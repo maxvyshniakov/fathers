@@ -7,9 +7,7 @@
   ],
   "exclude": [
     "**/__pycache__",
-    "assets",
-    ".venv",
-    "tools/compare_media.py"
+    ".venv"
   ],
   "extraPaths": [
     "src",

@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Slotfather's recorded navigation scene in Godfather's real interactive dashboard, for the README media.
+"""Slotfather's recorded navigation scene in Godfather's real interactive dashboard, for live demos and screen-kit.
 
     python3 tools/dashboard-demo.py [--once] [--width N] [--height N]    the scene, live or one frame
-    python3 tools/dashboard-demo.py --screenshot | --animation           README media through tools/raster.py
+    screen-kit capture --config godfather/tools/screen-kit.config.mjs --out assets
 
 The scene and its recordings are Slotfather's (tools/fixtures/README.md says where they come from), moved with the
-dashboard; tools/raster.py draws the frames this file makes with the real reducer and renderer. No tool is run: the model
-goes straight to the overview, as the Slotfather adapter would decode it from `status --json --full`.
+dashboard. With GODFATHER_FIXTURES set (e.g. tests/fixtures/procs), Lanefather and Spawnfather snapshots, events and
+pages come from those recorded fixtures too, while the clock and MACHINE chart history stay frozen to the scene.
 """
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ import sys
 import time
 import types
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Union, cast
+from typing import TYPE_CHECKING, Any, Callable, cast
 from unittest import mock
 
 if TYPE_CHECKING:
@@ -114,7 +114,14 @@ def load_scene(advance: bool = False, elapsed: Callable[[], float] | None = None
 
     class Scene(app.Screen):
         def load(self, _: Any = None) -> tuple[Dashboard | None, str | None]:
-            return cast("Dashboard", sample()), None
+            fresh = sample()
+            if os.environ.get("GODFATHER_FIXTURES"):
+                live_model, _ = super().load()
+                if live_model:
+                    fresh["events"] = live_model["events"]
+                    if "sources" in live_model:
+                        fresh["sources"] = live_model["sources"]
+            return cast("Dashboard", fresh), None
 
         def notice(self) -> list[str] | None:
             return None
@@ -178,117 +185,12 @@ def scene_news(app: Any) -> tuple[Any, dict[str, str]]:
     return found, read
 
 
-# The README animation (fathers#114: drawn by tools/raster.py, no terminal): (seconds, keys or a wheel scroll down over
-# DETAILS as (column, row, notches)), at four frames a second for 11.5 seconds, as the screen-kit recipe it replaces drove it.
-Step = tuple[float, Union[str, tuple[int, int, int]]]
-NAVIGATION: list[Step] = [
-    (.4, "j"), (3.7, "j"), (4, "j"), (4.3, "j"), (6.8, (149, 11, 4)), (8.3, "g"), (9, "j"), (9.4, (149, 11, 6)),
-    (10.4, "g")]
-MEDIA = (176, 50)  # columns and rows of the README media
-FPS, DURATION, STILL = 4, 11.5, 1.0  # the animation's rate and length; the still is the screen one second in
-
-
-def frames(steps: list[Step], times: list[float], width: int, height: int, palette: Any) -> list[str]:
-    """The live dashboard's screens at `times` (seconds) with `steps` pressed, in colour: the real reducer and
-    renderer over the scene, its clock moved by hand and every load done at once, so each run gives the same
-    frames."""
-    from godfather import reducer as _reducer
-    from godfather import state as _state
-    from godfather.tui import Canvas
-    from godfather.views import overview
-
-    moment = [0.0]
-    app, _ = load_scene(advance=True, elapsed=lambda: moment[0])
-    screen = app.Scene()
-    current = _state.AppState(interval=1)
-    fetched = -1.0
-
-    def model_loaded() -> Any:
-        model, problem = screen.load()
-        return _state.ModelLoaded(model, palette.holders(), problem)
-
-    def send(event: Any) -> None:
-        nonlocal current
-        current, effects = _reducer.reduce(current, event, moment[0])
-        for effect in effects:
-            if effect.kind == "load-details":
-                lane, cwd = app.load_details(effect.item)
-                send(_state.DetailsLoaded(effect.key, lane, cwd, None))
-            elif effect.kind == "load-news":
-                send(_state.NewsLoaded(app.load_news()))
-            elif effect.kind == "load-model":
-                send(model_loaded())
-
-    def draw() -> str:
-        canvas = Canvas(width, height, palette)
-        overview.render(canvas, current, moment[0], screen.notice())
-        send(_state.Drawn(_state.Frame(canvas.width, canvas.height, canvas.tables, canvas.version_at,
-                                       tuple(canvas.hint_hits), canvas.order, tuple(canvas.filter_hits))))
-        return canvas.render(True)
-
-    send(_state.NewsLoaded(app.load_news()))
-    pending = sorted(steps, key=lambda step: step[0])
-    found: list[str] = []
-    for at in times:
-        moment[0] = at
-        if at - fetched >= current.interval:
-            send(model_loaded())
-            fetched = at
-        draw()  # the frame the keys land on, as on screen
-        while pending and pending[0][0] <= at:
-            _, keys = pending.pop(0)
-            if isinstance(keys, tuple):
-                column, row, notches = keys
-                for _ in range(notches):
-                    send(_state.Mouse(65, column, row, True))
-            else:
-                send(_state.Key(keys))
-        send(_state.Tick(app.scene_clock()))
-        found.append(draw())
-    return found
-
-
-def write_media(animation: bool) -> None:
-    """README media in both of the owner's themes, through tools/raster.py: the still (assets/dashboard.png) or the
-    navigation animation (assets/dashboard.webp)."""
-    import importlib.util
-
-    spec = importlib.util.spec_from_file_location("godfather_raster", ROOT / "tools/raster.py")
-    assert spec and spec.loader
-    raster = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(raster)
-    from godfather import theme
-
-    os.environ["TZ"] = "Etc/GMT-2"
-    time.tzset()
-    for variant, name in (("", "seti"), ("-light", "prolight")):
-        palette = raster.THEMES[name]
-        os.environ.update(GODFATHER_TERMINAL_BG="#%02x%02x%02x" % palette.background,
-                          GODFATHER_TERMINAL_FG="#%02x%02x%02x" % palette.foreground, GODFATHER_THEME="auto")
-        drawn = theme.from_environment()  # the theme frames() draws in
-        draw = raster.Raster(*MEDIA, palette)
-        if animation:
-            times = [step / FPS for step in range(round(DURATION * FPS))]
-            target = ROOT / f"assets/dashboard{variant}.webp"
-            raster.save_webp([draw.frame(text) for text in frames(NAVIGATION, times, *MEDIA, drawn)], target, FPS)
-        else:
-            target = ROOT / f"assets/dashboard{variant}.png"
-            raster.save_png(draw.frame(frames([], [STILL], *MEDIA, drawn)[0]), target)
-        print(target)
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    export = parser.add_mutually_exclusive_group()
-    export.add_argument("--screenshot", action="store_true")
-    export.add_argument("--animation", action="store_true")
     parser.add_argument("--once", action="store_true")
     parser.add_argument("--width", type=int, default=156)
     parser.add_argument("--height", type=int, default=43)
     args = parser.parse_args()
-    if args.screenshot or args.animation:
-        write_media(args.animation)
-        return
     os.environ["TZ"] = "Etc/GMT-2"
     time.tzset()
     app, model = load_scene(advance=not args.once)
