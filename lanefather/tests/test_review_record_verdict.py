@@ -119,6 +119,8 @@ class RecordVerdictTests(LaneCase):
                   "--force-reason", "the lane moved; the reviewer read the new tip")
         self.assertEqual(self.review("p")["tip"], self.git(worktree, "rev-parse", "HEAD"))
         self.assertEqual(self.show("p")["review"]["status"], "finished")
+        overrides = [e for e in self.events_of("override") if e.get("details", {}).get("command") == "review"]
+        self.assertTrue(overrides, "replacing a stale recorded review with --force-reason must log an override event")
         self.git(self.repo, "branch", "dev")
         self.lane("land", "p")
         self.assertEqual(self.record("p")["status"], "done")
@@ -156,8 +158,10 @@ class RecordVerdictTests(LaneCase):
             (("--record", "--reviewer", "opus"), "requires --verdict"),
             (("--record", "--verdict", "approve"), "requires --reviewer"),
             (("--record", "--reviewer", "../evil", "--verdict", "approve"), "external reviewer's name"),
-            (("--record", "--reviewer", "opus", "--verdict", "approve", "--ref", "a\nb"), "--ref: give one line"),
+            (("--record", "--reviewer", "opus", "--verdict", "approve", "--ref", "a\nb"), "--ref: give one printable line"),
+            (("--record", "--reviewer", "opus", "--verdict", "approve", "--ref", "x\x1b[31m\u2028y"), "--ref: give one printable line"),
             (("--record", "--reviewer", "opus", "--verdict", "approve", "--note", "  "), "--note: give a non-blank"),
+            (("--record", "--reviewer", "opus", "--verdict", "approve", "--note", "bad\x1btitle"), "--note: first line must contain only printable"),
         ]
         for argv, expected in cases:
             with self.subTest(argv=argv):
@@ -165,3 +169,22 @@ class RecordVerdictTests(LaneCase):
         self.assertFalse((self.state / "v.review.json").exists())
         self.assertIn("invalid choice", self.lane("review", "v", "--record", "--reviewer", "opus",
                                                   "--verdict", "lgtm", ok=False))
+
+    def test_double_panel_merge_preserves_second_reviewers_verdict_and_ref(self) -> None:
+        """Merging a second recorded reviewer into a double-class panel must keep per-member verdict/ref and let
+        changes_requested win at the top level instead of keeping the first reviewer's approve."""
+        self.git(self.repo, "branch", "dev")
+        worktree = self.created("d", "lib/**", "--review", "double")
+        self.commit(worktree, {"lib/api.txt": "foo\ndouble\n"})
+        self.lane("check", "d")
+        self.lane("land", "d")
+        self.lane("review", "d", "--record", "--reviewer", "ext-a", "--verdict", "approve", "--ref", "https://x/1")
+        self.lane("review", "d", "--record", "--reviewer", "ext-b", "--verdict", "changes_requested",
+                  "--note", "fix it", "--ref", "https://x/2")
+        rev = self.review("d")
+        self.assertEqual(rev["verdict"], "changes_requested")
+        self.assertEqual(rev["ref"], "https://x/1, https://x/2")
+        self.assertEqual([(m["reviewer"], m["verdict"], m["ref"]) for m in rev["panel"]], [
+            ("ext-a", "approve", "https://x/1"),
+            ("ext-b", "changes_requested", "https://x/2"),
+        ])

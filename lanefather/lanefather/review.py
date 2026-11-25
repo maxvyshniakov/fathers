@@ -1064,11 +1064,13 @@ def recorded_verdict(args: Any) -> RecordedVerdict:
     if verdict is not None and verdict not in RECORD_VERDICTS:
         raise LaneError(f"--verdict {verdict!r}: use {' or '.join(RECORD_VERDICTS)}")
     ref = raw_ref.strip() if raw_ref is not None else None
-    if ref is not None and (not ref or len(ref) > MAX_REF or any(c in ref for c in "\r\n\t")):
-        raise LaneError(f"--ref: give one line of at most {MAX_REF} characters (a URL or thread link)")
+    if ref is not None and (not ref or len(ref) > MAX_REF or any(not c.isprintable() for c in ref)):
+        raise LaneError(f"--ref: give one printable line of at most {MAX_REF} characters (a URL or thread link)")
     note = raw_note.strip() if raw_note is not None else None
     if note is not None and (not note or len(note) > MAX_NOTE):
         raise LaneError(f"--note: give a non-blank summary of at most {MAX_NOTE} characters")
+    if note is not None and any(not c.isprintable() for c in note.splitlines()[0]):
+        raise LaneError("--note: first line must contain only printable characters")
     record_file: Any = getattr(args, "record", None)
     if record_file is True and verdict is None:
         raise LaneError("--record without a report FILE requires --verdict approve|changes_requested")
@@ -1467,7 +1469,11 @@ def record_lane_review(args: Any, store: state.Store) -> int:
     tip, base = review_range(record)
     if is_pre_land and tip == base:
         raise LaneError(f"review refused: lane {args.id} has no commits beyond {record['base']}")
-    if (already_finished or incomplete_panel or isinstance(verdict, review_record.PartialEvidence)) and not merge_panel:
+    if (
+        already_finished
+        or incomplete_panel
+        or isinstance(verdict, (review_record.PartialEvidence, review_record.Stale))
+    ) and not merge_panel:
         _audit_review_override(store, record, args.force_reason)
     tree = git(main, "rev-parse", tip + "^{tree}")
     fields = _lane_review_fields(record, **({"pre_land": True} if is_pre_land else {}))

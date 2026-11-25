@@ -13,7 +13,8 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
   tip and tree like a review Lanefather ran, so `land`, `promote` and `done` take it without `--force-reason` and a
   later commit makes it stale. `changes_requested` becomes one P1 finding to mark; `--verdict` with a report file is
   checked against its findings. `show` and `status` name a recorded review's verdict, reviewer and ref
-  (`review.recorded` in JSON).
+  (`review.recorded` in JSON). External `--reviewer` names outside the models file are restricted to letters, digits
+  and `. _ + -` (at most 64 characters) for filename safety.
 - Historical review evidence recovery without rerunning completed reviews (fathers#179):
   - `lanefather review <id> --recover [--source URL...] [--target REF] [--reviewed-range BASE..TIP]` fetches historical
     review dispositions from explicit GitHub issue/PR comment URLs (or auto-discovers them from linked tickets), verifies

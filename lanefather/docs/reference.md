@@ -223,7 +223,7 @@ landed one), so `land`, `promote`, `done`, `findings`, `show`, `status` and `lis
   until it is marked fixed or rejected, like any finding. Lanefather writes the report it records to
   `reviews/<id>.md`.
 - `--verdict` with `FILE` is checked against it: `approve` refuses a report with blocking findings
-  (`[review] blocks`, and P0), `changes_requested` one with none.
+  (`[review] blocks`, and P0), `changes_requested` one with no findings.
 - `--ref URL` (one line, at most 500 characters) names where the review lives — a PR or issue comment, or a thread
   link — and `--note TEXT` keeps the reviewer's summary.
 - `NAME` is a reviewer of the models file (its alias, provider or model id), whose model, effort and CLI are recorded,
@@ -664,7 +664,7 @@ the verify report (`jobs`, `slots`, or `granted_jobs`) in the receipt (`jobs`, `
 history (`history.py`). The post-merge smoke (`land`, `recheck`, `smoke --rerun`) does the same with a maximum of 3
 and a minimum of 1 (fathers#255), so a smoke launched while the machine is busy still takes the slots that are free
 when its lease is granted instead of the one slot `advise` named at launch; its `<id>.post-merge.json` records
-`jobs_decision.advised_jobs`, `min_jobs`, `max_jobs` and `granted`. When Slotfather does not advertise `slot-range`,
+`jobs_decision.advised_jobs` (when lower than the maximum), `min_jobs`, `max_jobs` and `granted`. When Slotfather does not advertise `slot-range`,
 the command arguments and receipts stay unchanged.
 
 During any quiet verify run (no complete output line for `LANEFATHER_VERIFY_HEARTBEAT` seconds, default `30`, `0` or
