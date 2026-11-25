@@ -790,7 +790,7 @@ class AdviceTests(SlotCase):
     """`slotfather advise`: a job count from the free slots and the load of processes that take no lease. The
     load is the current one, the lower of load1 and load5: load15 still holds work whose leases ended minutes ago."""
 
-    def advise(self, *args, load="0.0"):
+    def advise(self, *args: str, load: str = "0.0"):
         result = self.tool("advise", *args, SLOTFATHER_CORES="12", SLOTFATHER_LOADAVG=load)
         self.assertEqual(0, result.returncode, result.stderr)
         return json.loads(result.stdout)

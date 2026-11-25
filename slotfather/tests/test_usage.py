@@ -152,8 +152,12 @@ class TreeUsageTests(unittest.TestCase):
         usage, asked = self.usage(marked=lambda pids: {p for p in pids if p == 200})
         answers: list[bool | None] = [None, True]
         table = {1182: row(1, 0.0, born=-3600), 100: row(HOLDER, 1.0), 200: row(1182, 2.0, born=5)}
+
+        def fake_systemd_user(_pid: int) -> bool | None:
+            return answers.pop(0)
+
         with mock.patch.object(sf_platform, "linux", return_value=True), \
-                mock.patch.object(sf_platform, "is_systemd_user", side_effect=lambda _pid: answers.pop(0)):
+                mock.patch.object(sf_platform, "is_systemd_user", side_effect=fake_systemd_user):
             usage.observe(SINCE + 10, table)
             usage.observe(SINCE + 11, {**table, 200: row(1182, 3.0, born=5)})
             usage.observe(SINCE + 12, {})
