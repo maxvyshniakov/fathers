@@ -99,10 +99,13 @@ COMMANDS: dict[str, Command] = {
                     "fix-login --into .claude/worktrees/integrate"),
     "review": Command("a lane's review, its marks and its fix lane",
                       "<id> [--mark N fixed:<merge>|rejected:<reason>] [--fix-lane] [--compare] "
-                      "[--record FILE --reviewer ALIAS] [--recover [--source URL...] [--target REF] "
+                      "[--record [FILE] --reviewer ALIAS [--verdict approve|changes_requested] [--ref URL] "
+                      "[--note TEXT]] "
+                      "[--recover [--source URL...] [--target REF] "
                       "[--reviewed-range BASE..TIP]] [--reviewer ALIAS|both] [--audit] | "
                       "--overall <sha> [--since <base>] [--lanes ID,ID] [--paths GLOB... | --areas FILE | --area NAME] "
-                      "[--record FILE --reviewer ALIAS]",
+                      "[--record [FILE] --reviewer ALIAS [--verdict approve|changes_requested] "
+                      "[--ref URL] [--note TEXT]]",
                       "fix-login --mark 1 fixed:fix-login-review-fixes"),
     "findings": Command("whether a review holds a SHA, for a publish", "<sha> [--since REF] [--json]",
                         "HEAD --json"),
@@ -366,8 +369,16 @@ def parser(project: config.Config = config.DEFAULT) -> Parser:
                         "both: the configured panel, else sol and opus")
     p.add_argument("--compare", action="store_true",
                    help="each reviewer's findings side by side with their marks (fixed or rejected)")
-    p.add_argument("--record", metavar="FILE",
-                   help="record a review report written outside lanefather (requires --reviewer)")
+    p.add_argument("--record", metavar="FILE", nargs="?", const=True,
+                   help="record a review performed outside lanefather (requires --reviewer): its report FILE, or "
+                        "with --verdict alone, the verdict of a delegated review (fathers#256)")
+    p.add_argument("--verdict", choices=review.RECORD_VERDICTS,
+                   help="with --record: approve (no findings) or changes_requested (one blocking finding, --note); "
+                        "with a FILE, checked against its findings")
+    p.add_argument("--ref", metavar="URL",
+                   help="with --record: where the review lives (a PR comment, issue comment or thread link)")
+    p.add_argument("--note", metavar="TEXT",
+                   help="with --record: the reviewer's summary; required for --verdict changes_requested")
     p.add_argument("--recover", action="store_true",
                    help="recover historical review evidence from GitHub issue comments without rerunning the review")
     p.add_argument("--source", action="append", metavar="URL",

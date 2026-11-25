@@ -985,7 +985,12 @@ def run_smoke(
         checkout, selection, label, "post-merge", decision["jobs"],
         store=store, meta=lane_meta(store, record), ticket=lane_ticket(record), run_type=run_type,
         banner=f"lane: running {what} in {checkout} (log {{log}}); queue: slotfather status",
+        min_jobs=decision.get("min_jobs"),
     ).execute()
+    if outcome.granted_jobs is not None:
+        # A ranged lease (fathers#255) records what it was granted, as a lane check's receipt does.
+        decision = {**decision, "jobs": outcome.granted_jobs, "max_jobs": decision["jobs"],
+                    "granted": outcome.granted_jobs}
     results, check_results = suite_outcomes(checkout, suites, selected, outcome, project=store.project)
     status = "green" if all(r["status"] == "passed" for r in results) else "red"
     return decision, results, check_results, outcome.triage, outcome.stamp, status

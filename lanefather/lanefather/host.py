@@ -220,8 +220,11 @@ def jobs_decision(info: dict[str, Any], maximum: int, exclusive: bool = False) -
 
 
 def post_merge_jobs(info: dict[str, Any]) -> dict[str, Any]:
-    """The post-merge smoke runs beside the lanes' checks: at most 3 jobs and never more than the free slots."""
-    return jobs_decision(info, SMOKE_MAX_JOBS)
+    """The post-merge smoke runs beside the lanes' checks: at most SMOKE_MAX_JOBS. Sized like a lane check
+    (fathers#255): with Slotfather's `slot-range`, it queues for `1-SMOKE_MAX_JOBS` and takes whatever is free when
+    the lease is granted, rather than the advice of a busy moment at launch pinning it to one slot for its whole
+    run; without it, the advice applies as before."""
+    return ranged_jobs(info, SMOKE_MAX_JOBS)
 
 
 def gate_jobs(info: dict[str, Any]) -> dict[str, Any]:
@@ -231,10 +234,15 @@ def gate_jobs(info: dict[str, Any]) -> dict[str, Any]:
 
 def check_jobs(info: dict[str, Any], minimum: int = 1, min_for: list[str] | None = None) -> dict[str, Any]:
     """A lane check shares the machine like the batch gate: at most CHECK_MAX_JOBS (or `minimum` when a selected
-    step declares a higher slot floor, fathers#173). When Slotfather advertises `slot-range` (fathers#43), pass the
-    maximum and let the verifier queue for `minimum-maximum` so the grant takes whatever is free then; otherwise
-    size from `advise` and honour `minimum`."""
-    maximum = max(CHECK_MAX_JOBS, minimum)
+    step declares a higher slot floor, fathers#173)."""
+    return ranged_jobs(info, max(CHECK_MAX_JOBS, minimum), minimum, min_for)
+
+
+def ranged_jobs(info: dict[str, Any], maximum: int, minimum: int = 1,
+                min_for: list[str] | None = None) -> dict[str, Any]:
+    """A run sized at grant time: when Slotfather advertises `slot-range` (fathers#43), pass the maximum and let the
+    verifier queue for `minimum-maximum` so the grant takes whatever is free then; otherwise size from `advise` and
+    honour `minimum`."""
     decision = jobs_decision(info, maximum)
     raw_total = decision.get("slots") if type(decision.get("slots")) is int else decision.get("total")
     total_slots = raw_total if type(raw_total) is int and raw_total > 0 else None

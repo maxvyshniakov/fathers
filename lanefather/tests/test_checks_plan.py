@@ -512,6 +512,47 @@ class SlotRangeWorkerTests(LaneCase):
             wrapped = slots.wrap(2, "lane-a", ["echo", "hi"], min_count=1)
         self.assertIn("1-2", wrapped)
 
+    def test_post_merge_smoke_requests_a_range_and_takes_the_slots_free_at_grant(self):
+        """fathers#255: a smoke sized by `advise` while the machine was busy asked for one slot and ran its suites one
+        after another for half an hour once the machine went idle. With `slot-range` it asks for 1-3, as a lane check
+        asks for 1-2, and the receipt records the grant."""
+        sf_log_path = self.state / "slotfather.log"
+        self.env.update(FAKE_SLOTFATHER_RANGE="1", FAKE_SLOTFATHER_TOTAL="4", FAKE_SLOTFATHER_HELD="3",
+                        FAKE_SLOTFATHER_GRANTED="3", FAKE_SLOTFATHER_LOG=str(sf_log_path))
+        worktree = self.created("a", "lib/**")
+        self.commit(worktree, {"lib/api.txt": "foo\nbaz\n"})
+        self.lane("check", "a")
+        self.integration_moves()
+        self.lane("land", "a")
+
+        post = json.loads((self.state / "a.post-merge.json").read_text())
+        decision = post["jobs_decision"]
+        # advise saw three slots held and said one; the request still spans 1-3 and the grant took three.
+        self.assertEqual((decision["advised_jobs"], decision["min_jobs"], decision["max_jobs"], decision["granted"]),
+                         (1, 1, 3, 3))
+        self.assertTrue(decision["slot_range"])
+        self.assertEqual(post["jobs"], 3)
+        self.assertEqual(self.leases()[-1], "post-merge-a --jobs 3 held 3")
+        runs = [json.loads(line) for line in sf_log_path.read_text().splitlines() if line]
+        smoke_runs = [entry["args"] for entry in runs
+                      if entry["command"] == "run" and "post-merge-a" in entry["args"]]
+        self.assertTrue(smoke_runs)
+        self.assertEqual(smoke_runs[-1][smoke_runs[-1].index("-n") + 1], "1-3")
+
+    def test_post_merge_smoke_without_slot_range_keeps_the_advised_count(self):
+        """Without `slot-range` the smoke keeps the advice it launched with (#599), and its receipt names no grant."""
+        self.env.pop("FAKE_SLOTFATHER_RANGE", None)
+        self.env.update(FAKE_SLOTFATHER_TOTAL="4", FAKE_SLOTFATHER_HELD="3")
+        worktree = self.created("a", "lib/**")
+        self.commit(worktree, {"lib/api.txt": "foo\nbaz\n"})
+        self.lane("check", "a")
+        self.integration_moves()
+        self.lane("land", "a")
+        post = json.loads((self.state / "a.post-merge.json").read_text())
+        self.assertEqual(post["jobs"], 1)
+        self.assertFalse({"slot_range", "min_jobs", "granted"} & set(post["jobs_decision"]))
+        self.assertEqual(self.leases()[-1], "post-merge-a --jobs 1")
+
     def test_without_slot_range_preserves_exact_argv_receipt_and_history(self):
         from lanefather import slots
 

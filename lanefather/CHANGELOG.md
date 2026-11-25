@@ -8,6 +8,13 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
 
 ### Added
 
+- `lanefather review <id> --record --reviewer NAME --verdict approve|changes_requested [--ref URL] [--note TEXT]`
+  records the verdict of a review delegated outside Lanefather (fathers#256) without a report file, bound to the lane's
+  tip and tree like a review Lanefather ran, so `land`, `promote` and `done` take it without `--force-reason` and a
+  later commit makes it stale. `changes_requested` becomes one P1 finding to mark; `--verdict` with a report file is
+  checked against its findings. `show` and `status` name a recorded review's verdict, reviewer and ref
+  (`review.recorded` in JSON). External `--reviewer` names outside the models file are restricted to letters, digits
+  and `. _ + -` (at most 64 characters) for filename safety.
 - Historical review evidence recovery without rerunning completed reviews (fathers#179):
   - `lanefather review <id> --recover [--source URL...] [--target REF] [--reviewed-range BASE..TIP]` fetches historical
     review dispositions from explicit GitHub issue/PR comment URLs (or auto-discovers them from linked tickets), verifies
@@ -468,6 +475,9 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
 
 ### Fixed
 
+- The post-merge smoke no longer stays on the one slot `slotfather advise` named at launch on a busy machine
+  (fathers#255): with Slotfather's `slot-range` it requests `1-3` slots like a lane check requests `1-2`, takes what is
+  free when the lease is granted, and records the grant in `<id>.post-merge.json` (`jobs`, `jobs_decision.granted`).
 - `hooks/reference-transaction` no longer refuses Git's automatic `pack-refs` (packing loose `refs/heads/main` /
   `refs/heads/dev` into `packed-refs` at their current OID and pruning the matching loose files) during agent
   sessions, while continuing to refuse creating, moving, or deleting protected branches—including `git branch -D` and

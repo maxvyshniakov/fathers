@@ -20,6 +20,16 @@ def git_read(root: str, *args: str) -> str:
         return ''
 
 
+def recorded_line(recorded: dict[str, Any]) -> str:
+    """One line for a review recorded from outside lanefather (fathers#256): its verdict, reviewer, commit and ref."""
+    text = f"{recorded.get('verdict') or 'report'} by {recorded.get('reviewer') or 'external'}"
+    if recorded.get('tip'):
+        text += f" at {str(recorded['tip'])[:10]}"
+    if recorded.get('ref'):
+        text += f" ({recorded['ref']})"
+    return text
+
+
 def summary(lane_id: str, directory: Path) -> dict[str, Any]:
     """Read records without creating a state directory, taking locks or running project hooks."""
     if not state.ID.fullmatch(lane_id):
@@ -79,6 +89,9 @@ def show(
             hint = cast(dict[str, Any], review_block).get('recovery_hint')
             if isinstance(hint, str) and hint:
                 print(f'review recovery: {hint}')
+            recorded: Any = cast(dict[str, Any], review_block).get('recorded')
+            if isinstance(recorded, dict):
+                print(f'review recorded: {recorded_line(cast(dict[str, Any], recorded))}')
         if result['gone']:
             print(f'gone: {admission.GONE}; {cfg.command} drop {result["id"]} frees it')
     return 0

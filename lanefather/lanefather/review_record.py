@@ -1738,7 +1738,7 @@ class ReviewRecord:
 
         def _panel_entry_from(data: dict[str, Any], numbers: list[int]) -> dict[str, Any]:
             rev_name = data.get("reviewer") if isinstance(data.get("reviewer"), str) else "external"
-            return {
+            entry: dict[str, Any] = {
                 "member": rev_name,
                 "reviewer": rev_name,
                 "model": data.get("model"),
@@ -1751,6 +1751,10 @@ class ReviewRecord:
                 "output": data.get("output"),
                 "numbers": numbers,
             }
+            for key in ("verdict", "ref", "note"):
+                if data.get(key) is not None:
+                    entry[key] = data[key]
+            return entry
 
         def _build(existing: Receipt | None) -> Receipt:
             if (
@@ -1788,6 +1792,15 @@ class ReviewRecord:
                 panel.append(_panel_entry_from(payload, new_nums))
                 reviewers = [str(e.get("reviewer")) for e in panel if isinstance(e.get("reviewer"), str)]
                 models = [str(e.get("model")) for e in panel if isinstance(e.get("model"), str)]
+                verdicts = [str(e.get("verdict")) for e in panel if isinstance(e.get("verdict"), str)]
+                merged_verdict: str | None = (
+                    "changes_requested" if "changes_requested" in verdicts
+                    else "approve" if "approve" in verdicts
+                    else None
+                )
+                refs = [str(e.get("ref")) for e in panel if isinstance(e.get("ref"), str) and e.get("ref")]
+                merged_ref = ", ".join(dict.fromkeys(refs)) or None
+                merged_note = payload.get("note") if payload.get("note") is not None else existing.get("note")
                 merged: Receipt = {
                     **existing,
                     "reviewer": "+".join(dict.fromkeys(reviewers)),
@@ -1798,6 +1811,12 @@ class ReviewRecord:
                     "recorded": True,
                     "finished": finished or journal.now(),
                 }
+                if merged_verdict is not None:
+                    merged["verdict"] = merged_verdict
+                if merged_ref is not None:
+                    merged["ref"] = merged_ref
+                if merged_note is not None:
+                    merged["note"] = merged_note
                 return merged
             merged = {
                 "version": 1,

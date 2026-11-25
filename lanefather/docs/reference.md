@@ -16,9 +16,9 @@ lanefather adopt <id> <worktree> <branch> register the worktree an agent created
 lanefather check <id> [--rerun] [--slots N] [--json]   the checks the plan selects for the lane's diff -> receipt
 lanefather wait <id> --for registered|landed|done [--timeout S] [--json]   block until the lane is there
 lanefather land <id> [--into WORKTREE] [--keep] [--partial [--remaining TEXT]] [--slots N] [--json]
-lanefather review <id> [--mark N fixed:<merge>|rejected:<reason>] [--fix-lane] [--record FILE --reviewer ALIAS]
+lanefather review <id> [--mark N fixed:<merge>|rejected:<reason>] [--fix-lane] [--record [FILE] --reviewer ALIAS [--verdict approve|changes_requested] [--ref URL] [--note TEXT]]
                  [--recover [--source URL...] [--target REF] [--reviewed-range BASE..TIP]] [--audit]
-lanefather review --overall <sha> [--since <base>] [--lanes ID,ID] [--paths GLOB... | --areas FILE | --area NAME] [--record FILE --reviewer ALIAS] [--mark N ...]
+lanefather review --overall <sha> [--since <base>] [--lanes ID,ID] [--paths GLOB... | --areas FILE | --area NAME] [--record [FILE] --reviewer ALIAS [--verdict ...]] [--mark N ...]
 lanefather done <id> [--json]
 lanefather done --finished [--dry-run] [--json]   done on every finished lane of the registered projects
 lanefather drop <id> [<id> ...]           remove an active lane that adds nothing to its base
@@ -207,6 +207,31 @@ review verdict is `Stale(reviewed_tip, landed_tip)`:
 - A parent lane with a `Stale` review is not eligible for `--fix-of` or `review --fix-lane` (nor exempt via
   `review_exemption`) until the delta review covers its post-review commits; clean integration merges after the review
   preserve eligibility.
+
+### Recording a review done elsewhere
+
+`lanefather review <id> --record [FILE] --reviewer NAME` records a finished review that ran outside Lanefather — for
+example one an orchestrator delegated with `LANEFATHER_REVIEW_START=manual` (fathers#252, fathers#256). The receipt is
+bound to the lane's current tip and tree like a review Lanefather ran (pre-land on an active lane, the landed tip on a
+landed one), so `land`, `promote`, `done`, `findings`, `show`, `status` and `list` read it the same way and need no
+`--force-reason`; a later commit makes it stale under the same rules (above), and replacing a stale one takes
+`--force-reason`, logged.
+
+- With `FILE`, the report's JSON `findings` block is parsed strictly, and its optional `tip`/`tree` must match.
+- Without `FILE`, `--verdict` is the review: `approve` records no findings; `changes_requested` records one P1 finding
+  whose title is the first line of `--note` (required) and whose detail is the note and `--ref`. It holds the gate
+  until it is marked fixed or rejected, like any finding. Lanefather writes the report it records to
+  `reviews/<id>.md`.
+- `--verdict` with `FILE` is checked against it: `approve` refuses a report with blocking findings
+  (`[review] blocks`, and P0), `changes_requested` one with no findings.
+- `--ref URL` (one line, at most 500 characters) names where the review lives — a PR or issue comment, or a thread
+  link — and `--note TEXT` keeps the reviewer's summary.
+- `NAME` is a reviewer of the models file (its alias, provider or model id), whose model, effort and CLI are recorded,
+  or any other name of letters, digits and `. _ + -` (at most 64), recorded as `cli: "external"`.
+- The receipt records `recorded: true`, `verdict`, `ref`, `note` and `source_file` (null without `FILE`), and the
+  `review.finished` ledger event carries them. `show --json` and `status --json` add
+  `review.recorded = {"reviewer", "verdict"?, "ref"?, "note"?, "source_file"?, "tip"}`, and `show` prints
+  `review recorded: <verdict> by <reviewer> at <tip> (<ref>)`.
 
 ### Recovering historical review evidence
 
@@ -636,8 +661,11 @@ When Slotfather advertises `slot-range` via `slotfather capabilities --json` (fa
 maximum `--jobs` alongside `<slot_env>_MIN_JOBS` (`1`, or the highest selected `min_slots`) so the verifier can
 request `slotfather run -n MIN-MAX` (and `slots.wrap` issues `-n MIN-MAX`), then record the granted worker count from
 the verify report (`jobs`, `slots`, or `granted_jobs`) in the receipt (`jobs`, `jobs_decision.granted`) and run
-history (`history.py`). When Slotfather does not advertise `slot-range`, the command arguments and receipts stay
-unchanged.
+history (`history.py`). The post-merge smoke (`land`, `recheck`, `smoke --rerun`) does the same with a maximum of 3
+and a minimum of 1 (fathers#255), so a smoke launched while the machine is busy still takes the slots that are free
+when its lease is granted instead of the one slot `advise` named at launch; its `<id>.post-merge.json` records
+`jobs_decision.advised_jobs` (when lower than the maximum), `min_jobs`, `max_jobs` and `granted`. When Slotfather does not advertise `slot-range`,
+the command arguments and receipts stay unchanged.
 
 During any quiet verify run (no complete output line for `LANEFATHER_VERIFY_HEARTBEAT` seconds, default `30`, `0` or
 `off` to disable), the shared verify runner emits bounded heartbeat lines naming the state (`queued` when waiting in
