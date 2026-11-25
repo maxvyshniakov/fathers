@@ -220,6 +220,27 @@ class JsonReply(unittest.TestCase):
         self.assertEqual(["stdout is not one JSON object"], self.problems("[1]"))
 
 
+class JsonlReply(unittest.TestCase):
+    def problems(self, stdout: str) -> list[str]:
+        return cliconvention.jsonl_check(tool(GOOD, "good"), cliconvention.Run(0, stdout, ""))
+
+    def test_empty_and_multi_line_objects_with_integer_v_pass(self) -> None:
+        self.assertEqual([], self.problems(""))
+        self.assertEqual([], self.problems('{"v": 1, "kind": "a"}\n{"v": 2, "kind": "b"}\n'))
+
+    def test_invalid_line_or_missing_v_fails(self) -> None:
+        self.assertIn("line 2 is not a JSON object", self.problems('{"v": 1}\nnot-json\n')[0])
+        self.assertIn("line 1 is not a JSON object", self.problems("[1]\n")[0])
+        self.assertIn("line 2 has no integer 'v'", self.problems('{"v": 1}\n{"version": 1}\n')[0])
+        self.assertIn("line 1 has no integer 'v'", self.problems('{"v": true}\n')[0])
+
+    def test_command_with_jsonl_uses_jsonl_check(self) -> None:
+        stream = cliconvention.Tool("good", tool(GOOD, "good").argv,
+                                    (cliconvention.Command("status", json=(), jsonl=True),))
+        case = next(case for case in cliconvention.cases(stream) if case.id == "status --json")
+        self.assertIs(case.check, cliconvention.jsonl_check)
+
+
 class ErrorLine(unittest.TestCase):
     def test_the_reason_must_name_the_refused_word(self) -> None:
         problems = cliconvention.error_problems("t", "t: bad input\nTry 't --help'.\n", word="--x")

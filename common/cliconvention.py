@@ -41,14 +41,16 @@ VERSION_LINE = r"\S+ v?\d+\.\d+(\.\d+)?\S*( .*)?"
 class Command:
     """One command of a tool. `json`: the arguments after the command that make it print state, `--json` appended
     (`()` for the command alone; None for a command that prints no state); the same arguments without `--json` must
-    work too. `option`: a long option that takes a value and a value that is valid in the test's environment, for
-    `--opt=value`; `shows`: text its stdout holds only when the value took effect. Without `shows`, `--opt=value` and
-    `--opt value` must print the same."""
+    work too. `jsonl`: True when `--json` prints JSON Lines (one JSON object with integer `v` per line, 0 or more
+    lines) rather than one JSON object. `option`: a long option that takes a value and a value that is valid in the
+    test's environment, for `--opt=value`; `shows`: text its stdout holds only when the value took effect. Without
+    `shows`, `--opt=value` and `--opt value` must print the same."""
 
     name: str
     json: Sequence[str] | None = None
     option: tuple[str, str] | None = None
     shows: str | None = None
+    jsonl: bool = False
 
 
 @dataclass(frozen=True)
@@ -174,6 +176,25 @@ def json_check(tool: Tool, done: Run) -> list[str]:
     return problems
 
 
+def jsonl_check(tool: Tool, done: Run) -> list[str]:
+    problems = exits(done, OK)
+    if not done.stdout:
+        return problems
+    for number, line in enumerate(done.stdout.splitlines(), 1):
+        try:
+            reply: object = json.loads(line)
+        except ValueError:
+            return [*problems, f"line {number} is not a JSON object: {line[:80]!r}"]
+        if not isinstance(reply, dict):
+            return [*problems, f"line {number} is not a JSON object"]
+        version = reply.get("v")  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
+        if isinstance(version, bool) or not isinstance(version, int):
+            keys = sorted(reply)[:8]  # pyright: ignore[reportUnknownArgumentType]
+            problems.append(f"line {number} has no integer 'v' (it has {keys})")
+            return problems
+    return problems
+
+
 def equals_check(option: str, value: str) -> Callable[[Tool, Run], list[str]]:
     def check(tool: Tool, done: Run) -> list[str]:
         if done.code == USAGE:
@@ -199,7 +220,8 @@ def cases(tool: Tool) -> list[Case]:
         found.append(Case(f"{command.name} unknown option", (*words, UNKNOWN_OPTION),
                           usage_check(UNKNOWN_OPTION, command.name)))
         if command.json is not None:
-            found.append(Case(f"{command.name} --json", (*words, *command.json, "--json"), json_check))
+            found.append(Case(f"{command.name} --json", (*words, *command.json, "--json"),
+                              jsonl_check if command.jsonl else json_check))
             found.append(Case(f"{command.name} without --json", (*words, *command.json), plain_check))
         if command.option is not None:
             option, value = command.option

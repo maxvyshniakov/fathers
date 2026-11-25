@@ -109,6 +109,41 @@ class OptionTests(LiveCase):
         self.assertEqual(2, result.returncode)
         self.assertIn("--width takes a whole number", result.stderr)
 
+    def test_flag_with_equals_and_missing_values_and_double_dash_are_refused(self) -> None:
+        for args in (["--help=1"], ["--once=1"], ["--color=1"], ["--version=1"],
+                     ["events", "--help=1"], ["events", "--follow=1"], ["events", "--json=1"],
+                     ["--interval"], ["--width"], ["--height"], ["--page"], ["events", "--source"],
+                     ["--", "--once"], ["events", "--", "--json"]):
+            with self.subTest(args=args):
+                result = self.run_godfather(*args)
+                self.assertEqual(2, result.returncode, (args, result.stdout, result.stderr))
+                self.assertEqual("", result.stdout)
+                lines = result.stderr.splitlines()
+                self.assertEqual(2, len(lines), (args, result.stderr))
+                self.assertTrue(lines[0].startswith("godfather: "), lines[0])
+
+    def test_unexpected_exception_prints_one_line_and_logs_traceback(self) -> None:
+        import contextlib
+        import io
+        import os
+        from pathlib import Path
+        import tempfile
+        from unittest import mock
+
+        from godfather import app
+
+        with tempfile.TemporaryDirectory() as tmp:
+            err = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}), \
+                    mock.patch.object(app, "command", side_effect=RuntimeError("boom")), \
+                    contextlib.redirect_stderr(err):
+                code = app.main(["--once"])
+            self.assertEqual(1, code)
+            self.assertEqual("godfather: internal error: RuntimeError: boom\n", err.getvalue())
+            log = Path(tmp) / "godfather" / "godfather.log"
+            self.assertTrue(log.is_file())
+            self.assertIn("RuntimeError: boom", log.read_text(encoding="utf-8"))
+
 
 class ClickTests(LiveCase):
     def test_clicking_a_queue_row_updates_selected_in_the_live_terminal(self) -> None:

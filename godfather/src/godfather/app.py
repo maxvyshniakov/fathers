@@ -18,16 +18,18 @@ import math
 import os
 from pathlib import Path
 import select
+import shlex
 import shutil
 import signal
 import subprocess
 import sys
 import threading
 import time
+import traceback
 from typing import Any, Mapping, cast
 
 from fathers_common.atomic import atomic_write
-from fathers_common.errors import Refused, Usage, refuse, say
+from fathers_common.errors import FAILED, Refused, Usage, refuse, say
 
 from . import actions as _actions
 from . import entries as _entries
@@ -58,7 +60,24 @@ USAGE = ("usage: godfather [--interval SECONDS]\n"
          "       godfather events [--source NAME]... [--follow] [--json]\n"
          "       godfather --version")
 
+EVENTS_USAGE = "usage: godfather events [--source NAME]... [--follow] [--json]"
+
 UsageError = Usage
+
+
+def log_path() -> Path:
+    base = os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state")
+    return Path(base) / "godfather" / "godfather.log"
+
+
+def logged_traceback(words: list[str]) -> None:
+    """Append the active exception's traceback to godfather.log; never raises."""
+    with contextlib.suppress(OSError):
+        path = log_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a", encoding="utf-8") as handle:
+            handle.write(f"{time.strftime('%Y-%m-%dT%H:%M:%S%z')} godfather {shlex.join(words)}\n"
+                         f"{traceback.format_exc()}\n")
 
 
 # Godfather's own settings (SPEC 22): Refresh every and Colour theme, kept between runs
@@ -829,26 +848,41 @@ def event_text(event: _events.Event, tag: str) -> str:
     return _events.CONTROL.sub(" ", "  ".join(field for field in fields if field).rstrip())
 
 
-def split_options(argv: list[str]) -> list[str]:
-    """`--opt=value` as `--opt value` (docs/cli.md): every long option that takes a value takes both forms."""
+def split_options(argv: list[str], value_options: frozenset[str] = frozenset()) -> list[str]:
+    """`--opt=value` as `--opt value` (docs/cli.md) for value-taking options, stopping at `--`."""
     found: list[str] = []
-    for arg in argv:
+    for index, arg in enumerate(argv):
+        if arg == "--":
+            found.extend(argv[index:])
+            break
         if arg.startswith("--") and "=" in arg:
-            found += arg.split("=", 1)
-        else:
-            found.append(arg)
+            name, value = arg.split("=", 1)
+            if not value_options or name in value_options:
+                found.extend((name, value))
+                continue
+        found.append(arg)
     return found
+
+
+EVENTS_VALUE_OPTIONS = frozenset({"--source"})
+COMMAND_VALUE_OPTIONS = frozenset({"--interval", "--width", "--height", "--page"})
 
 
 def events_command(argv: list[str]) -> int:
     """`godfather events [--source NAME]... [--follow] [--json]`: every present source's events merged, newest last;
     --follow keeps printing what the logs gain (checked every 250 ms), --json prints the lines as read. An absent
     source is left out; a present one that is unsupported is named on stderr. Never in colour."""
-    argv = split_options(argv)
+    argv = split_options(argv, EVENTS_VALUE_OPTIONS)
     names: list[str] = []
     follow = as_json = False
     while argv:
-        if argv[0] == "--source" and len(argv) > 1:
+        if argv[0] == "--":
+            if len(argv) > 1:
+                raise UsageError(f"events: unexpected argument {argv[1]!r}", "events")
+            break
+        if argv[0] == "--source":
+            if len(argv) < 2:
+                raise UsageError("--source requires a value", "events")
             source = "spawnfather" if argv[1] == "junkfather" else argv[1]
             if source not in _sources.TOOLS:
                 raise UsageError(f"--source takes {', '.join(_sources.TOOLS)}, not {argv[1]!r}", "events")
@@ -858,7 +892,7 @@ def events_command(argv: list[str]) -> int:
         elif argv[0] == "--json":
             as_json, argv = True, argv[1:]
         elif argv[0] in ("--help", "-h"):
-            print(USAGE)
+            print(EVENTS_USAGE)
             return 0
         else:
             raise UsageError(f"events: unknown argument {argv[0]!r}", "events")
@@ -899,9 +933,13 @@ def events_command(argv: list[str]) -> int:
 def command(argv: list[str]) -> int:
     if argv[:1] == ["events"]:
         return events_command(argv[1:])
-    argv = split_options(argv)
+    argv = split_options(argv, COMMAND_VALUE_OPTIONS)
     interval, run_once, colour, width, height, page = None, False, None, None, None, "overview"
     while argv:
+        if argv[0] == "--":
+            if len(argv) > 1:
+                raise UsageError(f"unexpected argument {argv[1]!r}")
+            break
         if argv[0] == "--once":
             run_once, argv = True, argv[1:]
         elif argv[0] == "--color":
@@ -912,12 +950,16 @@ def command(argv: list[str]) -> int:
         elif argv[0] in ("--help", "-h"):
             print(USAGE)
             return 0
-        elif argv[0] == "--page" and len(argv) > 1:
+        elif argv[0] == "--page":
+            if len(argv) < 2:
+                raise UsageError("--page requires a value")
             chosen = "spawns" if argv[1] == "processes" else argv[1]
             if chosen not in _state.PAGES:
                 raise UsageError(f"--page takes {', '.join(_state.PAGES)}, not {argv[1]!r}")
             page, argv = chosen, argv[2:]
-        elif argv[0] in ("--interval", "--width", "--height") and len(argv) > 1:
+        elif argv[0] in ("--interval", "--width", "--height"):
+            if len(argv) < 2:
+                raise UsageError(f"{argv[0]} requires a value")
             try:
                 value = float(argv[1])
             except ValueError:
@@ -952,7 +994,12 @@ def command(argv: list[str]) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    words = list(sys.argv[1:] if argv is None else argv)
     try:
-        return command(list(sys.argv[1:] if argv is None else argv))
+        return command(words)
     except Refused as error:
         return refuse("godfather", error)
+    except Exception as error:  # noqa: BLE001 - one line on the terminal, the traceback in the log (docs/cli.md)
+        logged_traceback(words)
+        say("godfather", f"internal error: {type(error).__name__}: {error}")
+        return FAILED

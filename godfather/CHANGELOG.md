@@ -171,7 +171,9 @@ Versions and release rules: [README.md](README.md#versions).
 - A command line Godfather does not take prints one line with the reason and one pointing to the help (`Try
   'godfather events --help'.`), no longer the whole usage text, as the tools' CLI convention says (docs/cli.md,
   fathers#154); so does the live view without a terminal. Every option that takes a value takes `--opt=value` too
-  (`--interval=2`, `events --source=lanefather`), and a `--version` without its install record still names the tool.
+  (`--interval=2`, `events --source=lanefather`), flags refuse `=value`, `--` ends options, a `--version` without its
+  install record still names the tool, and an unexpected exception prints one `godfather: internal error: ...` line
+  (exit 1) with its traceback in `$XDG_STATE_HOME/godfather/godfather.log`.
 - MACHINE says why nothing is admitted instead of a red `no admission` (fathers#156): `full · 8 of 8 held`,
   `whole machine: <label>` when one request holds every slot, `queue ahead · 2 waiting`, `draining · 6 of 4 held`
   (yellow), `memory short` (red: the one machine problem among them, first when there is another reason too:

@@ -117,4 +117,4 @@ class CLIConvention(cliconvention.conformance(TOOL, expected=EXPECTED)):
 | Slotfather | fathers#124 | 49: most rules |
 | Lanefather | fathers#130 | 0 (fathers#175, fathers#130) |
 | Spawnfather | fathers#153 | 17: argparse's error format, no `--version` |
-| Godfather | fathers#154 | 0 (lane gf-settings: one reason line and the help pointer) |
+| Godfather | fathers#154 | 0 (fathers#154) |
