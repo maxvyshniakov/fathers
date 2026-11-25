@@ -140,6 +140,26 @@ class RuleTests(unittest.TestCase):
         found = sf_process.lease_membership(parents, leases, [11, 12], markers)
         self.assertEqual({11: [(0, "env"), (1, "tree")], 12: [(0, "env")]}, found.leases)
 
+    def test_env_membership_propagates_to_descendants_with_cleared_or_hidden_environ(self) -> None:
+        def markers(pids: Any, paths: Any) -> tuple[dict[int, set[str]], list[int]]:
+            found_map: dict[int, set[str]] = {}
+            hidden: list[int] = []
+            for pid in pids:
+                if pid == 200:
+                    found_map[pid] = {"/q/a.json"}
+                elif pid in (202, 203):
+                    hidden.append(pid)
+                else:
+                    found_map[pid] = set()
+            return found_map, hidden
+        # 1182 = systemd --user; 200 = detached daemon carrying lease; 201 = chrome (empty env);
+        # 202 = chrome renderer (hidden env); 203 = unrelated hidden process under systemd --user.
+        parents = {10: 1, 1182: 1, 200: 1182, 201: 200, 202: 201, 203: 1182}
+        leases = [sf_process.Lease("/q/a.json", 10)]
+        found = sf_process.lease_membership(parents, leases, [201, 202, 203], markers, detached_only=True)
+        self.assertEqual({201: [(0, "env")], 202: [(0, "env")], 203: []}, found.leases)
+        self.assertEqual([203], found.unknown, "descendant of leased daemon is resolved; unrelated hidden stays unknown")
+
 
 def procargs(executable: bytes, arguments: list[bytes], environment: list[bytes], pad: int = 0) -> bytes:
     """A KERN_PROCARGS2 buffer as the kernel lays it out: argc, the executable's path padded to 8 bytes from its

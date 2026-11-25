@@ -8,7 +8,7 @@ slotfather stats --since 2026-11-02 --label 'request-*' --json
 
 While `run`'s command runs, its holder looks at the command's process tree: first after half a second, then each interval half as long again, up to `SLOTFATHER_SAMPLE_MAX` seconds (default 10), and once more after the command exits. One `ps` over the machine per look; nothing per second.
 
-- **CPU** (`cpu`, seconds of user plus system time) is the command's own rusage from `wait4`, which already holds every descendant that a parent inside the tree reaped, short-lived ones included, plus `cpu_detached`: processes that left the tree. A child whose parent exits is adopted by launchd and its CPU never reaches the command's rusage, so it stays the lease's and counts its last sampled CPU time; so does a child of launchd started during the lease whose environment carries the lease's `SLOTFATHER_LEASE` (macOS shows the environment of the user's own processes that are not Apple platform binaries). Processes born and gone between two looks outside the reaped tree are missed, as is a child that exits while its parent never waits for it and the parent then exits (launchd reaps the zombie), and work done by daemons (Docker's VM, launchd services) is not the lease's.
+- **CPU** (`cpu`, seconds of user plus system time) is the command's own rusage from `wait4`, which already holds every descendant that a parent inside the tree reaped, short-lived ones included, plus `cpu_detached`: processes that left the tree. A child whose parent exits is adopted by launchd/init (or `systemd --user` on Linux) and its CPU never reaches the command's rusage, so it stays the lease's and counts its last sampled CPU time; so does a child of launchd/init or Linux `systemd --user` started during the lease whose environment carries the lease's `SLOTFATHER_LEASE` (macOS shows the environment of the user's own processes that are not Apple platform binaries). Processes born and gone between two looks outside the reaped tree are missed, as is a child that exits while its parent never waits for it and the parent then exits (launchd reaps the zombie), and work done by daemons (Docker's VM, launchd services) is not the lease's.
 - **Memory**: `rss_peak_mb` and `rss_mean_mb`, the sum of resident memory over the tree at each look (time-weighted mean; shared pages count once per process). The peak is at least the largest single process from rusage.
 - `wall` (seconds, monotonic), `processes` seen, `samples` taken, and the machine's `cores` and `capacity` at release. Lines carry `"v": 2`; lines written before (no `v`, no usage) still read and count in waits and runs. Nested runs record nothing of their own; leases taken by an older slotfather or through the library `acquire()` record no usage.
 
@@ -16,8 +16,9 @@ While leases run, holders also append a machine sample to `machine.jsonl` at mos
 
 **Outside leases.** While the one-minute load is at least one, the sample also reads one `ps` of the machine and
 takes out every process a held lease owns, by the rule `status --json --pid` and `procs` follow: its holder's tree,
-a process whose environment carries the lease's `SLOTFATHER_LEASE` (read for at most the 32 busiest processes of at
-least 1 % CPU outside every tree), and a detached browser or WebKit XPC helper attributed to it. When what is left
+a process whose own or ancestor's environment carries the lease's `SLOTFATHER_LEASE` (read for at most 32 processes
+outside every tree: up to 16 detached roots whose subtree uses at least 1 % CPU, and the rest from the busiest
+individual processes of at least 1 % CPU), and a detached browser or WebKit XPC helper attributed to it. When what is left
 comes to at least one core of `ps` CPU share, the sample stores it as `outside`: `cpu` (cores), `processes`, and
 `top`, the 8 busiest groups by command family and owner, each with its `cpu` and `processes`. A family is the
 program's name or the outermost app bundle it runs from (`node`, `Google Chrome`, `WindowServer`), never an

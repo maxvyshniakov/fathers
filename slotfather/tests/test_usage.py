@@ -21,6 +21,7 @@ import pathlib
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import types
@@ -120,6 +121,60 @@ class TreeUsageTests(unittest.TestCase):
         found = usage.result(reaped_cpu=0.0)
         self.assertEqual([[200, 300]], asked, "each launchd child is considered once")
         self.assertEqual((4.5, 4.5, 3), (found["cpu"], found["cpu_detached"], found["processes"]))
+
+    def test_systemd_user_children_join_the_lease_on_linux_with_their_subtrees(self) -> None:
+        usage, asked = self.usage(marked=lambda pids: {p for p in pids if p == 200})
+        systemd_checks: list[int] = []
+
+        def fake_systemd_user(pid: int) -> bool:
+            systemd_checks.append(pid)
+            return pid == 1182
+
+        table = {
+            1182: row(1, 0.0, born=-3600),
+            100: row(HOLDER, 1.0),
+            200: row(1182, 0.5, born=5),  # detached daemon adopted by systemd --user carrying lease
+            201: row(200, 4.0, born=5),   # its browser child (descendant joins automatically)
+            202: row(1182, 9.0, born=-3600),  # started before the lease: never asked
+            203: row(1182, 3.0, born=5),  # started during lease without marker: not adopted
+        }
+        with mock.patch.object(sf_platform, "linux", return_value=True), \
+                mock.patch.object(sf_platform, "is_systemd_user", side_effect=fake_systemd_user):
+            usage.observe(SINCE + 10, table)
+            usage.observe(SINCE + 11, {**table, 200: row(1182, 1.0, born=5), 201: row(200, 6.0, born=5)})
+            usage.observe(SINCE + 12, {})
+        found = usage.result(reaped_cpu=0.0)
+        self.assertEqual([[200, 203]], asked, "systemd --user children started during lease are checked once")
+        self.assertEqual([1182], systemd_checks, "systemd --user check is cached per (pid, start)")
+        self.assertEqual((7.0, 7.0, 3), (found["cpu"], found["cpu_detached"], found["processes"]))
+
+    def test_systemd_user_transient_read_failure_is_not_cached(self) -> None:
+        usage, asked = self.usage(marked=lambda pids: {p for p in pids if p == 200})
+        answers: list[bool | None] = [None, True]
+        table = {1182: row(1, 0.0, born=-3600), 100: row(HOLDER, 1.0), 200: row(1182, 2.0, born=5)}
+        with mock.patch.object(sf_platform, "linux", return_value=True), \
+                mock.patch.object(sf_platform, "is_systemd_user", side_effect=lambda _pid: answers.pop(0)):
+            usage.observe(SINCE + 10, table)
+            usage.observe(SINCE + 11, {**table, 200: row(1182, 3.0, born=5)})
+            usage.observe(SINCE + 12, {})
+        self.assertEqual([[200]], asked)
+        self.assertEqual(3.0, usage.result(reaped_cpu=0.0)["cpu_detached"])
+
+    def test_is_systemd_user_reads_proc_comm_and_handles_invalid_utf8_and_non_linux(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            for pid, content in ((10, b"systemd\n"), (11, b"bash\n"), (12, b"\xff\xfe\n")):
+                (root / str(pid)).mkdir()
+                (root / str(pid) / "comm").write_bytes(content)
+            with mock.patch.dict(os.environ, {"SLOTFATHER_PROC": str(root)}), \
+                    mock.patch.object(sf_platform, "linux", return_value=True):
+                self.assertIs(True, sf_platform.is_systemd_user(10))
+                self.assertIs(False, sf_platform.is_systemd_user(11))
+                self.assertIs(False, sf_platform.is_systemd_user(12))
+                self.assertIsNone(sf_platform.is_systemd_user(999))
+            with mock.patch.dict(os.environ, {"SLOTFATHER_PROC": str(root)}), \
+                    mock.patch.object(sf_platform, "linux", return_value=False):
+                self.assertIs(False, sf_platform.is_systemd_user(10))
 
     def test_a_reused_pid_is_another_process(self):
         usage, _ = self.usage()

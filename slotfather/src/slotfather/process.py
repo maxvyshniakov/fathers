@@ -877,6 +877,8 @@ class Membership(NamedTuple):
     unknown: list[int]
 
 
+# `markers` receives the queried pids needing environment checks plus their live ancestors (above PID 1) so
+# env-cleared descendants of a detached daemon can inherit its SLOTFATHER_LEASE marker.
 Markers = Callable[[Sequence[int], Iterable[str]], "tuple[dict[int, set[str]], list[int]]"]
 
 
@@ -887,31 +889,45 @@ def lease_membership(parents: Mapping[int, int], leases: Sequence[Lease], pids: 
                      starts: Mapping[int, float | None] | None = None,
                      lease_since: Sequence[float | None] | None = None) -> Membership:
     """The one rule for which live leases each of `pids` belongs to (fathers#38): a lease's holder or one of its
-    descendants is in it ("tree"); a process outside a lease's tree is in it when its environment carries the
-    lease's SLOTFATHER_LEASE ("env": it left the tree by a double fork or setsid), or when `commands` identifies it
+    descendants is in it ("tree"); a process outside a lease's tree is in it when its environment or a live
+    ancestor's environment carries the lease's SLOTFATHER_LEASE ("env": it left the tree by a double fork or setsid,
+    or descended from a detached daemon whose child cleared its own environment), or when `commands` identifies it
     unambiguously as a detached macOS browser/XPC helper spawned by that lease ("helper", fathers#202). A pid that is
-    not live (not in `parents`) belongs to none. A pid outside some lease's tree whose environment cannot be read and
-    that is not attributed as a detached helper is unknown.
+    not live (not in `parents`) belongs to none. A pid outside some lease's tree whose own environment cannot be read
+    and that is not attributed via a readable ancestor's marker or as a detached helper is unknown (an unreadable
+    ancestor alone does not mark a readable descendant unknown, since managers like `systemd --user` or root shells
+    often hide their environments).
     `markers` reads the environments of all the pids that need it at once; None reads none (the tree alone). With
     `detached_only` only a pid in no lease's tree is looked for by its environment (`procs` and the sweep); without
     it, a pid in one lease's tree may carry another's marker (`status --json --pid`)."""
     found: dict[int, list[tuple[int, str]]] = {}
     outside: dict[int, list[int]] = {}
+    chains: dict[int, list[int]] = {}
     for pid in pids:
         if pid not in parents:
             continue
-        chain = {pid, *_lineage.ancestors(parents, pid)}
+        anc = _lineage.ancestors(parents, pid)
+        chain = {pid, *anc}
         found[pid] = [(index, "tree") for index, lease in enumerate(leases) if lease.pid in chain]
         rest = [index for index, lease in enumerate(leases) if lease.pid not in chain and lease.by_environment]
         if rest and not (detached_only and found[pid]):
             outside[pid] = rest
+            chains[pid] = [pid, *anc]
     unknown: list[int] = []
     if markers is not None and outside:
-        marked, hidden = markers(list(outside), sorted({leases[i].path for rest in outside.values() for i in rest}))
-        unknown = sorted(pid for pid in hidden if pid in outside)
+        probe = list(dict.fromkeys(member for chain_pids in chains.values() for member in chain_pids))
+        marked, hidden = markers(probe, sorted({leases[i].path for rest in outside.values() for i in rest}))
+        hidden_set = set(hidden)
+        resolved_env: set[int] = set()
         for pid, rest in outside.items():
-            carried = marked.get(pid, set())
-            found[pid] = sorted(found[pid] + [(index, "env") for index in rest if leases[index].path in carried])
+            carried: set[str] = set()
+            for member in chains[pid]:
+                carried.update(marked.get(member, ()))
+            env_matches = [(index, "env") for index in rest if leases[index].path in carried]
+            if env_matches:
+                found[pid] = sorted(found[pid] + env_matches)
+                resolved_env.add(pid)
+        unknown = sorted(pid for pid in hidden_set if pid in outside and pid not in resolved_env)
     if commands is not None and leases and any(not memberships for memberships in found.values()):
         effective_since = [lease.since for lease in leases] if lease_since is None else lease_since
         extra_owned: dict[int, set[int]] = {}

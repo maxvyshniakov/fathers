@@ -29,8 +29,8 @@ class TreeUsage:
     exits and launchd adopts it (detached); a child of launchd started during the lease joins it when its
     environment carries the lease (`marked`). CPU time of every process an attached parent reaps reaches the
     command's own rusage at its exit, so it is not summed here; a detached process is reaped by launchd, so its CPU
-    is the last sample of its own time (Linux: init adopts and reaps, as launchd does; an orphan adopted by another
-    child subreaper, such as `systemd --user`, is followed only once seen in the tree). Processes born and gone
+    is the last sample of its own time (Linux: init and `systemd --user` adopt and reap, as launchd does; an orphan
+    adopted by another child subreaper is followed only once seen in the tree). Processes born and gone
     between two samples outside the attached tree are not seen, nor is a child that exits unwaited-for before its parent exits (launchd reaps that zombie). Resident
     memory is the sum over the tree's processes (shared pages count once per process)."""
 
@@ -46,20 +46,39 @@ class TreeUsage:
         self.root_start: str | None = None
         self.root_gone = False  # set once wait4 has reaped the command: its pid may then be another process
         self.members: dict[tuple[int, str], list[Any]] = {}  # (pid, start) -> [own CPU seconds at the last sample, attached]
-        self.checked: set[tuple[int, str]] = set()  # (pid, start) of launchd children already considered
+        self.checked: set[tuple[int, str]] = set()  # (pid, start) of adopter children already considered
+        self._adopters_checked: dict[tuple[int, str], bool] = {}  # (pid, start) -> whether Linux systemd --user
         self.detached_gone = 0.0
         self.processes = self.samples = 0
         self.rss_peak = 0  # KB
         self.rss_area = self.span = 0.0  # KB x seconds, seconds
         self.last: tuple[float, int] | None = None  # (moment, resident KB) of the previous sample
 
+    def _adopters(self, table: dict[int, tuple[Any, ...]]) -> set[int]:
+        """PIDs that adopt detached orphans for this user: init/launchd (1), plus Linux `systemd --user`."""
+        adopters = {1}
+        if _platform.linux():
+            for pid, row in table.items():
+                if row[0] == 1 and row[2] == self.uid:
+                    key = (pid, str(row[1]))
+                    is_manager = self._adopters_checked.get(key)
+                    if is_manager is None:
+                        checked = _platform.is_systemd_user(pid)
+                        if checked is not None:
+                            self._adopters_checked[key] = checked
+                            is_manager = checked
+                    if is_manager:
+                        adopters.add(pid)
+        return adopters
+
     def candidates(self, table: dict[int, tuple[Any, ...]]) -> list[int]:
-        """Children of launchd started during the lease that have not been considered yet; each is returned once,
-        for `marked` to say whether it carries the lease."""
+        """Children of launchd/init (or a Linux `systemd --user` subreaper) started during the lease that have not
+        been considered yet; each is returned once, for `marked` to say whether it carries the lease."""
+        adopters = self._adopters(table)
         fresh: list[int] = []
         for pid, row in table.items():
             key = (pid, str(row[1]))
-            if row[0] == 1 and row[2] == self.uid and key not in self.members and key not in self.checked:
+            if row[0] in adopters and row[2] == self.uid and key not in self.members and key not in self.checked:
                 self.checked.add(key)
                 begun = _platform.started_at(str(row[1]))
                 if begun is not None and begun >= self.since - 1:

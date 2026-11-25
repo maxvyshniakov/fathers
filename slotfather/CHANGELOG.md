@@ -236,6 +236,12 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 
 ### Fixed
 
+- Detached browser daemons adopted by Linux `systemd --user` (such as `agent-browser` spawning headless Chromium
+  workers whose own `/proc/PID/environ` is cleared) are now attributed to their owning lease across `stats`
+  (`outside leases` and `history` `cpu_detached`), `procs --json`, `status --json --pid` (`via: "env"`), and
+  `slotfather sweep` sparing: `"env"` membership now propagates from a detached ancestor carrying `SLOTFATHER_LEASE`
+  to its descendants, `outside` inspects detached roots of busy subtrees alongside the busiest individual processes,
+  and per-lease usage tracking discovers orphans adopted by `systemd --user` alongside `ppid == 1`.
 - `slotfather advise` now consults measured unleased process CPU whenever the load-average residual actually reduces
   `size()`'s slot capacity (the half-slot rounding boundary, `0.5 * cores / slots`) rather than at a fixed `>= 1.0`
   core threshold (fathers#257): this lowers the trigger below `1.0` core on machines with fewer than 2 cores per slot

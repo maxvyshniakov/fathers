@@ -29,7 +29,7 @@ THRESHOLD = 100.0  # ps CPU percent outside leases (one core) from which a sampl
 TOP = 8  # the most (family, owner) groups a sample keeps
 FAMILY_MAX = 40  # characters of a family
 OWNER_MAX = 48  # characters of an owner
-MARK_MIN = 1.0  # ps CPU percent below which a process outside every lease's tree is not looked into
+MARK_MIN = 1.0  # ps CPU percent below which a process (or detached root's subtree) outside leases is not looked into
 MARK_MAX = 32  # the most processes whose environment one sample reads for a lease's marker
 SPAWNFATHER_TIMEOUT = 3.0  # seconds for `spawnfather list --json`
 SPAWNFATHER_EVERY = 60.0  # seconds a holder reuses Spawnfather's entries (the call costs about 0.2 s of CPU)
@@ -109,17 +109,59 @@ def measure(procs: Mapping[int, Proc], leases: Sequence[_process.Lease], *,
             top: int = TOP, threshold: float = THRESHOLD) -> dict[str, Any] | None:
     """What a sample stores of the use outside `leases` in the table `procs`: {"cpu": cores outside, "processes":
     how many, "top": [{"family", "owner", "cpu", "processes"}], the busiest `top` groups first}; None below
-    `threshold` percent. `markers` reads the environments of at most MARK_MAX processes of at least MARK_MIN percent
-    outside every lease's tree; `spawned` (Spawnfather's entries) is asked only once the threshold is met, and a
-    fault there leaves the session owners."""
+    `threshold` percent. `markers` reads the environments of at most MARK_MAX processes outside every lease's tree:
+    up to half the budget for detached roots (children of init/launchd or Linux `systemd --user`) whose subtree CPU
+    is at least MARK_MIN, and the rest for the busiest individual processes of at least MARK_MIN percent; `spawned`
+    (Spawnfather's entries) is asked only once the threshold is met, and a fault there leaves the session owners."""
     parents = {pid: row.ppid for pid, row in procs.items()}
     commands = {pid: row.cmd for pid, row in procs.items()} if _platform.macos() else None
 
     def bounded(pids: Sequence[int], paths: Iterable[str]) -> tuple[dict[int, set[str]], list[int]]:
-        # `pids` are already outside every lease's tree (detached_only=True); rank only those for the MARK_MAX budget.
-        busy = sorted((pid for pid in pids if procs[pid].cpu >= MARK_MIN), key=lambda pid: (-procs[pid].cpu, pid))
-        wanted = busy[:MARK_MAX]
-        looked = set(wanted)
+        # `pids` are already outside every lease's tree (detached_only=True). Budget detached roots (adopted by
+        # init/launchd or Linux `systemd --user`) separately from direct busy leaves so deep unleased chains cannot
+        # crowd out self-marked processes, while low-CPU detached daemons (e.g. agent-browser) with busy subtrees
+        # (including many sub-MARK_MIN renderers) are still inspected.
+        pid_set = set(pids)
+        detached_roots = {
+            pid for pid in pids
+            if not _process.adopted_by_manager(pid, procs[pid].cmd) and _process.adopted_by_manager(
+                parents.get(pid, 0),
+                procs[parents[pid]].cmd if parents.get(pid, 0) in procs else None,
+            )
+        }
+        root_cpu: dict[int, float] = {}
+        for pid in pids:
+            cpu = procs[pid].cpu
+            if cpu <= 0:
+                continue
+            for member in (pid, *_lineage.ancestors(parents, pid)):
+                if member in detached_roots:
+                    root_cpu[member] = root_cpu.get(member, 0.0) + cpu
+                    break
+        roots_ranked = sorted(
+            (pid for pid, total in root_cpu.items() if total >= MARK_MIN),
+            key=lambda pid: (-root_cpu[pid], -procs[pid].cpu, pid),
+        )
+        direct_ranked = sorted(
+            (pid for pid in pids if pid in pid_set and procs[pid].cpu >= MARK_MIN),
+            key=lambda pid: (-procs[pid].cpu, pid),
+        )
+        root_cap = MARK_MAX // 2
+        wanted = roots_ranked[:root_cap]
+        chosen = set(wanted)
+        for pid in direct_ranked:
+            if len(wanted) >= MARK_MAX:
+                break
+            if pid not in chosen:
+                wanted.append(pid)
+                chosen.add(pid)
+        for pid in roots_ranked[root_cap:]:
+            if len(wanted) >= MARK_MAX:
+                break
+            if pid not in chosen:
+                wanted.append(pid)
+                chosen.add(pid)
+        looked = chosen
         found, hidden = markers(wanted, paths) if wanted else ({}, [])
         return {**{pid: set() for pid in pids if pid not in looked}, **found}, hidden
 

@@ -191,6 +191,91 @@ class MeasureTests(unittest.TestCase):
         self.assertEqual({"node"}, families)
         self.assertEqual(1.05, found["cpu"])
 
+    def test_low_cpu_detached_parent_carrying_lease_attributes_busy_chromium_children_on_linux(self) -> None:
+        rows = [
+            proc(1, 0, "/sbin/init"),
+            proc(1182, 1, "/usr/lib/systemd/systemd --user"),
+            proc(300, 1182, "python3 -m slotfather run", 1.0),
+            # Detached agent-browser daemon (below MARK_MIN) spawning > MARK_MAX busy Chromium workers.
+            proc(700, 1182, "/w/node_modules/@agent-browser/cli/agent-browser", 0.01),
+            proc(701, 700, "/home/u/.cache/ms-playwright/chromium-1255/chrome-linux64/chrome", 15.0),
+            *(proc(702 + n, 701, "/home/u/.cache/ms-playwright/chromium-1255/chrome-linux64/chrome --type=renderer",
+                   10.0) for n in range(sf_outside.MARK_MAX + 8)),
+            proc(900, 1182, "/usr/bin/node unleased.js", 120.0),
+        ]
+        asked: list[int] = []
+
+        def markers(pids: Sequence[int], leases: Any) -> tuple[dict[int, set[str]], list[int]]:
+            asked.extend(pids)
+            return {pid: ({LEASE} if pid == 700 else set()) for pid in pids}, []
+
+        with mock.patch.object(sf_platform, "linux", return_value=True), \
+                mock.patch.object(sf_platform, "macos", return_value=False):
+            found = self.measure(table(*rows), markers=markers)
+        assert found is not None
+        self.assertLessEqual(len(asked), sf_outside.MARK_MAX)
+        self.assertIn(700, asked, "low-CPU detached parent with busy children must be inspected")
+        self.assertNotIn(1182, asked, "systemd --user should not consume a marker lookup slot")
+        families = {row["family"] for row in found["top"]}
+        self.assertNotIn("chrome", families)
+        self.assertNotIn("agent-browser", families)
+        self.assertEqual({"node"}, families)
+        self.assertEqual(1.2, found["cpu"])
+
+    def test_deep_unleased_chains_do_not_crowd_out_self_marked_detached_process(self) -> None:
+        rows = [
+            proc(1, 0, "/sbin/init"),
+            proc(1182, 1, "/usr/lib/systemd/systemd --user"),
+            proc(300, 1182, "python3 -m slotfather run", 1.0),
+        ]
+        for chain in range(10):
+            base = 1000 + chain * 10
+            rows += [
+                proc(base, 1182, "/usr/bin/npm run build", 0.0),
+                proc(base + 1, base, "/bin/sh -c node build.js", 0.0),
+                proc(base + 2, base + 1, "/usr/bin/node build.js", 0.0),
+                proc(base + 3, base + 2, "/usr/bin/esbuild --bundle", 60.0),
+            ]
+        # Detached self-marked worker at 50% CPU (below each esbuild leaf, must still be inspected).
+        rows.append(proc(500, 1182, "/usr/bin/node vitest-worker.js", 50.0))
+        asked: list[int] = []
+
+        def markers(pids: Sequence[int], leases: Any) -> tuple[dict[int, set[str]], list[int]]:
+            asked.extend(pids)
+            return {pid: ({LEASE} if pid == 500 else set()) for pid in pids}, []
+
+        with mock.patch.object(sf_platform, "linux", return_value=True), \
+                mock.patch.object(sf_platform, "macos", return_value=False):
+            found = self.measure(table(*rows), markers=markers)
+        assert found is not None
+        self.assertLessEqual(len(asked), sf_outside.MARK_MAX)
+        self.assertIn(500, asked)
+        self.assertNotIn("node", {row["family"] for row in found["top"]})
+
+    def test_detached_root_with_many_sub_floor_children_is_still_inspected(self) -> None:
+        rows = [
+            proc(1, 0, "/sbin/init"),
+            proc(1182, 1, "/usr/lib/systemd/systemd --user"),
+            proc(300, 1182, "python3 -m slotfather run", 1.0),
+            proc(700, 1182, "/w/node_modules/@agent-browser/cli/agent-browser", 0.01),
+            *(proc(701 + n, 700, "/home/u/.cache/ms-playwright/chromium-1255/chrome --type=renderer", 0.9)
+              for n in range(150)),
+            proc(900, 1182, "/usr/bin/node unleased.js", 120.0),
+        ]
+        asked: list[int] = []
+
+        def markers(pids: Sequence[int], leases: Any) -> tuple[dict[int, set[str]], list[int]]:
+            asked.extend(pids)
+            return {pid: ({LEASE} if pid == 700 else set()) for pid in pids}, []
+
+        with mock.patch.object(sf_platform, "linux", return_value=True), \
+                mock.patch.object(sf_platform, "macos", return_value=False):
+            found = self.measure(table(*rows), markers=markers)
+        assert found is not None
+        self.assertIn(700, asked)
+        self.assertNotIn("chrome", {row["family"] for row in found["top"]})
+        self.assertEqual(1.2, found["cpu"])
+
     def test_spawn_owners_ignores_malformed_non_string_fields(self) -> None:
         entries: Any = [
             {"pid": 800, "pgid": 800, "label": True, "id": "sf-1"},

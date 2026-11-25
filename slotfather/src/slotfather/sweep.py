@@ -95,9 +95,9 @@ def protection(parents: dict[int, int], found: Labelled,
                procs: Mapping[int, sweep_plan.Proc] | None = None) -> tuple[dict[int, str], Carriers | None]:
     """What the leases protect, by the rule `status --json --pid` and `procs` follow (process.lease_membership()):
     pid -> the label of the live lease whose holder's tree it is in, and `carriers(pids)`, which gives those of
-    pids outside every tree whose environment carries a live lease's SLOTFATHER_LEASE or that are unambiguously
-    attributed as detached macOS browser/XPC helpers of a live lease (pid -> its label), or whose environment cannot
-    be read (pid -> None: unknown, so spared)."""
+    pids outside every tree whose own or ancestor's environment carries a live lease's SLOTFATHER_LEASE or that are
+    unambiguously attributed as detached macOS browser/XPC helpers of a live lease (pid -> its label), or whose own
+    environment cannot be read and is not resolved by an ancestor or helper (pid -> None: unknown, so spared)."""
     held = [lease for lease, _ in found]
     labels = [label for _, label in found]
     trees = _process.lease_membership(parents, held, parents, markers=None)

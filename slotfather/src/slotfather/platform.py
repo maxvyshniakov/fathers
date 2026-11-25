@@ -246,6 +246,17 @@ def proc_path(*parts: str) -> Path:
     return Path(_config.setting("PROC") or "/proc", *parts)
 
 
+def is_systemd_user(pid: int) -> bool | None:
+    """Whether `pid` is a Linux `systemd --user` manager (which acts as a subreaper for detached children);
+    None when `/proc/PID/comm` cannot be read."""
+    if not linux():
+        return False
+    try:
+        return proc_path(str(pid), "comm").read_text(errors="replace").strip() == "systemd"
+    except OSError:
+        return None
+
+
 def proc_swap_kb(pid: int) -> int | None:
     """Linux VmSwap of `pid` in KiB from /proc/PID/status, or None where unavailable."""
     with contextlib.suppress(OSError, ValueError):
