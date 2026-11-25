@@ -33,6 +33,7 @@ RECENT_LANES = 20
 LOAD_FACTOR = 1.5
 SMOKE_MAX_JOBS = 3
 FALLBACK_JOBS = 2
+GATE_MIN_JOBS = 2
 GATE_MAX_JOBS = 2
 # A lane check's most jobs (#642 review): a second slot lets the slot-sized checks run side by side; advice gives
 # it only on a quiet machine.
@@ -228,8 +229,10 @@ def post_merge_jobs(info: dict[str, Any]) -> dict[str, Any]:
 
 
 def gate_jobs(info: dict[str, Any]) -> dict[str, Any]:
-    """The batch gate is an ordinary full gate (#610): at most two jobs and no more than the free slots."""
-    return jobs_decision(info, GATE_MAX_JOBS)
+    """The batch gate is an ordinary full gate (#610): at most GATE_MAX_JOBS, and at least GATE_MIN_JOBS on a
+    multi-slot machine (fathers#257) so transient peer leases do not freeze an hour-long promote at `--jobs 1`
+    instead of waiting briefly at `interactive` priority for a second slot."""
+    return ranged_jobs(info, GATE_MAX_JOBS, minimum=GATE_MIN_JOBS)
 
 
 def check_jobs(info: dict[str, Any], minimum: int = 1, min_for: list[str] | None = None) -> dict[str, Any]:

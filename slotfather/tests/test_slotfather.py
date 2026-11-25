@@ -811,6 +811,11 @@ class AdviceTests(SlotCase):
         advice = self.advise("--exclusive", load="0.5 2.0 8.0")
         self.assertEqual((4, 0.5, 0.5, 8.0), (advice["jobs"], advice["load"], advice["unleased_load"],
                                               advice["load15"]))
+        # fathers#257: stale load5 and load15 after heavy work exits never throttle once short load1 has dropped.
+        cooling = self.advise(load="0.5 10.0 11.5")
+        self.assertEqual((4, 0.5, 0.5, 10.0, 11.5),
+                         (cooling["jobs"], cooling["load"], cooling["unleased_load"],
+                          cooling["load5"], cooling["load15"]))
         # Load that has lasted minutes counts, whatever load15 says; a spike of a minute does not.
         self.assertEqual(2, self.advise("--exclusive", load="7.5 7.5 2.0")["jobs"])
         self.assertEqual(4, self.advise("--exclusive", load="9.0 0.5 0.4")["jobs"])

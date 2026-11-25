@@ -133,8 +133,15 @@ def run_batch_gate(store: state.Store, cwd: str, common: str, sha: str, jobs: in
         record_history=False, wait_for_load=False, load_wait=load_wait,
         banner=f"lane: batch gate: the full gate on {sha[:10]} in {path} with {job_count} jobs (log {{log}}); "
                "queue: slotfather status",
+        min_jobs=decision.get("min_jobs"),
     ).execute()
-    jobs = job_count
+    if outcome.granted_jobs is not None:
+        # A ranged lease (fathers#257) records what it was granted, as lane checks and post-merge smokes do.
+        decision = {**decision, "jobs": outcome.granted_jobs, "max_jobs": job_count,
+                    "granted": outcome.granted_jobs}
+        jobs = outcome.granted_jobs
+    else:
+        jobs = job_count
     status, seconds, load, log = outcome.exit, outcome.seconds, outcome.load, outcome.log
     stamp, report = outcome.stamp, outcome.report
     failed, blocked, triaged = outcome.failed_checks, outcome.blocked_checks, outcome.triage

@@ -222,6 +222,18 @@ class GrantTests(SlotCase):
             advice = sf_query.advise()
         self.assertEqual((None, None), (block["load_block"], advice["load_block"]))
 
+    def test_advise_caps_stale_load_below_one_core_by_measured_unleased_cpu(self) -> None:
+        """fathers#257: on a 1-core-per-slot machine, stale loadavg of 0.8 would cost a slot; advise checks
+        measured unleased CPU at the half-slot threshold so freshly idle machines keep full capacity."""
+        self.assertEqual(0, self.tool("slots", "4").returncode)
+        env = self.environment("0", SLOTFATHER_CORES="4")
+        env.pop("SLOTFATHER_LOADAVG", None)
+        with (mock.patch.dict(os.environ, env, clear=True),
+              mock.patch("slotfather.platform.loads", return_value=(0.8, 0.8, 5.0)),
+              mock.patch("slotfather.queue.unleased_cpu_reader", return_value=lambda: 0.05)):
+            advice = sf_query.advise()
+        self.assertEqual((4, 0.05, 4), (advice["jobs"], advice["unleased_load"], advice["capacity"]))
+
     def test_order_load_gate_saves_the_multiple_and_the_environment_only_lowers_it(self) -> None:
         self.entry("running", 1, "held")
         waiter = self.entry("waiter", 1)

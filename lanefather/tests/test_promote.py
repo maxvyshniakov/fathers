@@ -60,6 +60,56 @@ class PromoteGateTests(LaneCase):
         self.assertIn("already verified", self.lane("promote", tip, "--no-push", "--wait", "0"))
         self.assertEqual(len(self.verify_runs()), runs)
 
+    def test_promote_does_not_freeze_at_one_job_when_peers_hold_slots(self):
+        """fathers#257: transient peer leases must not lock an interactive batch gate into --jobs 1."""
+        sf_log_path = self.state / "slotfather.log"
+        # With slot-range: 3 of 4 slots held -> advise returns 1, but promote requests 2-2 at interactive priority.
+        self.env.update(FAKE_SLOTFATHER_RANGE="1", FAKE_SLOTFATHER_TOTAL="4", FAKE_SLOTFATHER_HELD="3",
+                        FAKE_SLOTFATHER_GRANTED="2", FAKE_SLOTFATHER_LOG=str(sf_log_path))
+        tip = self.landed("busy-range", {"lib/busy1.txt": "1\n"})
+        self.lane("promote", tip, "--no-push", "--wait", "0")
+        gate = json.loads((self.state / f"promote-{tip[:10]}.gate.json").read_text())
+        decision = gate["jobs_decision"]
+        self.assertEqual((gate["jobs"], decision["advised_jobs"], decision["min_jobs"], decision["min_slots"],
+                          decision["max_jobs"], decision["granted"]),
+                         (2, 1, 2, 2, 2, 2))
+        self.assertTrue(decision["slot_range"])
+        self.assertEqual(self.leases()[-1], f"promote-{tip[:10]} --jobs 2 held 2")
+        runs = [json.loads(line) for line in sf_log_path.read_text().splitlines() if line]
+        gate_runs = [entry["args"] for entry in runs
+                     if entry["command"] == "run" and f"promote-{tip[:10]}" in entry["args"]]
+        self.assertTrue(gate_runs)
+        self.assertEqual(gate_runs[-1][gate_runs[-1].index("-n") + 1], "2-2")
+
+        # Without slot-range: promote still keeps its 2-slot floor instead of freezing at --jobs 1.
+        self.env.pop("FAKE_SLOTFATHER_RANGE", None)
+        self.env.pop("FAKE_SLOTFATHER_GRANTED", None)
+        tip2 = self.landed("busy-plain", {"lib/busy2.txt": "2\n"})
+        self.lane("promote", tip2, "--no-push", "--wait", "0")
+        gate2 = json.loads((self.state / f"promote-{tip2[:10]}.gate.json").read_text())
+        self.assertEqual((gate2["jobs"], gate2["jobs_decision"]["advised_jobs"], gate2["jobs_decision"]["min_slots"]),
+                         (2, 1, 2))
+        self.assertNotIn("slot_range", gate2["jobs_decision"])
+        self.assertEqual(self.leases()[-1], f"promote-{tip2[:10]} --jobs 2")
+
+    def test_promote_respects_explicit_jobs_override_and_single_slot_machines(self):
+        """fathers#257: explicit --jobs/--slots overrides win, and 1-slot machines clamp to 1."""
+        self.env.update(FAKE_SLOTFATHER_RANGE="1", FAKE_SLOTFATHER_TOTAL="4", FAKE_SLOTFATHER_HELD="0")
+        tip = self.landed("override-one", {"lib/ov.txt": "1\n"})
+        self.lane("promote", tip, "--jobs", "1", "--no-push", "--wait", "0")
+        gate = json.loads((self.state / f"promote-{tip[:10]}.gate.json").read_text())
+        self.assertEqual((gate["jobs"], gate["jobs_decision"]), (1, {"jobs": 1, "override": "--jobs"}))
+        self.assertEqual(self.leases()[-1], f"promote-{tip[:10]} --jobs 1")
+
+        # Single-slot machine: floor clamps to 1 so promote never deadlocks asking for 2 slots.
+        self.env.update(FAKE_SLOTFATHER_TOTAL="1", FAKE_SLOTFATHER_HELD="0")
+        tip2 = self.landed("one-slot", {"lib/one.txt": "1\n"})
+        self.lane("promote", tip2, "--no-push", "--wait", "0")
+        gate2 = json.loads((self.state / f"promote-{tip2[:10]}.gate.json").read_text())
+        self.assertEqual((gate2["jobs"], gate2["jobs_decision"]["min_jobs"], gate2["jobs_decision"]["min_slots"]),
+                         (1, 1, 1))
+        self.assertEqual(self.leases()[-1], f"promote-{tip2[:10]} --jobs 1 held 1")
+
     def test_promote_runs_the_after_promote_command_once_dev_moved(self):
         # #588: Straylight runs its Sid-Kit and Data Grid adoption check here; a failure only warns.
         log = self.tmp / "after-promote.log"
