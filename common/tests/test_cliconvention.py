@@ -227,6 +227,7 @@ class JsonlReply(unittest.TestCase):
     def test_empty_and_multi_line_objects_with_integer_v_pass(self) -> None:
         self.assertEqual([], self.problems(""))
         self.assertEqual([], self.problems('{"v": 1, "kind": "a"}\n{"v": 2, "kind": "b"}\n'))
+        self.assertEqual([], self.problems('{"v": 1, "text": "a\u2028b\u2029c"}\n'))
 
     def test_invalid_line_or_missing_v_fails(self) -> None:
         self.assertIn("line 2 is not a JSON object", self.problems('{"v": 1}\nnot-json\n')[0])

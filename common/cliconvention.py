@@ -26,7 +26,7 @@ import json
 import os
 import re
 import subprocess
-from typing import Callable
+from typing import Callable, cast
 import unittest
 
 # The two codes of docs/cli.md's table these cases can provoke without knowing the tool.
@@ -180,17 +180,20 @@ def jsonl_check(tool: Tool, done: Run) -> list[str]:
     problems = exits(done, OK)
     if not done.stdout:
         return problems
-    for number, line in enumerate(done.stdout.splitlines(), 1):
+    lines = done.stdout.split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()
+    for number, line in enumerate(lines, 1):
         try:
             reply: object = json.loads(line)
         except ValueError:
             return [*problems, f"line {number} is not a JSON object: {line[:80]!r}"]
         if not isinstance(reply, dict):
             return [*problems, f"line {number} is not a JSON object"]
-        version = reply.get("v")  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
+        obj = cast(dict[str, object], reply)
+        version = obj.get("v")
         if isinstance(version, bool) or not isinstance(version, int):
-            keys = sorted(reply)[:8]  # pyright: ignore[reportUnknownArgumentType]
-            problems.append(f"line {number} has no integer 'v' (it has {keys})")
+            problems.append(f"line {number} has no integer 'v' (it has {sorted(obj)[:8]})")
             return problems
     return problems
 

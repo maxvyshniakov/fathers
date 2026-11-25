@@ -72,10 +72,10 @@ def log_path() -> Path:
 
 def logged_traceback(words: list[str]) -> None:
     """Append the active exception's traceback to godfather.log; never raises."""
-    with contextlib.suppress(OSError):
+    with contextlib.suppress(Exception):
         path = log_path()
         path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "a", encoding="utf-8") as handle:
+        with open(path, "a", encoding="utf-8", errors="backslashreplace") as handle:
             handle.write(f"{time.strftime('%Y-%m-%dT%H:%M:%S%z')} godfather {shlex.join(words)}\n"
                          f"{traceback.format_exc()}\n")
 
@@ -848,7 +848,7 @@ def event_text(event: _events.Event, tag: str) -> str:
     return _events.CONTROL.sub(" ", "  ".join(field for field in fields if field).rstrip())
 
 
-def split_options(argv: list[str], value_options: frozenset[str] = frozenset()) -> list[str]:
+def split_options(argv: list[str], value_options: frozenset[str]) -> list[str]:
     """`--opt=value` as `--opt value` (docs/cli.md) for value-taking options, stopping at `--`."""
     found: list[str] = []
     for index, arg in enumerate(argv):
@@ -857,7 +857,7 @@ def split_options(argv: list[str], value_options: frozenset[str] = frozenset()) 
             break
         if arg.startswith("--") and "=" in arg:
             name, value = arg.split("=", 1)
-            if not value_options or name in value_options:
+            if name in value_options:
                 found.extend((name, value))
                 continue
         found.append(arg)
@@ -944,7 +944,12 @@ def command(argv: list[str]) -> int:
             run_once, argv = True, argv[1:]
         elif argv[0] == "--color":
             colour, argv = True, argv[1:]
-        elif argv[0] in ("--version", "-V") and len(argv) == 1:
+        elif argv[0] in ("--version", "-V"):
+            if run_once or colour is not None or interval is not None or width is not None or height is not None \
+                    or page != "overview":
+                raise UsageError(f"{argv[0]} cannot be combined with other options")
+            if len(argv) > 1:
+                raise UsageError(f"unexpected argument {argv[1]!r}")
             print(_version.text(_version.running_identity()) if _version.running_source() else f"godfather {_version.VERSION}")
             return 0
         elif argv[0] in ("--help", "-h"):
@@ -1001,5 +1006,7 @@ def main(argv: list[str] | None = None) -> int:
         return refuse("godfather", error)
     except Exception as error:  # noqa: BLE001 - one line on the terminal, the traceback in the log (docs/cli.md)
         logged_traceback(words)
-        say("godfather", f"internal error: {type(error).__name__}: {error}")
+        detail = " ".join(str(error).split())
+        summary = f"{type(error).__name__}: {detail}" if detail else type(error).__name__
+        say("godfather", f"internal error: {summary}")
         return FAILED

@@ -23,8 +23,7 @@ HOST = "test-host"
 # `events` runs against a minimal fixture log (prepare()), so `--json` (JSON Lines) and `--source=slotfather` are
 # checked on real events rather than empty output.
 TOOL = cliconvention.Tool("godfather", (sys.executable, str(PACKAGE / "godfather")),
-                          (Command("events", json=(), jsonl=True, option=("--source", "slotfather"),
-                                   shows="lease.granted"),))
+                          (Command("events", json=(), jsonl=True, option=("--source", "slotfather")),))
 EXPECTED: dict[str, str] = {}
 
 
@@ -34,7 +33,7 @@ def _write_fixture(root: Path) -> None:
                                    ("lanefather", "lane", "lane.checked", "l1")):
         folder = root / name
         folder.mkdir()
-        caps = {
+        caps: dict[str, object] = {
             "v": 1, "tool": name, "version": "0.9.0",
             "dashboard": {
                 "v": 1, "tag": tag,
@@ -43,7 +42,7 @@ def _write_fixture(root: Path) -> None:
             },
         }
         (folder / "replies.json").write_text(json.dumps({"capabilities --json": {"code": 0, "json": caps}}))
-        event = {
+        event: dict[str, object] = {
             "v": 1, "time": "2026-11-12T02:24:10.000Z", "host": HOST, "source": name,
             "kind": kind, "subject": {"type": "thing", "id": ident}, "actor": {"type": "tool"}, "details": {},
         }

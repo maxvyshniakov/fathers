@@ -83,6 +83,14 @@ class EventsCommandTests(unittest.TestCase):
         self.assertEqual(2, unknown.returncode)
         self.assertIn("--source takes slotfather, lanefather, spawnfather", unknown.stderr)
 
+    def test_source_equals_filters_to_named_source(self) -> None:
+        equals = self.run_events("--source=slotfather")
+        spaced = self.run_events("--source", "slotfather")
+        self.assertEqual(0, equals.returncode, equals.stderr)
+        self.assertEqual(spaced.stdout, equals.stdout)
+        self.assertIn("lease.granted", equals.stdout)
+        self.assertNotIn("lane.checked", equals.stdout)
+
     def test_legacy_junkfather_source_alias_and_mixed_log_lines(self) -> None:
         (self.root / "spawnfather" / "events.jsonl").write_text(
             event("junkfather", "entry.owned", 5, "jold01", ttl=1800)

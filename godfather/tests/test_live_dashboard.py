@@ -3,13 +3,21 @@ fake Slotfather's snapshot describes, the options, and a click in the live view.
 grants, the order of the queue) stays in Slotfather's tests; these only draw what its snapshot says."""
 from __future__ import annotations
 
+import contextlib
+import io
+import os
+from pathlib import Path
 import re
 import subprocess
 import sys
+import tempfile
 import unittest
+from unittest import mock
 
 from helpers import ROOT
 from terminal import LiveCase, environ, item
+
+from godfather import app
 
 
 class OnceTests(LiveCase):
@@ -110,39 +118,65 @@ class OptionTests(LiveCase):
         self.assertIn("--width takes a whole number", result.stderr)
 
     def test_flag_with_equals_and_missing_values_and_double_dash_are_refused(self) -> None:
-        for args in (["--help=1"], ["--once=1"], ["--color=1"], ["--version=1"],
-                     ["events", "--help=1"], ["events", "--follow=1"], ["events", "--json=1"],
-                     ["--interval"], ["--width"], ["--height"], ["--page"], ["events", "--source"],
-                     ["--", "--once"], ["events", "--", "--json"]):
+        cases = (
+            (["--help=1"], "godfather: unknown argument '--help=1'", "Try 'godfather --help'."),
+            (["--once=1"], "godfather: unknown argument '--once=1'", "Try 'godfather --help'."),
+            (["--color=1"], "godfather: unknown argument '--color=1'", "Try 'godfather --help'."),
+            (["--version=1"], "godfather: unknown argument '--version=1'", "Try 'godfather --help'."),
+            (["--version", "--extra"], "godfather: unexpected argument '--extra'", "Try 'godfather --help'."),
+            (["--once", "--version"], "godfather: --version cannot be combined with other options",
+             "Try 'godfather --help'."),
+            (["events", "--help=1"], "godfather: events: unknown argument '--help=1'",
+             "Try 'godfather events --help'."),
+            (["events", "--follow=1"], "godfather: events: unknown argument '--follow=1'",
+             "Try 'godfather events --help'."),
+            (["events", "--json=1"], "godfather: events: unknown argument '--json=1'",
+             "Try 'godfather events --help'."),
+            (["--interval"], "godfather: --interval requires a value", "Try 'godfather --help'."),
+            (["--width"], "godfather: --width requires a value", "Try 'godfather --help'."),
+            (["--height"], "godfather: --height requires a value", "Try 'godfather --help'."),
+            (["--page"], "godfather: --page requires a value", "Try 'godfather --help'."),
+            (["events", "--source"], "godfather: --source requires a value", "Try 'godfather events --help'."),
+            (["--", "--once"], "godfather: unexpected argument '--once'", "Try 'godfather --help'."),
+            (["events", "--", "--json"], "godfather: events: unexpected argument '--json'",
+             "Try 'godfather events --help'."),
+        )
+        for args, reason, pointer in cases:
             with self.subTest(args=args):
                 result = self.run_godfather(*args)
                 self.assertEqual(2, result.returncode, (args, result.stdout, result.stderr))
                 self.assertEqual("", result.stdout)
-                lines = result.stderr.splitlines()
-                self.assertEqual(2, len(lines), (args, result.stderr))
-                self.assertTrue(lines[0].startswith("godfather: "), lines[0])
+                self.assertEqual([reason, pointer], result.stderr.splitlines())
 
     def test_unexpected_exception_prints_one_line_and_logs_traceback(self) -> None:
-        import contextlib
-        import io
-        import os
-        from pathlib import Path
-        import tempfile
-        from unittest import mock
-
-        from godfather import app
-
         with tempfile.TemporaryDirectory() as tmp:
-            err = io.StringIO()
-            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}), \
-                    mock.patch.object(app, "command", side_effect=RuntimeError("boom")), \
-                    contextlib.redirect_stderr(err):
-                code = app.main(["--once"])
-            self.assertEqual(1, code)
-            self.assertEqual("godfather: internal error: RuntimeError: boom\n", err.getvalue())
+            for exc, expected in (
+                (RuntimeError("boom"), "godfather: internal error: RuntimeError: boom\n"),
+                (RuntimeError("line1\nline2"), "godfather: internal error: RuntimeError: line1 line2\n"),
+                (RuntimeError(""), "godfather: internal error: RuntimeError\n"),
+            ):
+                with self.subTest(exc=exc):
+                    err = io.StringIO()
+                    with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}), \
+                            mock.patch.object(app, "command", side_effect=exc), \
+                            contextlib.redirect_stderr(err):
+                        code = app.main(["--once"])
+                    self.assertEqual(1, code)
+                    self.assertEqual(expected, err.getvalue())
             log = Path(tmp) / "godfather" / "godfather.log"
             self.assertTrue(log.is_file())
             self.assertIn("RuntimeError: boom", log.read_text(encoding="utf-8"))
+
+            # Surrogate-escaped argv and an unwritable XDG_STATE_HOME still report one clean line.
+            blocked = Path(tmp) / "not-a-dir"
+            blocked.write_text("file", encoding="utf-8")
+            err = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": str(blocked)}), \
+                    mock.patch.object(app, "command", side_effect=RuntimeError("unwritable")), \
+                    contextlib.redirect_stderr(err):
+                code = app.main(["--once", "\udcff"])
+            self.assertEqual(1, code)
+            self.assertEqual("godfather: internal error: RuntimeError: unwritable\n", err.getvalue())
 
 
 class ClickTests(LiveCase):

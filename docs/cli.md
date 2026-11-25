@@ -88,10 +88,10 @@ for something else.
 [common/cliconvention.py](../common/cliconvention.py) runs a tool's command line in the environment a test gives it
 and reports each rule above that the tool breaks. It checks what it can check without knowing the tool: the error
 line and the help pointer (naming the command when there is one) for unknown commands and options, `--help`, `-h`
-and `<command> --help`, `--version`, that the help names every command, `--json` on the commands that print state and
-the same commands without it, and `--opt=value`: it must print what `--opt value` prints, or the text a test declares
-(`shows`) that appears only when the value took effect. Exit codes beyond 0 and 2, and refusals other than usage
-errors, are each package's own tests.
+and `<command> --help`, `--version`, that the help names every command, `--json` on the commands that print state
+(each line, for a command declared `jsonl`) and the same commands without it, and `--opt=value`: it must print what
+`--opt value` prints, or the text a test declares (`shows`) that appears only when the value took effect. Exit codes
+beyond 0 and 2, and refusals other than usage errors, are each package's own tests.
 
 Each package's tests run it once (`tests/test_cli_convention.py`), with the package's state in a temporary
 directory. A rule the package does not meet yet is listed there as an expected failure with the ticket that fixes it;
