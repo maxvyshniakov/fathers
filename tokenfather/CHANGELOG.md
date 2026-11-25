@@ -7,6 +7,7 @@ Versions: `tokenfather/__init__.py` names the version, and an installed release 
 
 ### Changed
 
+- `tokenfather --help` now uses the shared compact layout (≤ 80 columns, no wrapped command names).
 - Tokenfather runs on the shared `fathers_common` modules (`fathers#208`, `fathers#117`): `tokenfather changelog
   --json` now answers Godfather's changelog contract (`{"v": 1, "tool": "tokenfather", "version", "source",
   "entries"}`, Unreleased entries first with the installed commit; an invalid `--since` exits 2) instead of the raw

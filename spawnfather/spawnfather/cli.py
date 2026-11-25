@@ -45,7 +45,7 @@ import time
 import traceback
 from typing import Any, Callable, Dict, List, Mapping, NoReturn, Optional
 
-from fathers_common.cli import UsageParser
+from fathers_common.cli import UsageParser, format_top_help
 
 from . import __version__
 from . import background as _background
@@ -69,12 +69,60 @@ from .state import Store
 from .text import duration, seconds
 
 
+HELP_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
+    ("own & manage", (
+        ("own", "start a command as an owned process group (or --kind resource)"),
+        ("own-resource", "own a running resource (simulator, container, serve route)"),
+        ("adopt", "own a process that already runs"),
+        ("hand", "hand an entry over to another session or lane"),
+        ("extend", "give an entry a new TTL from now"),
+        ("reap", "end owned entries or an unowned process by identity"),
+    )),
+    ("inspect & maintain", (
+        ("list", "what runs, whose it is, its age and TTL"),
+        ("status", "dashboard snapshot: running entries, unowned procs, last sweep"),
+        ("sweep", "reap expired/orphaned entries; report unowned agent processes"),
+        ("settings", "show, check, set or reset settings (own.default_ttl, ...)"),
+    )),
+    ("meta & hooks", (
+        ("hook", "agent lifecycle hook (JSON on stdin)"),
+        ("capabilities", "what this spawnfather offers a dashboard"),
+        ("changelog", "installed release's changelog entries, newest first"),
+        ("version", "print spawnfather's version"),
+    )),
+)
+
+
+def format_help() -> str:
+    """Compact grouped top-level help (per-command details live in `<command> --help`)."""
+    options = (
+        ("-h, --help", "show this help and exit"),
+        ("--version", "show version and exit"),
+    )
+    return format_top_help(
+        "spawnfather [-h] [--version] <command> [options]",
+        "Own long-lived agent processes and resources; reap on owner exit or TTL.",
+        HELP_GROUPS,
+        options,
+        (
+            "Durations: seconds or 90s, 30m, 2h, 1d. State: $SPAWNFATHER_STATE.",
+            "Run 'spawnfather <command> --help' for options and examples.",
+        ),
+    )
+
+
 class Parser(UsageParser):
     """Keep exact option names and route usage errors through the same refusal as the command handlers."""
 
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
+    def __init__(self, *args: Any, top_level: bool = False, **kwargs: Any) -> None:
         kwargs.setdefault("allow_abbrev", False)
+        self._top_level = top_level
         super().__init__(*args, **kwargs)
+
+    def format_help(self) -> str:
+        if self._top_level:
+            return format_help()
+        return super().format_help()
 
     def usage_error(self, message: str) -> NoReturn:
         command = " ".join(self.prog.split()[1:]) or None
@@ -82,7 +130,7 @@ class Parser(UsageParser):
 
 
 def parser() -> Parser:
-    top = Parser(prog="spawnfather", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    top = Parser(prog="spawnfather", top_level=True, formatter_class=argparse.RawDescriptionHelpFormatter)
     top.add_argument("--version", action="store_true", help="print spawnfather's version and exit")
     sub = top.add_subparsers(dest="command", metavar="COMMAND")
 

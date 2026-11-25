@@ -40,7 +40,7 @@ class HelpTests(unittest.TestCase):
         self.assertLessEqual(max(len(line) for line in lines), 80, done.stdout)
         from lanefather import cli
         names = list(cli.COMMANDS)
-        listed = [line.split()[0] for line in lines if re.match(r"^    \S", line)]
+        listed = [line.split()[0] for line in lines if re.match(r"^  [^-\s]", line)]
         self.assertEqual(listed, names, "each command on one line of its own, in the table's order")
         self.assertIn("wait", names)
 

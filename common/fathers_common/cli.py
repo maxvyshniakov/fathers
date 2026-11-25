@@ -71,3 +71,36 @@ class UsageParser(argparse.ArgumentParser):
 
     def usage_error(self, message: str) -> NoReturn:
         raise NotImplementedError
+
+
+def format_top_help(
+    usage: str | Sequence[str],
+    summary: str,
+    groups: Sequence[tuple[str, Sequence[tuple[str, str]]]],
+    options: Sequence[tuple[str, str]],
+    footer: str | Sequence[str] = (),
+) -> str:
+    """Format a compact, single-screen top-level --help with aligned grouped commands and options."""
+    usage_lines = [usage] if isinstance(usage, str) else list(usage)
+    lines: list[str] = [
+        f"usage: {line}" if index == 0 else f"       {line}"
+        for index, line in enumerate(usage_lines)
+    ]
+    if summary:
+        lines.extend(["", *summary.splitlines()])
+    labels = [name for _, items in groups for name, _ in items] + [name for name, _ in options]
+    width = max((len(label) for label in labels), default=0) + 2
+    for title, items in groups:
+        if not items:
+            continue
+        lines.extend(["", f"{title}:"])
+        for name, desc in items:
+            lines.append(f"  {name:<{width}}{desc}")
+    if options:
+        lines.extend(["", "options:"])
+        for name, desc in options:
+            lines.append(f"  {name:<{width}}{desc}")
+    footer_lines = [footer] if isinstance(footer, str) else list(footer)
+    if footer_lines:
+        lines.extend(["", *footer_lines])
+    return "\n".join(lines) + "\n"

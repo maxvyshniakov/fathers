@@ -105,9 +105,9 @@ class ConventionTests(Case):
         shown = self.cli("--help").stdout
         self.assertNotIn("SUPPRESS", shown)
         self.assertNotIn("supervise", shown)
-        self.assertNotRegex(shown, r"\n    background\b", "the line the hook writes before a background command")
+        self.assertNotRegex(shown, r"\n  background\b", "the line the hook writes before a background command")
         for command in [c for c in cli.COMMANDS if c not in ("supervise", "background")]:
-            self.assertRegex(shown, rf"\n    {re.escape(command)}\b", command)
+            self.assertRegex(shown, rf"\n  {re.escape(command)}\b", command)
 
     def test_own_help_explains_keep_for_session_and_lane_handoff(self):
         shown = " ".join(self.cli("own", "--help").stdout.split())

@@ -367,6 +367,8 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
 
 ### Changed
 
+- `lanefather --help` now uses the shared compact, grouped layout (`workflow`, `manage`, `release & system`, ≤ 80
+  columns, ≤ 48 lines across Python 3.11–3.15) with no wrapped command names.
 - Exit codes conform to `docs/cli.md` (fathers#130): `settings` read-only refusals moved from exit 4 to exit 5, and
   missing-lane lookups (`state.Store.load`, `show`) exit 6 (`LaneNotFound`).
 - `lanefather show` (`show --json`) now reports `review.status = "stopped"` for a dead review instead of raw

@@ -19,7 +19,25 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import eventcheck
-from fathers_common import atomic, changelog, errors, events, installer
+from fathers_common import atomic, changelog, cli, errors, events, installer
+
+
+class FormatTopHelpTests(unittest.TestCase):
+    def test_formats_grouped_commands_and_options_with_aligned_columns(self) -> None:
+        text = cli.format_top_help(
+            ("tool <command>", "tool --version"),
+            "One-line summary.",
+            (("core", (("run", "run a command"), ("capabilities", "show capabilities"))),),
+            (("-h, --help", "show this help and exit"),),
+            "Run 'tool <command> --help' for details.",
+        )
+        lines = text.splitlines()
+        self.assertEqual("usage: tool <command>", lines[0])
+        self.assertEqual("       tool --version", lines[1])
+        self.assertIn("  run           run a command", lines)
+        self.assertIn("  capabilities  show capabilities", lines)
+        self.assertIn("  -h, --help    show this help and exit", lines)
+        self.assertEqual("Run 'tool <command> --help' for details.", lines[-1])
 
 
 class ErrorsTests(unittest.TestCase):

@@ -123,6 +123,9 @@ Versions and release rules: [README.md](README.md#versions).
 
 ### Changed
 
+- `godfather --help` and `godfather events --help` now use the shared compact layout (≤ 80 columns) listing
+  commands and options instead of bare usage lines.
+
 - README screenshots and animations moved to root `assets/` and are now captured via external `screen-kit`
   (`tools/screen-kit.config.mjs`), removing the in-repo `tools/raster.py`, `tools/compare_media.py`, bundled fonts
   and `pillow` dev dependency.

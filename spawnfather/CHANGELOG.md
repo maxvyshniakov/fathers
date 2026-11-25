@@ -87,6 +87,8 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 
 ### Changed
 
+- `spawnfather --help` now uses the shared compact, grouped layout (`own & manage`, `inspect & maintain`,
+  `meta & hooks`, ≤ 80 columns), removing the duplicated inline cheatsheet in favour of `<command> --help`.
 - Junkfather is now Spawnfather (fathers#170): the command is `spawnfather`, its state directory is
   `~/.local/state/spawnfather` (`$SPAWNFATHER_STATE`; legacy `$JUNKFATHER_*` environment variables still work), its
   releases live under `~/.local/share/spawnfather`, its hourly launchd agent is `com.spawnfather.sweep`, and its

@@ -9,7 +9,7 @@ import sys
 import textwrap
 from typing import Any, NoReturn
 
-from fathers_common.cli import UsageParser
+from fathers_common.cli import UsageParser, format_top_help
 
 from . import __version__, events
 from . import changelog as _changelog
@@ -74,6 +74,17 @@ class Parser(UsageParser):
             example = f" Example: {self.prog} {self.row.example}".rstrip() + "." if self.row.example else ""
             pointer = f"Usage: {self.prog} {self.row.usage}.{example} Try '{self.prog} --help'."
         self.exit(2, f"{self.tool}: {message}\n{pointer}\n")
+
+    def format_help(self) -> str:
+        if self.row is None:
+            return format_top_help(
+                f"{self.tool} <command> ...",
+                "Multi-provider agent token usage collector, daily rollup and lane reporter.",
+                (("commands", [(name, row.summary) for name, row in COMMANDS.items()]),),
+                (("-h, --help", "show this help and exit"), ("--version", "show version and exit")),
+                f"Run '{self.tool} <command> --help' for options and an example.",
+            )
+        return super().format_help()
 
     def option_name(self, name: str) -> str:
         return repr(name)

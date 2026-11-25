@@ -18,6 +18,8 @@ import os
 import sys
 from typing import Any, Callable, cast
 
+from fathers_common.cli import format_top_help
+
 from . import config as _config
 
 
@@ -105,13 +107,13 @@ COMMANDS: tuple[CommandSpec, ...] = (
     CommandSpec(
         "lock",
         "lock PATH -- COMMAND...",
-        "run COMMAND holding a flock on PATH; enclosing lease frees slots while waiting",
+        "run COMMAND holding flock on PATH; lease yields while waiting",
         stop_at_positional=True,
     ),
     CommandSpec(
         "session",
         "session start --label NAME [-n N|all] [--idle S] [--expect S] [--priority P] [--ticket ID] [--meta K=V]... [--wait S] | session stop NAME",
-        "hold the machine for a series of `run --session NAME -- COMMAND`",
+        "hold slots across a series of `run --session NAME` calls",
         options=(
             OptionSpec(("-l", "--label"), metavar="NAME", help="session name"),
             OptionSpec(("-n", "--slots"), metavar="N|all", help="number of slots to hold (default all)"),
@@ -207,7 +209,7 @@ COMMANDS: tuple[CommandSpec, ...] = (
     CommandSpec(
         "history",
         "history [N] | history export | history import HOST [FILE]",
-        "recent requests that left the queue; export or import another host's history",
+        "recent completed requests; export or import host history",
     ),
     CommandSpec(
         "stats",
@@ -286,26 +288,31 @@ COMMANDS: tuple[CommandSpec, ...] = (
 COMMAND_MAP: dict[str, CommandSpec] = {spec.name: spec for spec in COMMANDS}
 
 
+HELP_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("leases", ("run", "yield", "lock", "session", "reprioritize", "ask-yield")),
+    ("inspect", ("status", "history", "stats", "available", "advise", "procs", "dashboard")),
+    ("configure & maintain", ("slots", "order", "sweep", "settings", "lane-admission",
+                              "capabilities", "changelog", "version")),
+)
+
+
 def format_help() -> str:
-    """Generate top-level help text from the command table."""
-    lines = [
-        "usage: slotfather [--help | --version] <command> [options] [args...]",
-        "       slotfather                     (in a terminal: the live dashboard, godfather)",
-        "",
-        "commands:",
-    ]
-    width = max(len(spec.name) for spec in COMMANDS) + 2
-    for spec in COMMANDS:
-        lines.append(f"  {spec.name:<{width}}{spec.summary}")
-    lines.extend([
-        "",
-        "options:",
-        "  -h, --help      show this help and exit",
-        "  --version       show version information and exit",
-        "",
+    """Generate grouped top-level help text from the command table."""
+    groups = [(title, [(name, COMMAND_MAP[name].summary) for name in names]) for title, names in HELP_GROUPS]
+    options = (
+        ("-h, --help", "show this help and exit"),
+        ("--version", "show version and exit"),
+    )
+    return format_top_help(
+        (
+            "slotfather [--help | --version] <command> [options] [args...]",
+            "slotfather  (in a terminal: live dashboard via godfather)",
+        ),
+        "Shared machine-wide slot queue for heavy commands across projects and agents.",
+        groups,
+        options,
         "Run 'slotfather <command> --help' for details on a command.",
-    ])
-    return "\n".join(lines)
+    ).rstrip("\n")
 
 
 def format_command_help(spec: CommandSpec) -> str:

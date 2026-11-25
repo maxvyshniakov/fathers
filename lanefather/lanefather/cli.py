@@ -20,7 +20,7 @@ import textwrap
 import traceback
 from typing import Any, NoReturn
 
-from fathers_common.cli import UsageParser
+from fathers_common.cli import UsageParser, format_top_help
 
 from . import (
     __version__,
@@ -117,7 +117,7 @@ COMMANDS: dict[str, Command] = {
                     "<id> --reason REASON", "fix-login --reason 'waiting on API'"),
     "unpark": Command("resume a parked lane from park/<id>",
                       "<id> [--base REF] [--agent KIND] [--force-reason REASON]", "fix-login"),
-    "abandon": Command("abandon an unlanded lane and remove its worktree and claims",
+    "abandon": Command("abandon an unlanded lane; remove worktree and claims",
                        "<id> --reason REASON [--keep-branch REF] [--force-reason REASON]",
                        "fix-login --reason 'superseded'"),
     "recheck": Command("rerun a landed lane's red post-merge smoke", "<id> [--slots N]", "fix-login"),
@@ -140,7 +140,7 @@ COMMANDS: dict[str, Command] = {
     "results": Command("check results by tree and plan",
                        "key|lookup|record <rev> (--full | --checks A,B) [--status S] [--json]",
                        "lookup HEAD --full"),
-    "stamp": Command("verified-tree stamp ledger: record, check, list, start, finish, abort or complete",
+    "stamp": Command("verified-tree stamp ledger: record, check, list, lifecycle",
                      "record|check [REV] [--token HEX32] [--file NAME] [--json] | list [--file NAME] [--json] | "
                      "start | finish STATE [--token HEX32] | abort|complete TOKEN",
                      "check HEAD --json"),
@@ -155,7 +155,31 @@ COMMANDS: dict[str, Command] = {
     "project-hook": Command("run one configured project policy", "<name> [-- ARGS...]", "readiness -- --json"),
 }
 
+HELP_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("workflow", ("start", "next", "adopt", "scope", "check", "wait", "land", "review", "findings", "done")),
+    ("manage", ("drop", "park", "unpark", "abandon", "recheck", "smoke", "keep", "list", "show", "status", "gc")),
+    ("release & system", ("promote", "sync", "perf", "shipped", "results", "stamp", "stats", "settings",
+                          "changelog", "capabilities", "project-hook")),
+)
+
 WIDTH = 78
+
+
+def format_help(prog: str = "lanefather") -> str:
+    """One-screen grouped top-level help generated from COMMANDS."""
+    groups = [(title, [(name, COMMANDS[name].summary) for name in names]) for title, names in HELP_GROUPS]
+    options = (
+        ("-h, --help", "show this help and exit"),
+        ("--config PATH", "project .lanefather.toml (or LANEFATHER_CONFIG)"),
+        ("--version", "show version and exit"),
+    )
+    return format_top_help(
+        f"{prog} [--config PATH] <command> ...",
+        "Parallel changes in one repository: register, check, land, review, clean up.",
+        groups,
+        options,
+        f"Run '{prog} <command> --help' for options and examples.",
+    )
 
 
 class Parser(UsageParser):
@@ -180,6 +204,11 @@ class Parser(UsageParser):
             example = f" Example: {self.prog} {self.row.example}".rstrip() + "." if self.row.example else ""
             pointer = f"Usage: {self.prog} {self.row.usage}.{example} Try '{self.prog} --help'."
         self.exit(2, f"{self.tool}: {message}\n{pointer}\n")
+
+    def format_help(self) -> str:
+        if self.row is None:
+            return format_help(self.tool)
+        return super().format_help()
 
     def option_name(self, name: str) -> str:
         return repr(name)

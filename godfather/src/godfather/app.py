@@ -29,6 +29,7 @@ import traceback
 from typing import Any, Mapping, cast
 
 from fathers_common.atomic import atomic_write
+from fathers_common.cli import format_top_help
 from fathers_common.errors import FAILED, Refused, Usage, refuse, say
 
 from . import actions as _actions
@@ -55,12 +56,39 @@ from .views import events as _events_view
 from .views import machine as _machine
 from .views import overview as _overview
 
-USAGE = ("usage: godfather [--interval SECONDS]\n"
-         "       godfather --once [--page overview|lanes|spawns] [--width N] [--height N] [--color]\n"
-         "       godfather events [--source NAME]... [--follow] [--json]\n"
-         "       godfather --version")
+USAGE = format_top_help(
+    (
+        "godfather [options]",
+        "godfather events [--source NAME]... [--follow] [--json]",
+    ),
+    "Live terminal dashboard for Slotfather, Lanefather, Spawnfather and Tokenfather.",
+    (
+        ("commands", (("events", "stream or dump events across tools"),)),
+    ),
+    (
+        ("--interval SECONDS", "refresh interval for the live view"),
+        ("--once", "render one snapshot and exit"),
+        ("--page NAME", "initial page for --once: overview, lanes, spawns"),
+        ("--width N", "viewport width in columns for --once"),
+        ("--height N", "viewport height in rows for --once"),
+        ("--color", "emit ANSI color sequences in --once"),
+        ("-h, --help", "show this help and exit"),
+        ("--version", "show version and exit"),
+    ),
+    "Run 'godfather events --help' for event filter options.",
+).rstrip("\n")
 
-EVENTS_USAGE = "usage: godfather events [--source NAME]... [--follow] [--json]"
+EVENTS_USAGE = format_top_help(
+    "godfather events [--source NAME]... [--follow] [--json]",
+    "Stream or dump unified events across installed fathers tools.",
+    (),
+    (
+        ("--source NAME", "filter by tool (slotfather, lanefather, spawnfather, ...)"),
+        ("--follow", "keep streaming new events"),
+        ("--json", "print one JSON event per line"),
+        ("-h, --help", "show this help and exit"),
+    ),
+).rstrip("\n")
 
 UsageError = Usage
 
