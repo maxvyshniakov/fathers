@@ -104,7 +104,8 @@ COMMANDS: dict[str, Command] = {
                       "[--recover [--source URL...] [--target REF] "
                       "[--reviewed-range BASE..TIP]] [--reviewer ALIAS|both] [--audit] | "
                       "--overall <sha> [--since <base>] [--lanes ID,ID] [--paths GLOB... | --areas FILE | --area NAME] "
-                      "[--record [FILE] --reviewer ALIAS [--verdict approve|changes_requested] [--ref URL] [--note TEXT]]",
+                      "[--record [FILE] --reviewer ALIAS [--verdict approve|changes_requested] "
+                      "[--ref URL] [--note TEXT]]",
                       "fix-login --mark 1 fixed:fix-login-review-fixes"),
     "findings": Command("whether a review holds a SHA, for a publish", "<sha> [--since REF] [--json]",
                         "HEAD --json"),
