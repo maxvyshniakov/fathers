@@ -503,7 +503,8 @@ def parser(project: config.Config = config.DEFAULT) -> Parser:
                    help="move the local branches only, and only to a SHA the remote already has (#666)")
     p.add_argument("--slots", "--jobs", dest="jobs", type=int, choices=range(1, 9), metavar="{1..8}",
                    help="worker budget passed as verify --jobs for the batch gate "
-                        "(default: slotfather advise --max 2, sized after any load wait; alias: --jobs)")
+                        "(default: slotfather advise --max 2 with a 2-slot floor on multi-slot machines, "
+                        "sized after any load wait; alias: --jobs)")
     p.add_argument("--remote", default="origin")
     p.add_argument("--wait", type=float, default=120, metavar="SECONDS", help="wait this long for the landing lock")
     p.add_argument("--install", action="store_true",

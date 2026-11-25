@@ -588,11 +588,13 @@ def advise(maximum: int | None = None, exclusive: bool = False, cores_now: int |
                            settings=found_look.settings, estimate=found_look.estimate, host=host)
     block = adm.advise_block(label, command)
     capped_held = min(held, slots)
-    per_slot = machine / slots
-    load_unleased = min(averages[0], averages[1]) - capped_held * per_slot
-    measured_unleased = host.unleased_cpu if load_unleased >= 0.5 * per_slot else None
-    found = size(maximum or slots, machine, slots, averages, capped_held, block.waiting, exclusive,
-                 unleased_cpu=measured_unleased)
+    found = size(maximum or slots, machine, slots, averages, capped_held, block.waiting, exclusive)
+    baseline = size(maximum or slots, machine, slots, (0.0, 0.0, 0.0), capped_held, block.waiting, exclusive)
+    if found["capacity"] < baseline["capacity"]:
+        measured_unleased = host.unleased_cpu
+        if measured_unleased is not None:
+            found = size(maximum or slots, machine, slots, averages, capped_held, block.waiting, exclusive,
+                         unleased_cpu=measured_unleased)
     found["run_estimate"] = block.run_estimate
     ram_gib = basis["memory_gib"]
     if ram_gib is None:

@@ -811,7 +811,7 @@ class AdviceTests(SlotCase):
         advice = self.advise("--exclusive", load="0.5 2.0 8.0")
         self.assertEqual((4, 0.5, 0.5, 8.0), (advice["jobs"], advice["load"], advice["unleased_load"],
                                               advice["load15"]))
-        # fathers#257: stale load5 and load15 after heavy work exits never throttle once short load1 has dropped.
+        # fathers#257 regression pin: pre-existing min(load1, load5) keeps stale load5/load15 from throttling.
         cooling = self.advise(load="0.5 10.0 11.5")
         self.assertEqual((4, 0.5, 0.5, 10.0, 11.5),
                          (cooling["jobs"], cooling["load"], cooling["unleased_load"],

@@ -236,10 +236,11 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 
 ### Fixed
 
-- `slotfather advise` now consults measured unleased process CPU whenever the load-average residual reaches half a
-  slot (`0.5 * cores / slots`, the capacity rounding boundary) rather than only at `>= 1.0` core (fathers#257), so
-  stale load averages after recently exited work do not shrink worker advice on machines with fewer than 2 cores per
-  slot while short `load1` continues to govern cooling load over stale `load5`/`load15`.
+- `slotfather advise` now consults measured unleased process CPU whenever the load-average residual actually reduces
+  `size()`'s slot capacity (the half-slot rounding boundary, `0.5 * cores / slots`) rather than at a fixed `>= 1.0`
+  core threshold (fathers#257): this lowers the trigger below `1.0` core on machines with fewer than 2 cores per slot
+  so stale load averages do not shrink worker advice, and raises it above `1.0` core on machines with more than 2 cores
+  per slot so `ps` is skipped when unleased load costs no slot.
 - Unleased CPU load estimation (`query.size()`, `advise`, dashboard `advice.unleased_load`, and the CPU load admission
   gate) now caps the load-average residual (`min(load1, load5) - held * cores / slots`) by measured unleased process
   CPU from `ps` (read lazily when needed, or reused from the dashboard's process table), so Linux `loadavg` inflation

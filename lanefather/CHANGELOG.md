@@ -477,8 +477,9 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
 
 - `lanefather promote`'s batch gate no longer freezes at `--jobs 1` when transient peer leases occupy the machine at
   launch (fathers#257): on multi-slot machines it now requests a floor of 2 slots (`GATE_MIN_JOBS = 2`, via
-  `ranged_jobs`) at `interactive` priority so it waits briefly for a second slot instead of running an hour-long full
-  gate single-threaded, while still clamping to 1 on single-slot machines and honouring explicit `--slots` / `--jobs`.
+  `ranged_jobs`) at the gate's priority (`interactive` by default), waiting in the queue with no lease timeout for a
+  second slot instead of running a full gate single-threaded, while clamping to 1 on single-slot machines and honouring
+  explicit `--slots` / `--jobs` (pass `--jobs 1` to escape).
 - The post-merge smoke no longer stays on the one slot `slotfather advise` named at launch on a busy machine
   (fathers#255): with Slotfather's `slot-range` it requests `1-3` slots like a lane check requests `1-2`, takes what is
   free when the lease is granted, and records the grant in `<id>.post-merge.json` (`jobs`, `jobs_decision.granted`).

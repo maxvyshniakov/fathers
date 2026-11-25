@@ -665,10 +665,11 @@ history (`history.py`). The post-merge smoke (`land`, `recheck`, `smoke --rerun`
 and a minimum of 1 (fathers#255), so a smoke launched while the machine is busy still takes the slots that are free
 when its lease is granted instead of the one slot `advise` named at launch; its `<id>.post-merge.json` records
 `jobs_decision.advised_jobs` (when lower than the maximum), `min_jobs`, `max_jobs` and `granted`. The batch gate
-(`promote`) keeps a floor of 2 slots on multi-slot machines (fathers#257, clamping to 1 on a 1-slot machine and
-honouring explicit `--slots` / `--jobs`), so transient peer leases do not freeze a full gate at `--jobs 1` instead of
-waiting briefly at `interactive` priority for a second slot. When Slotfather does not advertise `slot-range`,
-the command arguments and receipts stay unchanged (aside from the batch gate's 2-slot floor on multi-slot machines).
+(`promote`) keeps a floor of 2 slots on multi-slot machines (fathers#257), clamping to 1 on a 1-slot machine and
+honouring explicit `--slots` / `--jobs`. Instead of freezing a full gate at `--jobs 1` when transient peer leases
+occupy the machine, it queues for 2 slots at the gate's priority (`interactive` by default) with no lease timeout
+(pass `--jobs 1` or `--slots 1` to override). When Slotfather does not advertise `slot-range`, the command arguments
+and receipts stay unchanged, aside from the batch gate's 2-slot floor on multi-slot machines.
 
 During any quiet verify run (no complete output line for `LANEFATHER_VERIFY_HEARTBEAT` seconds, default `30`, `0` or
 `off` to disable), the shared verify runner emits bounded heartbeat lines naming the state (`queued` when waiting in

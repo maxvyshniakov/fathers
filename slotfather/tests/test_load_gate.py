@@ -222,9 +222,10 @@ class GrantTests(SlotCase):
             advice = sf_query.advise()
         self.assertEqual((None, None), (block["load_block"], advice["load_block"]))
 
-    def test_advise_caps_stale_load_below_one_core_by_measured_unleased_cpu(self) -> None:
-        """fathers#257: on a 1-core-per-slot machine, stale loadavg of 0.8 would cost a slot; advise checks
-        measured unleased CPU at the half-slot threshold so freshly idle machines keep full capacity."""
+    def test_advise_caps_stale_load_by_measured_unleased_cpu_when_capacity_drops(self) -> None:
+        """fathers#257: advise consults measured unleased CPU whenever loadavg reduces size()'s capacity—including
+        below 1.0 core on <=2-core/slot hosts and exact IEEE-754 boundaries—and skips ps when no slot is lost."""
+        # 1) 4 cores / 4 slots (1 core/slot): stale 0.8 costs a slot; measured 0.05 restores full capacity.
         self.assertEqual(0, self.tool("slots", "4").returncode)
         env = self.environment("0", SLOTFATHER_CORES="4")
         env.pop("SLOTFATHER_LOADAVG", None)
@@ -233,6 +234,40 @@ class GrantTests(SlotCase):
               mock.patch("slotfather.queue.unleased_cpu_reader", return_value=lambda: 0.05)):
             advice = sf_query.advise()
         self.assertEqual((4, 0.05, 4), (advice["jobs"], advice["unleased_load"], advice["capacity"]))
+
+        # 2) Above 2 cores/slot (16 cores / 4 slots, per_slot=4.0): 1.5 costs no slot so ps is skipped; 2.1 does.
+        env16 = self.environment("0", SLOTFATHER_CORES="16")
+        env16.pop("SLOTFATHER_LOADAVG", None)
+        calls = 0
+
+        def count_reader() -> float:
+            nonlocal calls
+            calls += 1
+            return 0.05
+
+        with (mock.patch.dict(os.environ, env16, clear=True),
+              mock.patch("slotfather.platform.loads", return_value=(1.5, 1.5, 5.0)),
+              mock.patch("slotfather.queue.unleased_cpu_reader", return_value=count_reader)):
+            calm = sf_query.advise()
+        self.assertEqual((4, 4, 0), (calm["jobs"], calm["capacity"], calls))
+        with (mock.patch.dict(os.environ, env16, clear=True),
+              mock.patch("slotfather.platform.loads", return_value=(2.1, 2.1, 5.0)),
+              mock.patch("slotfather.queue.unleased_cpu_reader", return_value=count_reader)):
+            stale = sf_query.advise()
+        self.assertEqual((4, 0.05, 4, 1), (stale["jobs"], stale["unleased_load"], stale["capacity"], calls))
+
+        # 3) Exact IEEE-754 boundary (8 cores / 5 slots, 1 held, load=2.4 -> (8-2.4)/1.6+0.5 = 3.9999999999999996):
+        # capacity drops from 4 to 3 even though 2.4 - 1.6 = 0.7999999999999998 < 0.8; measured 0.05 restores 4.
+        self.assertEqual(0, self.tool("slots", "5").returncode)
+        self.entry("running", 1, "held")
+        env8 = self.environment("0", SLOTFATHER_CORES="8")
+        env8.pop("SLOTFATHER_LOADAVG", None)
+        calls = 0
+        with (mock.patch.dict(os.environ, env8, clear=True),
+              mock.patch("slotfather.platform.loads", return_value=(2.4, 2.4, 5.0)),
+              mock.patch("slotfather.queue.unleased_cpu_reader", return_value=count_reader)):
+            boundary = sf_query.advise()
+        self.assertEqual((4, 0.05, 4, 1), (boundary["jobs"], boundary["unleased_load"], boundary["capacity"], calls))
 
     def test_order_load_gate_saves_the_multiple_and_the_environment_only_lowers_it(self) -> None:
         self.entry("running", 1, "held")
