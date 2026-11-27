@@ -168,7 +168,7 @@ class Config:
     # other ignored file (.env, .claude/settings.local.json, notes) keeps it. Matched against each path component.
     gc_disposable: tuple[str, ...] = ("node_modules", "__pycache__", "target", ".build", "dist", "build", ".venv",
                                       ".turbo", ".next", "storybook-static", "coverage", ".pytest_cache",
-                                      ".ruff_cache", ".DS_Store")
+                                      ".ruff_cache", ".DS_Store", "artifacts")
     # [gc] log retention (fathers#259): prune finished-lane and non-lane logs under `<state>/logs/` older than
     # `log_max_age_days` days or over `log_max_mb` MiB total; 0 disables each bound.
     gc_log_max_age_days: int = 14

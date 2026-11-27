@@ -57,12 +57,33 @@ def git(*args):
     return subprocess.run(["git", *args], capture_output=True, text=True)
 
 
+def holds_repository(path):
+    for folder, directories, files in os.walk(path):
+        if ".git" in directories or ".git" in files:
+            return os.path.relpath(folder, path)
+    return None
+
+
+def dir_integrity_refusal(path):
+    if os.path.islink(path):
+        return "a symbolic link"
+    if not os.path.isdir(path):
+        return "not a folder"
+    repo = holds_repository(path)
+    if repo is not None:
+        where = "itself" if repo == "." else f"at {repo}"
+        return f"it holds a Git repository or worktree {where}"
+    return None
+
+
 def remove(entry, override):
     path = entry["id"]
     if not os.path.lexists(path):
         return "gone", ""
-    if entry["kind"] == "dir" and os.path.islink(path):
-        return "failed", "kept: a symbolic link"
+    if entry["kind"] == "dir":
+        why = dir_integrity_refusal(path)
+        if why:
+            return "failed", f"kept: {why}"
     keep = os.environ.get("FAKE_SPAWNFATHER_KEEP")
     if keep and re.search(keep, path) and not override:
         return "failed", "kept: in use by pid 4242 (fake)"
@@ -102,10 +123,24 @@ def main(args):
         if not (owner or "").startswith("lane:") or kind not in ("worktree", "dir") or not given:
             print("spawnfather: own-resource: usage", file=sys.stderr)
             return 2
-        path = os.path.realpath(given)
-        if not os.path.isdir(path):
-            print(f"spawnfather: refusing {given}: no folder {path}", file=sys.stderr)
-            return 6
+        if kind == "dir":
+            absolute = os.path.abspath(os.path.expanduser(given))
+            if os.path.islink(absolute):
+                print(f"spawnfather: refusing {given}: {absolute} is a symbolic link", file=sys.stderr)
+                return 3
+            path = os.path.realpath(absolute)
+            if not os.path.isdir(path):
+                print(f"spawnfather: refusing {given}: no folder {path}", file=sys.stderr)
+                return 6
+            why = dir_integrity_refusal(path)
+            if why:
+                print(f"spawnfather: refusing {given}: {path}: {why}", file=sys.stderr)
+                return 3
+        else:
+            path = os.path.realpath(given)
+            if not os.path.isdir(path):
+                print(f"spawnfather: refusing {given}: no folder {path}", file=sys.stderr)
+                return 6
         held = next((e for e in data["entries"] if e["id"] == path and e["kind"] == kind), None)
         already = held is not None
         if held is not None and held["owner"] != owner:
@@ -142,8 +177,8 @@ def main(args):
                 keep = os.environ.get("FAKE_SPAWNFATHER_KEEP")
                 if not os.path.lexists(entry["id"]):
                     results.append(row(entry, "gone", "reap"))
-                elif entry["kind"] == "dir" and os.path.islink(entry["id"]):
-                    results.append(row(entry, "would-fail", "reap; kept: a symbolic link"))
+                elif entry["kind"] == "dir" and dir_integrity_refusal(entry["id"]):
+                    results.append(row(entry, "would-fail", f"reap; kept: {dir_integrity_refusal(entry['id'])}"))
                 elif keep and re.search(keep, entry["id"]) and not override:
                     results.append(row(entry, "would-fail", "reap; kept: in use by pid 4242 (fake)"))
                 else:

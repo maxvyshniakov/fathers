@@ -449,44 +449,40 @@ def _scratch_dirs(record: Record, store: state.Store | None = None) -> list[Path
     return found
 
 
-def _clean_stale_base_checkouts(scratch_dirs: list[Path], common: Any) -> None:
-    """Remove any stale `base-*` throwaway worktrees inside `scratch_dirs` through git, without following symlinks."""
+def linked_base_checkouts(scratch_dirs: list[Path], common: Any) -> list[Path]:
+    """`base-*` directories inside `scratch_dirs` that are verified linked worktrees of `common`'s repository."""
     if not isinstance(common, str) or not common or not os.path.isdir(common):
-        return
-    main = main_checkout(common)
+        return []
+    try:
+        main = main_checkout(common)
+        linked = worktrees.linked_worktree_paths(main)
+    except LaneError:
+        return []
+    found: list[Path] = []
     for scratch_dir in scratch_dirs:
         if scratch_dir.is_symlink() or not scratch_dir.is_dir():
             continue
         for stale in sorted(scratch_dir.glob("base-*")):
             if stale.is_symlink() or not stale.is_dir():
                 continue
-            worktrees.remove_checkout(main, stale)
+            if os.path.realpath(stale) in linked:
+                found.append(stale)
+    return found
 
 
-def _reap_remaining_store_scratch(
-    record: Record,
-    store: state.Store,
-    main: str,
-    already_removed: set[str],
-) -> tuple[int, list[str]]:
-    """Reap any remaining scratch directory of `record` strictly inside `store.directory`, never following symlinks."""
-    freed = 0
-    removed: list[str] = []
-    for candidate in _scratch_dirs(record, store):
-        if not lifetimes.within_dir(candidate, store.directory):
-            continue
-        real = os.path.realpath(candidate)
-        for stale in sorted(candidate.glob("base-*")):
-            if stale.is_symlink() or not stale.is_dir():
-                continue
-            worktrees.remove_checkout(main, stale)
-        sz = worktrees.size(str(candidate)) or worktrees.dir_bytes(candidate)
-        if worktrees.safe_rmtree(candidate):
-            freed += sz
-            if real not in already_removed:
-                already_removed.add(real)
-                removed.append(real)
-    return freed, removed
+def clean_stale_base_checkouts(scratch_dirs: list[Path], common: Any) -> None:
+    """Remove verified linked `base-*` throwaway worktrees inside `scratch_dirs` through git, never standalone repos."""
+    stale_bases = linked_base_checkouts(scratch_dirs, common)
+    if not stale_bases or not isinstance(common, str) or not common:
+        return
+    main = main_checkout(common)
+    for stale in stale_bases:
+        worktrees.remove_checkout(main, stale)
+
+
+def is_known_base_refusal(message: str, known_bases: list[Path]) -> bool:
+    """Whether a Spawnfather `dir` refusal refers solely to a verified linked `base-*` checkout."""
+    return any(f"it holds a Git repository or worktree at {base.name}" in message for base in known_bases)
 
 
 def removal_paths(record: Record, *, store: state.Store | None = None) -> list[str]:
@@ -505,7 +501,7 @@ def removal_paths(record: Record, *, store: state.Store | None = None) -> list[s
     found: list[str] = []
     seen: set[str] = set()
     for p in (worktree, *targets, *scratch):
-        if isinstance(p, str) and p and os.path.exists(p):
+        if isinstance(p, str) and p and not os.path.islink(p) and os.path.exists(p):
             real = os.path.realpath(p)
             if real not in seen:
                 seen.add(real)
@@ -522,16 +518,17 @@ def evidence(store: state.Store, bases: list[str], override: str | None) -> life
 
 
 def on_demand(spawnfather: lifetimes.Spawnfather, record: Record, *, store: state.Store | None = None,
-              clean_stale_base: bool = True) -> list[str]:
+              clean_stale_base: bool = True, hand_over: bool = True) -> list[str]:
     """Register what the lane record names before a removal (a lane from before the upgrade, a registration that
     failed): a fix lane first takes its parent's worktree over. One line per path Spawnfather refused."""
-    if clean_stale_base:
+    if hand_over:
         parent = state.hand_over_parent(record) if lifecycle.is_fix_lane(record) else None
         if parent is not None:
             spawnfather.hand(lifetimes.owner({**record, "id": parent}), lifetimes.owner(record), "worktree")
+    if clean_stale_base:
         # The base checkouts a killed red check left in the scratch (#568) are Lanefather's own throwaway worktrees:
         # they go through git first, as base_checkout removes them (a folder holding a worktree is never Spawnfather's).
-        _clean_stale_base_checkouts(_scratch_dirs(record, store), record.get("common_dir"))
+        clean_stale_base_checkouts(_scratch_dirs(record, store), record.get("common_dir"))
     return lifetimes.register(spawnfather, record, store=store)
 
 
@@ -540,7 +537,9 @@ def holders(record: Record, store: state.Store, spawnfather: lifetimes.Spawnfath
             clean_stale_base: bool = True) -> tuple[list[str], list[str], str | None]:
     """What keeps done or drop from removing the lane: another lane in its worktree (a fix lane), an agent's lock,
     and whatever Spawnfather would keep (a process it does not stop, ignored files, work not in the bases), asked
-    as a dry run after registering what the record names. Returns (overridable_refusals, hard_refusals, lock)."""
+    as a dry run after registering what the record names. Never deletes `base-*` worktrees during refusal checks;
+    known linked `base-*` worktrees are cleaned only in `remove()` once refusals pass. Returns
+    (overridable_refusals, hard_refusals, lock)."""
     lane_id, prog = record["id"], store.project.command
     worktree = record.get("worktree")
     refusals: list[str] = []
@@ -556,12 +555,15 @@ def holders(record: Record, store: state.Store, spawnfather: lifetimes.Spawnfath
         if lock is not None:
             refusals.append(f"an agent still holds {worktree} (locked: {lock}); run {prog} {verb} {lane_id} "
                             "once it exits")
+    known_bases = linked_base_checkouts(_scratch_dirs(record, store), record.get("common_dir"))
     unowned = [f"Spawnfather does not own {problem}"
-               for problem in on_demand(spawnfather, record, store=store, clean_stale_base=clean_stale_base)]
+               for problem in on_demand(spawnfather, record, store=store, clean_stale_base=False,
+                                        hand_over=clean_stale_base)
+               if not is_known_base_refusal(problem, known_bases)]
     hard_refusals += unowned
     planned = spawnfather.reap(lifetimes.owner(record), proof, dry_run=True, reason=f"lanefather {verb} {lane_id}")
     kept = [f"Spawnfather keeps {k}" for k in planned.kept
-            if not (lock is not None and f"locked: {lock}" in k)]
+            if not (lock is not None and f"locked: {lock}" in k) and not is_known_base_refusal(k, known_bases)]
     # When proof already carries an override, anything Spawnfather still keeps is an un-overridable integrity guard.
     if proof.override:
         hard_refusals += kept
@@ -587,7 +589,7 @@ def remove(record: Record, store: state.Store, spawnfather: lifetimes.Spawnfathe
     kept_set = set(keep_branches)
     branches = [b for b in (record["branch"], harness)
                 if b and b not in kept_set and git_ok(main, "rev-parse", "--verify", "--quiet", "refs/heads/" + b)]
-    unowned = on_demand(spawnfather, record, store=store, clean_stale_base=True)
+    unowned = on_demand(spawnfather, record, store=store, clean_stale_base=True, hand_over=True)
     if unowned:
         raise LaneError(f"{verb} refused: Spawnfather does not own what the lane holds:\n- "
                         + "\n- ".join(unowned))
@@ -600,14 +602,9 @@ def remove(record: Record, store: state.Store, spawnfather: lifetimes.Spawnfathe
         removed.append(f"stopped {process}")
     if reaped.kept:
         raise LaneError(f"{verb} refused: Spawnfather kept what the lane holds:\n- " + "\n- ".join(reaped.kept))
-    already_removed: set[str] = set()
     for path in reaped.removed:
         freed += sizes.get(path, 0)
         removed.append(path)
-        already_removed.add(os.path.realpath(path))
-    extra_freed, extra_removed = _reap_remaining_store_scratch(record, store, main, already_removed)
-    freed += extra_freed
-    removed.extend(extra_removed)
     git(main, "worktree", "prune")
     for branch in branches:
         if not git_ok(main, "rev-parse", "--verify", "--quiet", "refs/heads/" + branch):

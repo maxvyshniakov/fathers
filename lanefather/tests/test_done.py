@@ -181,43 +181,52 @@ class DoneTests(LaneCase):
         self.assertEqual((outside / "keep.txt").read_text(), "do not delete\n")
         self.assertEqual(self.record("d")["status"], "done")
 
-    def test_done_reaps_remaining_store_scratch_if_spawnfather_leaves_it_and_never_deletes_outside_store(self):
-        """fathers#259: if Spawnfather returns without removing `<state>/<id>.scratch`, done still reaps it inside
-        the store directory, while never directly deleting a scratch directory outside `store.directory`."""
-        from unittest import mock
+    def test_lifetimes_outcome_treats_non_terminal_skipped_as_kept_and_removal_paths_skips_symlinks(self):
+        """fathers#259 review (F1/F7/W3): non-terminal Spawnfather skips keep the lane open, terminal skips do not,
+        and helper entry points never follow top-level symlinks."""
+        from lanefather import done, lifetimes, worktrees
 
-        from lanefather import config, done, lifetimes, state
+        non_terminal = lifetimes.outcome(
+            [{"result": "skipped", "reason": "already reaping", "resource": {"kind": "dir", "id": "/x"}}],
+            dry_run=False,
+        )
+        self.assertEqual(non_terminal.kept, ["/x: already reaping"])
+        terminal = lifetimes.outcome(
+            [{"result": "skipped", "reason": "already reaped", "resource": {"kind": "dir", "id": "/x"}}],
+            dry_run=False,
+        )
+        self.assertEqual(terminal.kept, [])
 
-        worktree, record, *_ = self.landed_agent_lane()
+        self.state.mkdir(parents=True, exist_ok=True)
+        target = self.tmp / "sym-target"
+        self.write(target, "big.bin", "z" * 4096)
+        link = self.state / "sym.scratch"
+        link.symlink_to(target)
+        self.assertEqual(worktrees.dir_bytes(link), 0)
+        self.assertEqual(done.removal_paths({"scratch": [str(link)]}), [])
+        dangling = self.state / "dangling.scratch"
+        dangling.symlink_to(self.tmp / "missing-target")
+        self.assertFalse(worktrees.safe_rmtree(dangling))
+        self.assertTrue(dangling.is_symlink())
+
+    def test_refused_done_does_not_delete_base_worktree_or_standalone_repo(self):
+        """fathers#259 review (F3): refusal checks must never delete linked base-* checkouts or standalone repos."""
+        worktree, *_ = self.landed_agent_lane()
         canonical = self.state / "d.scratch"
-        self.write(canonical, "leftover.log", "x" * 1024)
-        outside = self.tmp / "outside-extra-scratch"
-        self.write(outside, "keep.txt", "outside")
-        rec_path = self.state / "d.json"
-        mutated = dict(record)
-        mutated["scratch"] = [str(canonical), str(outside)]
-        rec_path.write_text(json.dumps(mutated))
-
-        real_reap = lifetimes.Spawnfather.reap
-
-        def reap_leaving_scratch(self_sf: lifetimes.Spawnfather, lane: str, ev: lifetimes.Evidence,
-                                 *, dry_run: bool, reason: str) -> lifetimes.Reaped:
-            res = real_reap(self_sf, lane, ev, dry_run=dry_run, reason=reason)
-            if not dry_run:
-                # Recreate both dirs as if Spawnfather skipped dir cleanup while returning no kept refusals.
-                self.write(canonical, "leftover.log", "x" * 1024)
-                self.write(outside, "keep.txt", "outside")
-            return res
-
-        cfg = config.load(self.integration / ".lanefather.toml")
-        store = state.Store(cfg, directory=self.state)
-        with (mock.patch.dict("os.environ", self.env, clear=False),
-              mock.patch.object(lifetimes.Spawnfather, "reap", reap_leaving_scratch)):
-            freed = done.finish("d", None, store)
-        self.assertGreater(freed, 0)
-        self.assertFalse(worktree.exists())
-        self.assertFalse(canonical.exists(), "canonical scratch inside store must be reaped")
-        self.assertTrue((outside / "keep.txt").exists(), "fallback must never delete outside store.directory")
+        stale_base = canonical / "base-0123456789ab"
+        self.git(self.repo, "worktree", "add", "-q", "--detach", str(stale_base), "integrate/q")
+        # Dirty worktree forces done to refuse before remove().
+        self.write(worktree, "dirty.txt", "uncommitted\n")
+        self.lane("done", "d", ok=False)
+        self.assertTrue(stale_base.is_dir(), "refused done must not delete base-* worktree early")
+        (worktree / "dirty.txt").unlink()
+        # A standalone git repo named base-repro is never deleted by clean_stale_base_checkouts.
+        repro = canonical / "base-repro"
+        repro.mkdir(parents=True, exist_ok=True)
+        self.git(repro, "init", "-q")
+        refused = self.lane("done", "d", ok=False)
+        self.assertIn("base-repro", refused)
+        self.assertTrue((repro / ".git").exists(), "standalone repo inside scratch must never be deleted")
 
 
 class AutoDoneTests(LaneCase):

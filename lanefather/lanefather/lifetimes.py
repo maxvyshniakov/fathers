@@ -151,6 +151,9 @@ class Spawnfather:
                                    *(["--dry-run"] if dry_run else [])]), dry_run)
 
 
+_TERMINAL_SKIP_REASONS = ("already reaped", "already gone", "already exited")
+
+
 def outcome(rows: list[dict[str, Any]], dry_run: bool) -> Reaped:
     found = Reaped(rows=rows)
     for row in rows:
@@ -160,6 +163,10 @@ def outcome(rows: list[dict[str, Any]], dry_run: bool) -> Reaped:
         found.stopped += [str(item) for item in cast(list[Any], row.get("stopped") or row.get("stops") or [])]
         if result in ("failed", "would-fail", "unknown"):
             found.kept.append(f"{what}: {str(row.get('reason') or result).removeprefix('reap; ')}")
+        elif result == "skipped":
+            reason = str(row.get("reason") or result).removeprefix("reap; ")
+            if not any(term in reason for term in _TERMINAL_SKIP_REASONS):
+                found.kept.append(f"{what}: {reason}")
         elif result in ("stopped", "killed", "gone", "would-stop") and resource and (
                 not dry_run or result == "would-stop"):
             found.removed.append(what)

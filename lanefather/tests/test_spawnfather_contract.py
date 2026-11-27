@@ -10,6 +10,7 @@ import contextlib
 import json
 import os
 import pathlib
+import shutil
 import subprocess
 import sys
 import time
@@ -251,6 +252,48 @@ class SpawnfatherContractTests(LaneCase):
         self.assertFalse(worktree.exists())
         self.assertEqual(theirs, self.lane_entries("a", other))
         self.assertTrue(all(pathlib.Path(path).exists() for _, path, _ in theirs))
+
+    def test_real_spawnfather_gc_dry_run_gone_lane_with_base_checkout_and_symlink_scratch(self):
+        """fathers#259 review (F1/F3/F6): under real Spawnfather, gc --dry-run previews dropping a gone lane with
+        base-* without error, live gc drops it, orphaned scratch with a nested repo is kept, and symlinked scratch
+        refuses done with 'a symbolic link'."""
+        # 1. Gone lane with stale linked base-* checkout inside its scratch.
+        self.start("g", "lib/g.txt", "--create")
+        wt = pathlib.Path(self.record("g")["worktree"])
+        scratch = self.state / "g.scratch"
+        stale_base = scratch / "base-0123456789ab"
+        self.git(self.repo, "worktree", "add", "-q", "--detach", str(stale_base), "integrate/q")
+        self.git(self.repo, "worktree", "remove", "--force", str(wt))
+        self.git(self.repo, "branch", "-D", "lane/g")
+        dry = json.loads(self.lane("gc", "--dry-run", "--json"))
+        self.assertEqual(dry["errors"], [], dry)
+        self.assertIn("g", [r["path"] for r in dry["removed"] if r["kind"] == "lane"])
+        self.assertTrue(stale_base.is_dir(), "gc --dry-run must not delete base-*")
+        live = json.loads(self.lane("gc", "--json"))
+        self.assertEqual(live["errors"], [], live)
+        self.assertFalse(scratch.exists())
+
+        # 2. Orphaned scratch holding a standalone git repo is kept by real Spawnfather.
+        orphan = self.state / "orphan-git.scratch"
+        sub = orphan / "sub"
+        sub.mkdir(parents=True)
+        self.git(sub, "init", "-q")
+        after = json.loads(self.lane("gc", "--json"))
+        self.assertTrue((sub / ".git").exists())
+        self.assertIn(str(orphan.resolve()), [k["path"] for k in after["kept"]])
+
+        # 3. Symlinked scratch refuses done with 'a symbolic link' under real Spawnfather.
+        wt_s, _ = self.landed("s")
+        s_scratch = self.state / "s.scratch"
+        if s_scratch.exists():
+            shutil.rmtree(s_scratch)
+        outside = self.tmp / "outside-real"
+        self.write(outside, "keep.txt", "safe\n")
+        s_scratch.symlink_to(outside)
+        refused = self.lane("done", "s", ok=False)
+        self.assertIn("a symbolic link", refused)
+        self.assertTrue((outside / "keep.txt").exists())
+        self.assertTrue(wt_s.exists())
 
 
 if __name__ == "__main__":

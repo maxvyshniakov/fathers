@@ -625,3 +625,72 @@ class ScratchAndLogGcTests(GcCase):
             self.assertEqual(res.errors, [])
             self.assertEqual(res.removed, [])
             self.assertEqual(res.freed, 0)
+
+    def test_gc_keeps_scratch_without_spawnfather_and_keeps_nested_repo(self):
+        """fathers#259 review (F1): gc routes scratch sweeping through Spawnfather and keeps scratch dirs when
+        Spawnfather is absent or when a scratch dir holds a standalone Git repository."""
+        orphan = self.state / "orphan-repo.scratch"
+        subrepo = orphan / "subrepo"
+        subrepo.mkdir(parents=True)
+        self.git(subrepo, "init", "-q")
+        report = self.collect()
+        self.assertTrue((subrepo / ".git").exists(), "nested repo inside scratch must be kept by Spawnfather")
+        self.assertIn(str(orphan.resolve()), [k["path"] for k in report["kept"]])
+
+        plain = self.state / "plain-orphan.scratch"
+        plain.mkdir()
+        (plain / "tmp.txt").write_text("x")
+        self.env["FAKE_SPAWNFATHER_OLD"] = "1"
+        try:
+            without_sf = self.collect()
+        finally:
+            self.env.pop("FAKE_SPAWNFATHER_OLD", None)
+        self.assertTrue(plain.exists(), "without Spawnfather, gc must keep *.scratch dirs")
+        self.assertIn(str(plain.resolve()), [k["path"] for k in without_sf["kept"]])
+
+    def test_gc_protects_active_promote_perf_running_review_and_audit_logs(self):
+        """fathers#259 review (F2): max_mb eviction must spare active promote/perf logs while .promote.lock is held,
+        logs of running *.review.json receipts, batch reviews covering live lanes, and _audit.<live_id> logs."""
+        import fcntl
+
+        self.configure("log_max_age_days = 0\nlog_max_mb = 1\n")
+        logs = self.state / "logs"
+        logs.mkdir(parents=True, exist_ok=True)
+        self._write_lane_record("live-a", "active")
+        now = time.time()
+        chunk = "x" * (400 * 1024)
+
+        promote_log = logs / "promote-abcdef0123-20261126T000000.log"
+        promote_log.write_text(chunk)
+        os.utime(promote_log, (now - 500, now - 500))
+
+        audit_log = logs / "review-_audit.live-a-20261126T000000.log"
+        audit_log.write_text(chunk)
+        os.utime(audit_log, (now - 450, now - 450))
+
+        ship_log = logs / "review-ship-abcdef012345-20261126T000000.log"
+        ship_log.write_text(chunk)
+        os.utime(ship_log, (now - 400, now - 400))
+        (self.state / "ship-abcdef012345.review.json").write_text(json.dumps({
+            "v": 1, "status": "running", "pid": os.getpid(), "log": str(ship_log),
+        }))
+
+        evictable = logs / "lane-done-z-20261126T000100.log"
+        evictable.write_text(chunk)
+        os.utime(evictable, (now - 100, now - 100))
+
+        lock_path = self.state / ".promote.lock"
+        lock_path.touch()
+        with open(lock_path, "r+") as handle:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            try:
+                report = self.collect()
+            finally:
+                fcntl.flock(handle, fcntl.LOCK_UN)
+
+        removed_paths = [item["path"] for item in report["removed"] if item["kind"] == "log"]
+        self.assertEqual(removed_paths, [str(evictable.resolve())])
+        self.assertTrue(promote_log.exists(), "promote log under active .promote.lock must be spared")
+        self.assertTrue(audit_log.exists(), "_audit.<live_id> log must be spared")
+        self.assertTrue(ship_log.exists(), "running review receipt log must be spared")
+        self.assertFalse(evictable.exists())

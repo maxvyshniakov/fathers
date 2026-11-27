@@ -89,14 +89,19 @@ def tool(name: str) -> Optional[str]:
     return shutil.which(name) or shutil.which(name, path=os.pathsep.join(EXTRA_PATH))
 
 
-def run(argv: List[str], timeout: float = RESOURCE_TIMEOUT, env: Optional[Mapping[str, str]] = None) -> Ran:
-    """argv as given, never through a shell, with a timeout; no stdin."""
+def run(argv: List[str], timeout: float = RESOURCE_TIMEOUT, env: Optional[Mapping[str, str]] = None,
+        stdin: Optional[str] = None) -> Ran:
+    """argv as given, never through a shell, with a timeout; no stdin unless `stdin` is given."""
     found = tool(argv[0]) if "/" not in argv[0] else argv[0]
     if not found:
         return Ran(None, error=f"{argv[0]}: not found")
     try:
-        done = subprocess.run([found, *argv[1:]], capture_output=True, text=True, timeout=timeout,
-                              stdin=subprocess.DEVNULL, env=env)
+        if stdin is None:
+            done = subprocess.run([found, *argv[1:]], capture_output=True, text=True, timeout=timeout,
+                                  stdin=subprocess.DEVNULL, env=env)
+        else:
+            done = subprocess.run([found, *argv[1:]], capture_output=True, text=True, timeout=timeout,
+                                  input=stdin, env=env)
     except subprocess.TimeoutExpired:
         return Ran(None, error=f"{argv[0]} did not answer in {timeout:.0f} s")
     except OSError as error:
@@ -460,7 +465,7 @@ class Dir(Kind):
         path = str(resource.get("id"))
         if not os.path.lexists(path):
             return False
-        return True if os.path.isdir(path) and not os.path.islink(path) else None
+        return True if os.path.isdir(path) or os.path.islink(path) else None
 
     def resolve(self, given: str, listed: Listing) -> Dict[str, Any]:
         from . import dirs

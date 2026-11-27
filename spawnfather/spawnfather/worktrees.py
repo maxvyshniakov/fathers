@@ -99,10 +99,10 @@ NONE = Evidence()
 
 
 def git(where: str, *args: str, timeout: float = RESOURCE_TIMEOUT, both: bool = False,
-        env: Optional[Mapping[str, str]] = None) -> Tuple[Optional[int], str]:
+        env: Optional[Mapping[str, str]] = None, stdin: Optional[str] = None) -> Tuple[Optional[int], str]:
     """`git -C where ARGS` without a shell: (exit code, stdout; with `both` stdout and stderr), code None when git
     could not run or timed out; on a failure its stderr."""
-    ran = run(["git", "--no-optional-locks", "-C", where, *args], timeout=timeout, env=env)
+    ran = run(["git", "--no-optional-locks", "-C", where, *args], timeout=timeout, env=env, stdin=stdin)
     if ran.code != 0:
         return ran.code, ran.err or ran.error
     return ran.code, ran.out + ran.err if both else ran.out
@@ -175,31 +175,47 @@ def short(ref: str) -> str:
     return ref.removeprefix("refs/remotes/").removeprefix("refs/heads/")
 
 
+def _patch_ids(repo: str, diff_text: str) -> Optional[Set[str]]:
+    if not diff_text.strip():
+        return set()
+    code, out = git(repo, "patch-id", "--stable", stdin=diff_text)
+    if code != 0:
+        return None
+    return {line.split()[0] for line in out.splitlines() if line.strip()}
+
+
 def _squashed_into(repo: str, commit: str, target: str) -> bool:
-    """Whether `commit`'s net tree change since its merge-base with `target` matches a single commit on `target`
-    (a multi-commit squash-merge). Caller has already ruled out ancestry and merge commits in `target..commit`.
-    Writes only a deterministic, unreferenced commit object; never mutates refs. Fails safe on any git error."""
+    """Whether `commit`'s net tree change since its merge-base with `target` matches a single non-merge commit on
+    `target` (a multi-commit squash-merge). Caller has already ruled out ancestry and merge commits in
+    `target..commit`. Purely read-only (writes nothing to `.git/objects` and mutates no refs); fails safe on any
+    git error. Rejects branches whose tip tree already appeared on an earlier commit in `base..commit` (e.g.
+    trailing `--allow-empty` or net-reverted commits)."""
     code, out = git(repo, "merge-base", target, commit)
     base_lines = out.splitlines() if code == 0 else []
     if len(base_lines) != 1 or not base_lines[0].strip():
         return False
     base = base_lines[0].strip()
-    code_c, tree_c = git(repo, "rev-parse", "--verify", "-q", f"{commit}^{{tree}}")
     code_b, tree_b = git(repo, "rev-parse", "--verify", "-q", f"{base}^{{tree}}")
-    commit_tree = tree_c.strip() if code_c == 0 else ""
     base_tree = tree_b.strip() if code_b == 0 else ""
-    if not commit_tree or not base_tree or commit_tree == base_tree:
+    code_t, trees_out = git(repo, "log", "--format=%T", f"{base}..{commit}")
+    trees = [t.strip() for t in trees_out.splitlines() if t.strip()] if code_t == 0 else []
+    if len(trees) < 2 or not base_tree or trees[0] == base_tree or trees[0] in trees[1:]:
         return False
-    commit_env = {**os.environ, "GIT_AUTHOR_NAME": "_", "GIT_AUTHOR_EMAIL": "_",
-                  "GIT_AUTHOR_DATE": "1970-01-01T00:00:00Z", "GIT_COMMITTER_NAME": "_", "GIT_COMMITTER_EMAIL": "_",
-                  "GIT_COMMITTER_DATE": "1970-01-01T00:00:00Z"}
-    code, out = git(repo, "-c", "commit.gpgSign=false", "commit-tree", commit_tree, "-p", base, "-m", "_",
-                    env=commit_env)
-    virtual = out.strip() if code == 0 else ""
-    if not virtual:
+    code, net_diff = git(repo, "diff-tree", "-M", "--no-ext-diff", "-p", base, commit)
+    if code != 0 or not net_diff.strip():
         return False
-    code, out = git(repo, "cherry", target, virtual)
-    return code == 0 and out.splitlines() == [f"- {virtual}"]
+    net_ids = _patch_ids(repo, net_diff)
+    if not net_ids or len(net_ids) != 1:
+        return False
+    net_id = next(iter(net_ids))
+    code, revs = git(repo, "rev-list", "--no-merges", f"{base}..{target}")
+    if code != 0 or not revs.strip():
+        return False
+    code, target_diffs = git(repo, "diff-tree", "--stdin", "-M", "--no-ext-diff", "-p", stdin=revs)
+    if code != 0 or not target_diffs.strip():
+        return False
+    target_ids = _patch_ids(repo, target_diffs)
+    return target_ids is not None and net_id in target_ids
 
 
 def merged(repo: str, commit: str, targets: Sequence[str]) -> bool:

@@ -35,6 +35,12 @@ def worktrees_root(common: str, project: config.Config | None = None) -> Path:
     return worktrees_root_from_main(main_checkout(common), project)
 
 
+def linked_worktree_paths(worktree: Any) -> set[str]:
+    """Resolved paths of all linked (non-main) worktrees registered in `worktree`'s repository."""
+    listed = worktree_list(str(worktree))
+    return {os.path.realpath(w["path"]) for w in listed[1:] if w.get("path")}
+
+
 def remove_checkout(worktree: Any, path: Path) -> None:
     git(worktree, "worktree", "remove", "--force", "--force", str(path), check=False)
     if path.exists():
@@ -186,6 +192,8 @@ def size(path: str) -> int:
 
 def dir_bytes(path: Path) -> int:
     """Total byte size of non-directory entries under `path`, without following symlinks or failing on races."""
+    if path.is_symlink():
+        return 0
     total = 0
     stack: list[Path] = [path]
     while stack:
@@ -212,16 +220,16 @@ def safe_rmtree(path: Path) -> bool:
 
     Returns True when `path` was removed, False when it was already absent or a symlink; propagates other `OSError`.
     """
-    if path.is_symlink():
-        return False
     for attempt in range(2):
+        if path.is_symlink():
+            return False
         try:
             shutil.rmtree(path)
             return True
         except FileNotFoundError:
-            if not path.exists():
+            if not os.path.lexists(path):
                 return attempt > 0
-    return not path.exists()
+    return not os.path.lexists(path)
 
 
 def remove_tree(path: str, protected: list[str]) -> int:

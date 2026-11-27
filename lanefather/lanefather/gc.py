@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import contextlib
 from dataclasses import dataclass, field
+import fcntl
 import fnmatch
 import io
 import json
@@ -34,7 +35,7 @@ import subprocess
 import time
 from typing import Any, cast
 
-from . import admission, config, done, lifecycle, lifetimes, state, worktrees
+from . import admission, config, done, lifecycle, lifetimes, review_record, state, worktrees
 from .errors import LaneError
 from .gitops import common_dir, git, git_ok, main_checkout, worktree_list
 
@@ -150,7 +151,8 @@ class Project:
         return result
 
     def _sweep_scratch(self, all_records: list[state.Record], dry_run: bool, result: Result) -> None:
-        """Sweep orphaned or finished-lane `*.scratch` directories under `store.directory` (fathers#259)."""
+        """Sweep orphaned or finished-lane `*.scratch` directories under `store.directory` through Spawnfather
+        (fathers#259, fathers#171)."""
         store_dir = self._store.directory
         if store_dir.is_symlink() or not store_dir.is_dir():
             return
@@ -158,6 +160,8 @@ class Project:
         live_ids = {str(r["id"]) for r in live_records}
         live_scratch_reals = _record_scratch_reals(live_records)
         records_by_id = {str(r["id"]): r for r in all_records}
+        scratch_proof = lifetimes.Evidence(stop_inside=lifetimes.stop_inside(self._settings))
+        fallback_common = common_dir(self._root)
         try:
             with os.scandir(store_dir) as it:
                 entries = sorted(it, key=lambda e: e.name)
@@ -194,18 +198,64 @@ class Project:
             lane_id = entry.name.removesuffix(".scratch")
             if lane_id in live_ids or target_real in live_scratch_reals:
                 continue
-            size = worktrees.dir_bytes(entry_path)
-            if dry_run:
-                result.removed.append({"kind": "scratch", "path": target_real, "bytes": size})
-                result.freed += size
+            if not state.ID.match(lane_id):
+                result.kept.append({"path": target_real, "reason": "not a lane scratch directory"})
                 continue
+            if self._spawnfather is None:
+                result.kept.append({
+                    "path": target_real,
+                    "reason": f"{lifetimes.INSTALL_HINT}; scratch directory use is unknown",
+                })
+                continue
+            rec = records_by_id.get(lane_id)
+            rec_common = rec.get("common_dir") if rec is not None else None
+            owner_common = (
+                rec_common
+                if isinstance(rec_common, str) and rec_common and os.path.isdir(rec_common)
+                else fallback_common
+            )
+            owner_str = lifetimes.owner({"id": lane_id, "common_dir": owner_common})
+            known_bases = done.linked_base_checkouts([entry_path], owner_common)
+            size = worktrees.dir_bytes(entry_path)
             try:
-                _clean_scratch_base_worktrees(entry_path, records_by_id.get(lane_id), self._root)
-                removed_ok = worktrees.safe_rmtree(entry_path)
+                if dry_run:
+                    reg_err = self._spawnfather.register(owner_str, "dir", target_real)
+                    if reg_err and not done.is_known_base_refusal(reg_err, known_bases):
+                        result.kept.append({"path": target_real, "reason": f"Spawnfather keeps it: {reg_err}"})
+                        continue
+                    if not reg_err:
+                        reaped = self._spawnfather.reap(
+                            owner_str, scratch_proof, dry_run=True, reason="lanefather gc",
+                        )
+                        kept_msgs = [k for k in reaped.kept if not done.is_known_base_refusal(k, known_bases)]
+                        if kept_msgs:
+                            result.kept.append({
+                                "path": target_real,
+                                "reason": f"Spawnfather keeps it: {'; '.join(kept_msgs)}",
+                            })
+                            continue
+                    result.removed.append({"kind": "scratch", "path": target_real, "bytes": size})
+                    result.freed += size
+                    continue
+                done.clean_stale_base_checkouts([entry_path], owner_common)
+                reg_err = self._spawnfather.register(owner_str, "dir", target_real)
+                if reg_err:
+                    result.kept.append({"path": target_real, "reason": f"Spawnfather keeps it: {reg_err}"})
+                    continue
+                reaped = self._spawnfather.reap(
+                    owner_str, scratch_proof, dry_run=False, reason="lanefather gc",
+                )
             except (LaneError, OSError) as error:
                 result.errors.append(f"{target_real}: {error}")
                 continue
-            if removed_ok:
+            if reaped.kept:
+                result.kept.append({
+                    "path": target_real,
+                    "reason": f"Spawnfather keeps it: {'; '.join(reaped.kept)}",
+                })
+                continue
+            removed_reals = {os.path.realpath(p) for p in reaped.removed}
+            if target_real in removed_reals or not os.path.lexists(entry_path):
                 result.removed.append({"kind": "scratch", "path": target_real, "bytes": size})
                 result.freed += size
 
@@ -227,6 +277,8 @@ class Project:
             result.kept.append({"path": str(logs_dir), "reason": "outside state directory"})
             return
         live_ids = {str(r["id"]) for r in all_records if not lifecycle.finished(r)}
+        protected_log_reals = _active_review_log_reals(self._store, live_ids)
+        promote_active = _lock_held(store_dir / ".promote.lock")
         current_time = time.time() if now is None else now
         try:
             with os.scandir(logs_dir) as it:
@@ -263,7 +315,11 @@ class Project:
                 mtime = _dir_mtime(entry_path, st.st_mtime)
             else:
                 continue
-            protected = _log_belongs_to_live_lane(entry.name, is_dir, live_ids)
+            protected = (
+                entry_real in protected_log_reals
+                or (promote_active and _is_promote_or_perf_log(entry.name))
+                or _log_belongs_to_live_lane(entry.name, is_dir, live_ids)
+            )
             candidates.append(_LogEntry(
                 path=entry_path, real=entry_real, name=entry.name,
                 is_dir=is_dir, size=size, mtime=mtime, protected=protected,
@@ -442,23 +498,65 @@ def _record_scratch_reals(records: list[state.Record]) -> set[str]:
     return found
 
 
-def _clean_scratch_base_worktrees(scratch: Path, record: state.Record | None, fallback_root: str) -> None:
-    """Remove any stale `base-*` worktrees inside `scratch` through git before removing the scratch directory."""
-    record_main: str | None = None
-    if record is not None:
-        common = record.get("common_dir")
-        if isinstance(common, str) and common and os.path.isdir(common):
-            record_main = main_checkout(common)
-    for stale in sorted(scratch.glob("base-*")):
-        if stale.is_symlink() or not stale.is_dir():
-            continue
-        repo_root = record_main
-        if repo_root is None and (stale / ".git").exists():
+def _lock_held(lock_path: Path) -> bool:
+    """Whether another process currently holds an exclusive flock on `lock_path` (without creating it)."""
+    if not lock_path.is_file() or lock_path.is_symlink():
+        return False
+    try:
+        with open(lock_path, "r+") as handle:
             try:
-                repo_root = main_checkout(common_dir(str(stale)))
-            except LaneError:
-                repo_root = fallback_root
-        worktrees.remove_checkout(repo_root or fallback_root, stale)
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return True
+            fcntl.flock(handle, fcntl.LOCK_UN)
+            return False
+    except OSError:
+        return False
+
+
+def _is_promote_or_perf_log(name: str) -> bool:
+    return name.startswith(("promote-", "perf-"))
+
+
+def _active_review_log_reals(store: state.Store, live_ids: set[str]) -> set[str]:
+    """Resolved paths of logs referenced by any currently running review receipt or batch review covering `live_ids`."""
+    found: set[str] = set()
+    for rev in review_record.ReviewRecord.all(store):
+        data = rev.raw
+        if not isinstance(data, dict):
+            continue
+        raw_lanes: Any = data.get("lanes")
+        covers_live = isinstance(raw_lanes, list) and any(
+            isinstance(lid, str) and lid in live_ids for lid in cast(list[Any], raw_lanes)
+        )
+        pid: Any = data.get("pid")
+        primary_running = (
+            data.get("status") == "running"
+            and isinstance(pid, int)
+            and not isinstance(pid, bool)
+            and review_record.alive(pid)
+        )
+        if primary_running or covers_live:
+            log_val = data.get("log")
+            if isinstance(log_val, str) and log_val:
+                with contextlib.suppress(OSError):
+                    found.add(os.path.realpath(log_val))
+        raw_delta: Any = data.get("delta")
+        if isinstance(raw_delta, dict):
+            delta = cast(dict[str, Any], raw_delta)
+            dpid: Any = delta.get("pid")
+            delta_running = (
+                delta.get("status") == "running"
+                and isinstance(dpid, int)
+                and not isinstance(dpid, bool)
+                and review_record.alive(dpid)
+            )
+            if delta_running or covers_live:
+                dlog = delta.get("log")
+                if isinstance(dlog, str) and dlog:
+                    with contextlib.suppress(OSError):
+                        found.add(os.path.realpath(dlog))
+    return found
 
 
 def _dir_mtime(path: Path, default: float) -> float:
@@ -496,6 +594,8 @@ def _log_belongs_to_live_lane(name: str, is_dir: bool, live_ids: set[str]) -> bo
             return label.removeprefix("recheck-") in live_ids
         if label.startswith("review-"):
             rest = label.removeprefix("review-")
+            if rest.startswith("_audit."):
+                rest = rest.removeprefix("_audit.")
             return rest in live_ids or (rest.endswith("-delta") and rest.removesuffix("-delta") in live_ids)
         if label.startswith("lane-"):
             rest = label.removeprefix("lane-")

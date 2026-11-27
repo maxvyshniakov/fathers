@@ -347,10 +347,15 @@ class MoreGuardTests(WorktreeCase):
         # git cherry alone misses multi-commit squashes.
         self.assertIn("+", self.git(path, "cherry", "origin/main", "HEAD"))
         refs_before = self.git(self.repo, "for-each-ref")
+        objects_before = sorted(str(p.relative_to(self.repo / ".git/objects"))
+                                for p in (self.repo / ".git/objects").rglob("*") if p.is_file())
         self.assertIsNone(self.refusal(path))
         items = worktrees.listing(str(self.repo)) or []
         self.assertEqual(("squashed", tip), worktrees.branch_tip(str(self.repo), "squashed", items, str(path)))
         self.assertEqual(refs_before, self.git(self.repo, "for-each-ref"))
+        objects_after = sorted(str(p.relative_to(self.repo / ".git/objects"))
+                               for p in (self.repo / ".git/objects").rglob("*") if p.is_file())
+        self.assertEqual(objects_before, objects_after, "read-only squash check must not write to .git/objects")
 
         # Works even when GIT_AUTHOR_* / GIT_COMMITTER_* are absent from the environment.
         saved = {k: os.environ.pop(k, None) for k in ("GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL",
@@ -446,6 +451,30 @@ class MoreGuardTests(WorktreeCase):
         self.git(net_empty, "commit", "-q", "-m", "remove temp")
         self.assertEqual("commits not in origin/main", self.refusal(net_empty))
 
+        # 6. Post-squash trailing --allow-empty commit or reverted commit pair must stay refused (F4).
+        trailing_empty = self.worktree("trailing-empty", "trailing-empty")
+        self.commit(trailing_empty, "te1.txt")
+        self.commit(trailing_empty, "te2.txt")
+        self.git(self.repo, "merge", "-q", "--squash", "trailing-empty")
+        self.git(self.repo, "commit", "-q", "-m", "squash trailing-empty")
+        self.git(self.repo, "push", "-q", "origin", "main")
+        self.git(self.repo, "fetch", "-q", "origin")
+        self.assertIsNone(self.refusal(trailing_empty))
+        self.git(trailing_empty, "commit", "-q", "--allow-empty", "-m", "unmerged note")
+        self.assertEqual("commits not in origin/main", self.refusal(trailing_empty))
+
+        trailing_revert = self.worktree("trailing-revert", "trailing-revert")
+        self.commit(trailing_revert, "tr1.txt")
+        self.commit(trailing_revert, "tr2.txt")
+        self.git(self.repo, "merge", "-q", "--squash", "trailing-revert")
+        self.git(self.repo, "commit", "-q", "-m", "squash trailing-revert")
+        self.git(self.repo, "push", "-q", "origin", "main")
+        self.git(self.repo, "fetch", "-q", "origin")
+        self.assertIsNone(self.refusal(trailing_revert))
+        self.commit(trailing_revert, "tr3.txt")
+        self.git(trailing_revert, "revert", "--no-edit", "HEAD")
+        self.assertEqual("commits not in origin/main", self.refusal(trailing_revert))
+
     def test_squash_merge_fails_safe_on_git_errors(self):
         from unittest import mock
         path = self.worktree("err-sq", "err-sq")
@@ -456,7 +485,7 @@ class MoreGuardTests(WorktreeCase):
         self.git(self.repo, "push", "-q", "origin", "main")
         self.git(self.repo, "fetch", "-q", "origin")
         real_git = worktrees.git
-        for failing_cmd in ("merge-base", "commit-tree"):
+        for failing_cmd in ("merge-base", "diff-tree", "patch-id"):
             with self.subTest(failing_cmd=failing_cmd):
                 def fail_one(where: str, *args: str, _cmd: str = failing_cmd, **kwargs: Any) -> Any:
                     if _cmd in args and "--is-ancestor" not in args:
