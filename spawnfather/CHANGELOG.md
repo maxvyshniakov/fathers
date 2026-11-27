@@ -126,6 +126,9 @@ Versions and release rules: [docs/agents/publishing.md](docs/agents/publishing.m
 
 ### Fixed
 
+- Worktree reaping now recognizes `origin/dev` (and local `dev` when a repository has no `origin`) as a merge base,
+  detects multi-commit squash-merges via a safe virtual-squash `git cherry` check when there are no merge commits in
+  range, and treats ignored `artifacts/` build/test output as disposable (fathers#258).
 - Worktree and directory removal guards no longer refuse when an unrelated setuid/setgid host binary (such as macOS
   `/usr/bin/top`) has an unreadable working directory under non-root `lsof`; normal processes whose working directory
   cannot be read still refuse removal.

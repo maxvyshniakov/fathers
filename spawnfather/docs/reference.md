@@ -201,11 +201,13 @@ other worktree inside, no submodule in its index (`git worktree remove` refuses 
 checkout), and every process's working directory readable (none of this user's still running whose working directory
 cannot be read). Work guards, where the requester's evidence counts: not locked (a `claude agent ... (pid N)` lock
 whose process is gone is unlocked first), no `.keep` of any kind, no uncommitted or untracked change, no ignored file
-outside disposable build output (node_modules, .venv, dist, ..., and the requester's `--disposable` patterns; git's
-`--ignored=matching` names them), HEAD merged into a base (an ancestor of it; or, for a squash or rebase, no merge
-commit beyond the base and every patch in it by `git cherry`, which passes over a merge's own conflict resolution;
-the bases are origin's default branch when there is an origin, else the local main or master, and the requester's
-`--base` refs or commits), and no process working in it or naming it. `--override REASON` lifts every work guard,
+outside disposable build output (node_modules, .venv, dist, artifacts, ..., and the requester's `--disposable`
+patterns; git's `--ignored=matching` names them), HEAD merged into a base (an ancestor of it; or, for a squash or
+rebase, no merge commit beyond the base and either every patch in it by `git cherry`, which passes over a merge's own
+conflict resolution, or—for a multi-commit squash-merge—a deterministic unreferenced virtual squash commit from the
+merge-base to HEAD's tree matched by `git cherry`; the bases are origin's default and dev branches when there is an
+origin, else the local main, master or dev, and the requester's `--base` refs or commits), and no process working in it
+or naming it. `--override REASON` lifts every work guard,
 never an integrity one; `resource.stopped` then names the reason and what it lifted (`override: {reason, lifted}`,
 level `warn`). Not seen: a process that started inside and then changed directory, or one that only holds files open
 there.

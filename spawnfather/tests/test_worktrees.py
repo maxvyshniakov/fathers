@@ -287,6 +287,207 @@ class MoreGuardTests(WorktreeCase):
                     _, unseen = worktrees.users(str(path), other_table, {}) or ([], [])
                     self.assertEqual(1, len(unseen), f"{cmd!r} must still count as unknown cwd")
 
+    def test_origin_dev_and_local_dev_are_recognized_as_merge_bases(self):
+        # Push a dev branch to origin; work merged into origin/dev (not origin/main) may go.
+        self.git(self.repo, "checkout", "-q", "-b", "dev", "main")
+        self.git(self.repo, "push", "-q", "origin", "dev")
+        self.git(self.repo, "fetch", "-q", "origin")
+        self.git(self.repo, "checkout", "-q", "main")
+
+        merged_dev = self.worktree("merged-dev", "merged-dev")
+        sha = self.commit(merged_dev, "on-dev.txt")
+        self.git(self.repo, "checkout", "-q", "dev")
+        self.git(self.repo, "merge", "-q", "--ff-only", sha)
+        # Only on local dev so far: origin exists, so local dev must NOT count as merged yet.
+        self.assertEqual("commits not in origin/main or origin/dev", self.refusal(merged_dev))
+        self.git(self.repo, "push", "-q", "origin", "dev")
+        self.git(self.repo, "fetch", "-q", "origin")
+        self.git(self.repo, "checkout", "-q", "main")
+        self.assertIsNone(self.refusal(merged_dev))
+        items = worktrees.listing(str(self.repo)) or []
+        self.assertEqual(("merged-dev", sha),
+                         worktrees.branch_tip(str(self.repo), "merged-dev", items, str(merged_dev)))
+
+        # Without an origin remote, local dev in LOCAL_BASES is recognized as a base.
+        local_repo = self.tmp / "local-only"
+        self.git(self.tmp, "init", "-q", "-b", "dev", str(local_repo))
+        (local_repo / "README").write_text("hi\n")
+        self.git(local_repo, "add", ".")
+        self.git(local_repo, "commit", "-q", "-m", "init")
+        local_repo = local_repo.resolve()
+        wt = (self.tmp / "local-wt").resolve()
+        self.git(local_repo, "worktree", "add", "-q", "-b", "feat", str(wt), "dev")
+        self.commit(wt, "feat.txt")
+        self.assertEqual(["refs/heads/dev"], worktrees.default_bases(str(local_repo)))
+        local_items = worktrees.listing(str(local_repo)) or []
+        wt_item = next(i for i in local_items if i["path"] == str(wt))
+        from spawnfather import procs
+        self.assertEqual("commits not in dev", worktrees.refusal(
+            wt_item, str(local_repo), procs.Table.read(), procs.working_dirs_or_none(os.getuid()), local_items))
+        self.git(local_repo, "merge", "-q", "--ff-only", "feat")
+        self.assertIsNone(worktrees.refusal(
+            wt_item, str(local_repo), procs.Table.read(), procs.working_dirs_or_none(os.getuid()), local_items))
+
+    def test_multi_commit_squash_merge_is_detected_and_does_not_mutate_refs(self):
+        path = self.worktree("squashed", "squashed")
+        self.commit(path, "one.txt")
+        self.commit(path, "two.txt")
+        (path / "one.txt").write_text("one updated\n")
+        self.git(path, "commit", "-q", "-am", "three")
+        tip = self.git(path, "rev-parse", "HEAD").strip()
+
+        # Advance main with an unrelated commit before and after the squash.
+        self.commit(self.repo, "unrelated-before.txt")
+        self.git(self.repo, "merge", "-q", "--squash", "squashed")
+        self.git(self.repo, "commit", "-q", "-m", "squash feat")
+        self.commit(self.repo, "unrelated-after.txt")
+        self.git(self.repo, "push", "-q", "origin", "main")
+        self.git(self.repo, "fetch", "-q", "origin")
+
+        # git cherry alone misses multi-commit squashes.
+        self.assertIn("+", self.git(path, "cherry", "origin/main", "HEAD"))
+        refs_before = self.git(self.repo, "for-each-ref")
+        self.assertIsNone(self.refusal(path))
+        items = worktrees.listing(str(self.repo)) or []
+        self.assertEqual(("squashed", tip), worktrees.branch_tip(str(self.repo), "squashed", items, str(path)))
+        self.assertEqual(refs_before, self.git(self.repo, "for-each-ref"))
+
+        # Works even when GIT_AUTHOR_* / GIT_COMMITTER_* are absent from the environment.
+        saved = {k: os.environ.pop(k, None) for k in ("GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL",
+                                                      "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL")}
+        try:
+            self.assertTrue(worktrees.merged(str(path), "HEAD", ["refs/remotes/origin/main"]))
+        finally:
+            for k, v in saved.items():
+                if v is not None:
+                    os.environ[k] = v
+
+    def test_multi_commit_squash_merge_into_origin_dev_is_detected(self):
+        self.git(self.repo, "checkout", "-q", "-b", "dev", "main")
+        self.git(self.repo, "push", "-q", "origin", "dev")
+        self.git(self.repo, "fetch", "-q", "origin")
+        path = (self.tmp / "dev-squash").resolve()
+        self.git(self.repo, "worktree", "add", "-q", "-b", "dev-squash", str(path), "dev")
+        self.commit(path, "a.txt")
+        self.commit(path, "b.txt")
+        self.git(self.repo, "merge", "-q", "--squash", "dev-squash")
+        self.git(self.repo, "commit", "-q", "-m", "squash into dev")
+        self.git(self.repo, "push", "-q", "origin", "dev")
+        self.git(self.repo, "fetch", "-q", "origin")
+        self.git(self.repo, "checkout", "-q", "main")
+        self.assertIsNone(self.refusal(path))
+
+    def test_squash_merge_safety_cases_stay_refused(self):
+        # 1. Partial squash: only 2 of 3 commits were squashed into origin/main.
+        partial = self.worktree("partial", "partial")
+        self.commit(partial, "p1.txt")
+        p2 = self.commit(partial, "p2.txt")
+        self.commit(partial, "p3.txt")
+        self.git(self.repo, "merge", "-q", "--squash", p2)
+        self.git(self.repo, "commit", "-q", "-m", "partial squash")
+        self.git(self.repo, "push", "-q", "origin", "main")
+        self.git(self.repo, "fetch", "-q", "origin")
+        self.assertEqual("commits not in origin/main", self.refusal(partial))
+
+        # 2. Extra unmerged commit added after a full multi-commit squash.
+        extra = self.worktree("extra", "extra")
+        self.commit(extra, "e1.txt")
+        self.commit(extra, "e2.txt")
+        self.git(self.repo, "merge", "-q", "--squash", "extra")
+        self.git(self.repo, "commit", "-q", "-m", "squash extra")
+        self.git(self.repo, "push", "-q", "origin", "main")
+        self.git(self.repo, "fetch", "-q", "origin")
+        self.assertIsNone(self.refusal(extra))
+        self.commit(extra, "e3-after-squash.txt")
+        self.assertEqual("commits not in origin/main", self.refusal(extra))
+
+        # 3. Merge commit in target..HEAD: refused even when squashed cleanly into origin/main.
+        side = self.worktree("side-sq", "side-sq")
+        self.commit(side, "s1.txt")
+        has_merge = self.worktree("has-merge", "has-merge")
+        self.commit(has_merge, "h1.txt")
+        self.git(has_merge, "merge", "-q", "--no-ff", "-m", "merge side", "side-sq")
+        self.git(self.repo, "merge", "-q", "--squash", "has-merge")
+        self.git(self.repo, "commit", "-q", "-m", "squash branch with merge")
+        self.git(self.repo, "push", "-q", "origin", "main")
+        self.git(self.repo, "fetch", "-q", "origin")
+        self.assertEqual("commits not in origin/main", self.refusal(has_merge))
+
+        # 4. Conflict-adjusted squash: diff on base differs from branch's net diff.
+        (self.repo / "shared.txt").write_text("base\n")
+        self.git(self.repo, "add", "shared.txt")
+        self.git(self.repo, "commit", "-q", "-m", "add shared")
+        self.git(self.repo, "push", "-q", "origin", "main")
+        self.git(self.repo, "fetch", "-q", "origin")
+        conflict = self.worktree("conflict", "conflict")
+        (conflict / "shared.txt").write_text("branch-1\n")
+        self.git(conflict, "commit", "-q", "-am", "branch 1")
+        (conflict / "shared.txt").write_text("branch-2\n")
+        self.git(conflict, "commit", "-q", "-am", "branch 2")
+        (self.repo / "shared.txt").write_text("main-change\n")
+        self.git(self.repo, "commit", "-q", "-am", "main change")
+        squash_proc = subprocess.run(["git", "-C", str(self.repo), "merge", "--squash", "conflict"],
+                                     capture_output=True, text=True, env={**os.environ, **GIT_ENV})
+        self.assertNotEqual(0, squash_proc.returncode)
+        (self.repo / "shared.txt").write_text("main-change + branch-2\n")
+        self.git(self.repo, "add", "shared.txt")
+        self.git(self.repo, "commit", "-q", "-m", "conflict-adjusted squash")
+        self.git(self.repo, "push", "-q", "origin", "main")
+        self.git(self.repo, "fetch", "-q", "origin")
+        self.assertEqual("commits not in origin/main", self.refusal(conflict))
+
+        # 5. Net-empty branch (add + revert) must NOT falsely match an empty commit on origin/main.
+        self.git(self.repo, "commit", "-q", "--allow-empty", "-m", "empty on main")
+        self.git(self.repo, "push", "-q", "origin", "main")
+        self.git(self.repo, "fetch", "-q", "origin")
+        net_empty = self.worktree("net-empty", "net-empty")
+        self.commit(net_empty, "temp.txt")
+        self.git(net_empty, "rm", "-q", "temp.txt")
+        self.git(net_empty, "commit", "-q", "-m", "remove temp")
+        self.assertEqual("commits not in origin/main", self.refusal(net_empty))
+
+    def test_squash_merge_fails_safe_on_git_errors(self):
+        from unittest import mock
+        path = self.worktree("err-sq", "err-sq")
+        self.commit(path, "a.txt")
+        self.commit(path, "b.txt")
+        self.git(self.repo, "merge", "-q", "--squash", "err-sq")
+        self.git(self.repo, "commit", "-q", "-m", "squash err-sq")
+        self.git(self.repo, "push", "-q", "origin", "main")
+        self.git(self.repo, "fetch", "-q", "origin")
+        real_git = worktrees.git
+        for failing_cmd in ("merge-base", "commit-tree"):
+            with self.subTest(failing_cmd=failing_cmd):
+                def fail_one(where: str, *args: str, _cmd: str = failing_cmd, **kwargs: Any) -> Any:
+                    if _cmd in args and "--is-ancestor" not in args:
+                        return 128, "simulated git error"
+                    return real_git(where, *args, **kwargs)
+
+                with mock.patch.object(worktrees, "git", side_effect=fail_one):
+                    self.assertFalse(worktrees.merged(str(path), "HEAD", ["refs/remotes/origin/main"]))
+
+    def test_ignored_artifacts_directory_is_disposable_unless_untracked_or_holding_a_repo(self):
+        unignored = self.worktree("unignored-artifacts", "unignored-artifacts")
+        (unignored / "artifacts").mkdir()
+        (unignored / "artifacts" / "out.json").write_text("{}\n")
+        self.assertEqual("uncommitted or untracked changes", self.refusal(unignored))
+
+        (self.repo / ".gitignore").write_text("node_modules/\n.env\nartifacts/\n")
+        self.git(self.repo, "commit", "-q", "-am", "ignore artifacts")
+        self.git(self.repo, "push", "-q", "origin", "main")
+        self.git(self.repo, "fetch", "-q", "origin")
+
+        path = self.worktree("with-artifacts", "with-artifacts")
+        (path / "artifacts" / "reports").mkdir(parents=True)
+        (path / "artifacts" / "reports" / "out.json").write_text("{}\n")
+        (path / "pkg" / "artifacts").mkdir(parents=True)
+        (path / "pkg" / "artifacts" / "trace.log").write_text("ok\n")
+        self.assertIsNone(self.refusal(path))
+
+        # A nested Git repo inside ignored artifacts/ still blocks removal via the integrity guard.
+        (path / "artifacts" / "nested" / ".git").mkdir(parents=True)
+        self.assertEqual("it holds a Git repository at artifacts/nested", self.refusal(path))
+
 
 class OwnedTests(WorktreeCase):
     def test_own_resource_then_reap_removes_it_and_its_merged_branch(self):
@@ -491,6 +692,32 @@ class SweepTests(WorktreeCase):
         self.assertTrue(released_wt.is_dir())
         self.assertFalse(done_wt.exists())
         self.assertNotIn(str(released_wt), [i["id"] for i in report["unowned_resources"]])
+
+    def test_sweep_reaps_idle_worktree_squash_merged_into_origin_dev_with_ignored_artifacts(self):
+        (self.repo / ".gitignore").write_text("node_modules/\n.env\nartifacts/\n")
+        self.git(self.repo, "commit", "-q", "-am", "ignore artifacts")
+        self.git(self.repo, "checkout", "-q", "-b", "dev", "main")
+        self.git(self.repo, "push", "-q", "origin", "main", "dev")
+        self.git(self.repo, "fetch", "-q", "origin")
+
+        wt = (self.tmp / "dev-squashed").resolve()
+        self.git(self.repo, "worktree", "add", "-q", "-b", "dev-squashed", str(wt), "dev")
+        self.commit(wt, "f1.txt")
+        self.commit(wt, "f2.txt")
+        (wt / "artifacts" / "cov").mkdir(parents=True)
+        (wt / "artifacts" / "cov" / "index.html").write_text("<html/>\n")
+
+        self.git(self.repo, "merge", "-q", "--squash", "dev-squashed")
+        self.git(self.repo, "commit", "-q", "-m", "squash dev-squashed")
+        self.git(self.repo, "push", "-q", "origin", "dev")
+        self.git(self.repo, "fetch", "-q", "origin")
+        self.git(self.repo, "checkout", "-q", "main")
+        self.make_idle(wt)
+
+        report = self.run_sweep()
+        self.assertEqual([str(wt)], [i["id"] for i in report["worktrees"]["removed"]])
+        self.assertFalse(wt.exists())
+        self.assertNotIn("dev-squashed", self.branches())
 
 
 if __name__ == "__main__":

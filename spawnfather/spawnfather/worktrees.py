@@ -26,10 +26,12 @@ event names the reason and what it lifted:
 - no uncommitted or untracked change (`git status --porcelain`);
 - no ignored file outside the disposable build output (DISPOSABLE, and the requester's `--disposable` patterns);
 - HEAD merged into a base: an ancestor of it, or, for a squash or a rebase, no merge commit beyond the base (a
-  merge can carry its own conflict resolution, which `git cherry` does not see) and every commit's patch in it
-  (`git cherry`). The bases are origin's default branch (origin/HEAD, origin/main, origin/master) when the
-  repository has an origin, else its local main or master, and the requester's `--base` refs (a lane landed on an
-  integration branch that is not promoted yet): work merged only locally into another branch is not merged;
+  merge can carry its own conflict resolution, which `git cherry` does not see) and either every commit's patch is in
+  it (`git cherry`) or its combined net change from the merge-base matches a single squash commit there (checked with
+  `git cherry` against a deterministic, unreferenced virtual commit from `git commit-tree`). The bases are origin's
+  default and dev branches (origin/HEAD, origin/main, origin/master, origin/dev) when the repository has an origin,
+  else its local main, master or dev, and the requester's `--base` refs (a lane landed on an integration branch that
+  is not promoted yet): work merged only locally into another branch is not merged;
 - no process inside: none whose working directory is in it or whose command names it. Not seen: a process that
   started inside and changed directory, or one that only holds files open in it;
 - for the sweep's unowned worktrees only: idle for WORKTREE_IDLE, 24 h (its folder, HEAD, index and HEAD log
@@ -61,10 +63,12 @@ from .resources import Refused, run
 from .state import as_dict, as_list
 
 DISPOSABLE = ("node_modules", "__pycache__", "target", ".build", "dist", "build", ".venv", ".turbo", ".next",
-              "storybook-static", "coverage", ".pytest_cache", ".ruff_cache", ".DS_Store")  # Lanefather's gc
+              "storybook-static", "coverage", ".pytest_cache", ".ruff_cache", ".DS_Store",
+              "artifacts")  # Lanefather's gc
 PROTECTED = ("dev", "main", "master")
-BASES = ("refs/remotes/origin/HEAD", "refs/remotes/origin/main", "refs/remotes/origin/master")
-LOCAL_BASES = ("refs/heads/main", "refs/heads/master")
+BASES = ("refs/remotes/origin/HEAD", "refs/remotes/origin/main", "refs/remotes/origin/master",
+         "refs/remotes/origin/dev")
+LOCAL_BASES = ("refs/heads/main", "refs/heads/master", "refs/heads/dev")
 
 
 class Evidence:
@@ -94,10 +98,11 @@ class Evidence:
 NONE = Evidence()
 
 
-def git(where: str, *args: str, timeout: float = RESOURCE_TIMEOUT, both: bool = False) -> Tuple[Optional[int], str]:
+def git(where: str, *args: str, timeout: float = RESOURCE_TIMEOUT, both: bool = False,
+        env: Optional[Mapping[str, str]] = None) -> Tuple[Optional[int], str]:
     """`git -C where ARGS` without a shell: (exit code, stdout; with `both` stdout and stderr), code None when git
     could not run or timed out; on a failure its stderr."""
-    ran = run(["git", "--no-optional-locks", "-C", where, *args], timeout=timeout)
+    ran = run(["git", "--no-optional-locks", "-C", where, *args], timeout=timeout, env=env)
     if ran.code != 0:
         return ran.code, ran.err or ran.error
     return ran.code, ran.out + ran.err if both else ran.out
@@ -138,8 +143,8 @@ def listing(repo: str) -> Optional[List[Dict[str, Any]]]:
 
 
 def bases(repo: str, extra: Sequence[str] = ()) -> List[str]:
-    """The refs a worktree's work must be in: origin's default branch, or without an origin the local main, and
-    the requester's `extra` refs or commits that name a commit here."""
+    """The refs a worktree's work must be in: origin's default and dev branches, or without an origin the local main,
+    master or dev, and the requester's `extra` refs or commits that name a commit here."""
     found = default_bases(repo)
     for given in extra:
         code, out = git(repo, "rev-parse", "--verify", "-q", f"{given}^{{commit}}")
@@ -170,10 +175,38 @@ def short(ref: str) -> str:
     return ref.removeprefix("refs/remotes/").removeprefix("refs/heads/")
 
 
+def _squashed_into(repo: str, commit: str, target: str) -> bool:
+    """Whether `commit`'s net tree change since its merge-base with `target` matches a single commit on `target`
+    (a multi-commit squash-merge). Caller has already ruled out ancestry and merge commits in `target..commit`.
+    Writes only a deterministic, unreferenced commit object; never mutates refs. Fails safe on any git error."""
+    code, out = git(repo, "merge-base", target, commit)
+    base_lines = out.splitlines() if code == 0 else []
+    if len(base_lines) != 1 or not base_lines[0].strip():
+        return False
+    base = base_lines[0].strip()
+    code_c, tree_c = git(repo, "rev-parse", "--verify", "-q", f"{commit}^{{tree}}")
+    code_b, tree_b = git(repo, "rev-parse", "--verify", "-q", f"{base}^{{tree}}")
+    commit_tree = tree_c.strip() if code_c == 0 else ""
+    base_tree = tree_b.strip() if code_b == 0 else ""
+    if not commit_tree or not base_tree or commit_tree == base_tree:
+        return False
+    commit_env = {**os.environ, "GIT_AUTHOR_NAME": "_", "GIT_AUTHOR_EMAIL": "_",
+                  "GIT_AUTHOR_DATE": "1970-01-01T00:00:00Z", "GIT_COMMITTER_NAME": "_", "GIT_COMMITTER_EMAIL": "_",
+                  "GIT_COMMITTER_DATE": "1970-01-01T00:00:00Z"}
+    code, out = git(repo, "-c", "commit.gpgSign=false", "commit-tree", commit_tree, "-p", base, "-m", "_",
+                    env=commit_env)
+    virtual = out.strip() if code == 0 else ""
+    if not virtual:
+        return False
+    code, out = git(repo, "cherry", target, virtual)
+    return code == 0 and out.splitlines() == [f"- {virtual}"]
+
+
 def merged(repo: str, commit: str, targets: Sequence[str]) -> bool:
     """Whether `commit`'s work is in one of `targets`: an ancestor of it, or (a squash or a rebase) no merge commit
-    beyond it and every patch of it there (`git cherry` passes over merge commits, and so over a merge's own
-    conflict resolution)."""
+    beyond it and either every patch of it is there (`git cherry`, which passes over merge commits and so over a
+    merge's own conflict resolution) or its combined net change from the merge-base matches a single squash commit
+    on `target`."""
     for target in targets:
         code, _ = git(repo, "merge-base", "--is-ancestor", commit, target)
         if code == 0:
@@ -182,7 +215,12 @@ def merged(repo: str, commit: str, targets: Sequence[str]) -> bool:
         if code != 0 or out.strip():
             continue
         code, out = git(repo, "cherry", target, commit)
-        if code == 0 and not any(line.startswith("+") for line in out.splitlines()):
+        if code != 0:
+            continue
+        lines = out.splitlines()
+        if not any(line.startswith("+") for line in lines):
+            return True
+        if len(lines) >= 2 and _squashed_into(repo, commit, target):
             return True
     return False
 
@@ -400,7 +438,8 @@ def refusal(item: Mapping[str, Any], repo: str, table: Optional[_procs.Table], c
     def merged_into_base() -> Optional[str]:
         targets = bases(repo, evidence.bases)
         if not targets:
-            return "no base to compare with (no origin/HEAD, origin/main, origin/master, main or master)"
+            return ("no base to compare with (no origin/HEAD, origin/main, origin/master, origin/dev, "
+                    "main, master or dev)")
         if not merged(path, "HEAD", targets):
             return f"commits not in {' or '.join(short(t) for t in targets)}"
         return None
