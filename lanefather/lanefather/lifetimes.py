@@ -23,6 +23,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import json
 import os
+from pathlib import Path
 import shutil
 import subprocess
 import sys
@@ -182,23 +183,70 @@ def require() -> Spawnfather:
     return found
 
 
-def lane_paths(record: state.Record) -> list[tuple[str, str]]:
+def within_dir(path: Path, parent: Path) -> bool:
+    """Whether `path` is not a symlink and resolves strictly inside `parent`."""
+    if path.is_symlink():
+        return False
+    parent_real = os.path.realpath(parent).rstrip(os.sep)
+    target_real = os.path.realpath(path)
+    return target_real != parent_real and target_real.startswith(parent_real + os.sep)
+
+
+def record_scratch_paths(record: state.Record) -> list[str]:
+    """Valid non-empty string scratch paths listed on `record`."""
+    raw: Any = record.get("scratch")
+    if not isinstance(raw, list):
+        return []
+    return [p for p in cast(list[Any], raw) if isinstance(p, str) and p]
+
+
+def canonical_scratch(record: state.Record, store: state.Store | None) -> Path | None:
+    """`<store.directory>/<lane-id>.scratch` when it exists as a real directory strictly inside `store.directory`."""
+    if store is None:
+        return None
+    raw_id = record.get("id")
+    if not isinstance(raw_id, str) or not state.ID.match(raw_id):
+        return None
+    candidate = store.directory / f"{raw_id}.scratch"
+    if candidate.is_symlink() or not candidate.is_dir() or not within_dir(candidate, store.directory):
+        return None
+    return candidate
+
+
+def lane_paths(record: state.Record, *, store: state.Store | None = None) -> list[tuple[str, str]]:
     """(kind, path) of what the lane owns and that exists now: its worktree, its build directories, its scratch."""
     found: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
     worktree = record.get("worktree")
     if isinstance(worktree, str) and worktree and os.path.isdir(worktree):
-        found.append(("worktree", os.path.realpath(worktree)))
-    for path in [*record.get("cargo_targets", []), *record.get("scratch", [])]:
-        if isinstance(path, str) and path and os.path.isdir(path) and not os.path.islink(path):
-            found.append(("dir", os.path.realpath(path)))
+        item = ("worktree", os.path.realpath(worktree))
+        seen.add(item)
+        found.append(item)
+    raw_targets: Any = record.get("cargo_targets")
+    targets = (
+        [p for p in cast(list[Any], raw_targets) if isinstance(p, str) and p]
+        if isinstance(raw_targets, list)
+        else []
+    )
+    scratch_candidates: list[str] = [*record_scratch_paths(record)]
+    canonical = canonical_scratch(record, store)
+    if canonical is not None:
+        scratch_candidates.append(str(canonical))
+    for path in [*targets, *scratch_candidates]:
+        if os.path.isdir(path) and not os.path.islink(path):
+            item = ("dir", os.path.realpath(path))
+            if item not in seen:
+                seen.add(item)
+                found.append(item)
     return found
 
 
-def register(spawnfather: Spawnfather, record: state.Record, *, skip: tuple[str, ...] = ()) -> list[str]:
+def register(spawnfather: Spawnfather, record: state.Record, *, skip: tuple[str, ...] = (),
+             store: state.Store | None = None) -> list[str]:
     """Own every path the lane names (`lane_paths`) for its lane owner; one line per path Spawnfather refused.
     `skip`: kinds left out (a fix lane takes its worktree by hand-over)."""
     lane = owner(record)
-    return [f"{path}: {why}" for kind, path in lane_paths(record) if kind not in skip
+    return [f"{path}: {why}" for kind, path in lane_paths(record, store=store) if kind not in skip
             for why in [spawnfather.register(lane, kind, path)] if why]
 
 
@@ -207,7 +255,8 @@ def register_quietly(store: state.Store, record: state.Record, verb: str, *, ski
     entry, never a failure (done registers them again before it removes anything)."""
     found = client()
     problems = [INSTALL_HINT + "; done will refuse until it is"] if found is None else register(found, record,
-                                                                                                  skip=skip)
+                                                                                                  skip=skip,
+                                                                                                  store=store)
     if not problems:
         return
     prog = store.project.command
@@ -229,7 +278,7 @@ def hand_worktree(store: state.Store, parent: state.Record, fix: state.Record) -
         why = found.hand(owner(parent), owner(fix), "worktree")
         if why:
             problems.append(f"the hand-over of {fix.get('worktree')}: {why}")
-        problems += register(found, fix)
+        problems += register(found, fix, store=store)
     for problem in problems:
         print(f"{store.project.command}: warning: fix lane {fix['id']}: {problem}", file=sys.stderr)
     if problems:

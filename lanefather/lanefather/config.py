@@ -169,6 +169,10 @@ class Config:
     gc_disposable: tuple[str, ...] = ("node_modules", "__pycache__", "target", ".build", "dist", "build", ".venv",
                                       ".turbo", ".next", "storybook-static", "coverage", ".pytest_cache",
                                       ".ruff_cache", ".DS_Store")
+    # [gc] log retention (fathers#259): prune finished-lane and non-lane logs under `<state>/logs/` older than
+    # `log_max_age_days` days or over `log_max_mb` MiB total; 0 disables each bound.
+    gc_log_max_age_days: int = 14
+    gc_log_max_mb: int = 256
     admission_provider: str = "legacy"
     # [admission] cap: this repository's lane cap (fathers#149); LANEFATHER_CAP, when valid, wins over it, and
     # without either the cap is derived.
@@ -299,7 +303,8 @@ TABLE_KEYS = {
     "gate": ("stamp_tool", "stamp_file", "pre_push_hook"),
     "promote": ("branches", "ship_refuses", "ship_refusal", "install", "deploy", "install_env_drop", "after"),
     "hooks": ("process_scan", "project"),
-    "gc": ("after_remove", "after_remove_report", "dirs", "branches", "collect_uncommitted_sessions", "disposable"),
+    "gc": ("after_remove", "after_remove_report", "dirs", "branches", "collect_uncommitted_sessions", "disposable",
+           "log_max_age_days", "log_max_mb"),
     "tickets": ("integrated_label", "land_comment", "fixes_trailer", "release_comment", "preview", "repo", "umbrella"),
     "slots": ("priority",),
     "review": ("blocks", "panel", "panel_required", "classes"),
@@ -378,6 +383,13 @@ def _patterns(table: dict[str, Any], key: str, default: tuple[str, ...], section
     if not all(found):
         raise LaneError(f"{CONFIG_NAME}: [{section}] {key} takes non-empty patterns")
     return found
+
+
+def _non_negative_int(table: dict[str, Any], key: str, default: int, section: str) -> int:
+    value = table.get(key, default)
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise LaneError(f"{CONFIG_NAME}: [{section}] {key} must be a non-negative integer")
+    return value
 
 
 def _stamp_file(gate: dict[str, Any], default: str) -> str:
@@ -581,6 +593,8 @@ def parse(data: dict[str, Any], path: Path | None = None) -> Config:
         gc_branches=_patterns(gc, "branches", default.gc_branches),
         gc_collect_uncommitted_sessions=uncommitted,
         gc_disposable=_patterns(gc, "disposable", default.gc_disposable),
+        gc_log_max_age_days=_non_negative_int(gc, "log_max_age_days", default.gc_log_max_age_days, "gc"),
+        gc_log_max_mb=_non_negative_int(gc, "log_max_mb", default.gc_log_max_mb, "gc"),
         admission_provider=provider,
         lane_cap=lane_cap,
         tickets=_tickets(tickets),

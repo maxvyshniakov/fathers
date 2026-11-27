@@ -431,11 +431,86 @@ def after_smoke(
     )
 
 
-def removal_paths(record: Record) -> list[str]:
+def _scratch_dirs(record: Record, store: state.Store | None = None) -> list[Path]:
+    """Existing non-symlink scratch directories of `record`, including canonical `<store>/<id>.scratch`."""
+    found: list[Path] = []
+    seen: set[str] = set()
+    candidates: list[Path] = [Path(p) for p in lifetimes.record_scratch_paths(record)]
+    canonical = lifetimes.canonical_scratch(record, store)
+    if canonical is not None:
+        candidates.append(canonical)
+    for candidate in candidates:
+        if candidate.is_symlink() or not candidate.is_dir():
+            continue
+        real = os.path.realpath(candidate)
+        if real not in seen:
+            seen.add(real)
+            found.append(candidate)
+    return found
+
+
+def _clean_stale_base_checkouts(scratch_dirs: list[Path], common: Any) -> None:
+    """Remove any stale `base-*` throwaway worktrees inside `scratch_dirs` through git, without following symlinks."""
+    if not isinstance(common, str) or not common or not os.path.isdir(common):
+        return
+    main = main_checkout(common)
+    for scratch_dir in scratch_dirs:
+        if scratch_dir.is_symlink() or not scratch_dir.is_dir():
+            continue
+        for stale in sorted(scratch_dir.glob("base-*")):
+            if stale.is_symlink() or not stale.is_dir():
+                continue
+            worktrees.remove_checkout(main, stale)
+
+
+def _reap_remaining_store_scratch(
+    record: Record,
+    store: state.Store,
+    main: str,
+    already_removed: set[str],
+) -> tuple[int, list[str]]:
+    """Reap any remaining scratch directory of `record` strictly inside `store.directory`, never following symlinks."""
+    freed = 0
+    removed: list[str] = []
+    for candidate in _scratch_dirs(record, store):
+        if not lifetimes.within_dir(candidate, store.directory):
+            continue
+        real = os.path.realpath(candidate)
+        for stale in sorted(candidate.glob("base-*")):
+            if stale.is_symlink() or not stale.is_dir():
+                continue
+            worktrees.remove_checkout(main, stale)
+        sz = worktrees.size(str(candidate)) or worktrees.dir_bytes(candidate)
+        if worktrees.safe_rmtree(candidate):
+            freed += sz
+            if real not in already_removed:
+                already_removed.add(real)
+                removed.append(real)
+    return freed, removed
+
+
+def removal_paths(record: Record, *, store: state.Store | None = None) -> list[str]:
     """What done removes of the lane besides its branches: the worktree, its build directories and its scratch."""
     worktree = record.get("worktree")
-    return [p for p in (worktree, *record.get("cargo_targets", []), *record.get("scratch", []))
-            if p and os.path.exists(p)]
+    raw_targets: Any = record.get("cargo_targets")
+    targets = (
+        [p for p in cast(list[Any], raw_targets) if isinstance(p, str) and p]
+        if isinstance(raw_targets, list)
+        else []
+    )
+    scratch: list[str] = [*lifetimes.record_scratch_paths(record)]
+    canonical = lifetimes.canonical_scratch(record, store)
+    if canonical is not None:
+        scratch.append(str(canonical))
+    found: list[str] = []
+    seen: set[str] = set()
+    for p in (worktree, *targets, *scratch):
+        if isinstance(p, str) and p and os.path.exists(p):
+            real = os.path.realpath(p)
+            if real not in seen:
+                seen.add(real)
+                found.append(p)
+    return found
 
 
 def evidence(store: state.Store, bases: list[str], override: str | None) -> lifetimes.Evidence:
@@ -446,7 +521,8 @@ def evidence(store: state.Store, bases: list[str], override: str | None) -> life
                               override=override, stop_inside=lifetimes.stop_inside(store.project))
 
 
-def on_demand(spawnfather: lifetimes.Spawnfather, record: Record, *, clean_stale_base: bool = True) -> list[str]:
+def on_demand(spawnfather: lifetimes.Spawnfather, record: Record, *, store: state.Store | None = None,
+              clean_stale_base: bool = True) -> list[str]:
     """Register what the lane record names before a removal (a lane from before the upgrade, a registration that
     failed): a fix lane first takes its parent's worktree over. One line per path Spawnfather refused."""
     if clean_stale_base:
@@ -455,12 +531,8 @@ def on_demand(spawnfather: lifetimes.Spawnfather, record: Record, *, clean_stale
             spawnfather.hand(lifetimes.owner({**record, "id": parent}), lifetimes.owner(record), "worktree")
         # The base checkouts a killed red check left in the scratch (#568) are Lanefather's own throwaway worktrees:
         # they go through git first, as base_checkout removes them (a folder holding a worktree is never Spawnfather's).
-        scratch = [str(p) for p in record.get("scratch", []) if p]
-        common = record.get("common_dir")
-        if scratch and os.path.isdir(scratch[0]) and isinstance(common, str) and os.path.isdir(common):
-            for stale in sorted(Path(scratch[0]).glob("base-*")):
-                worktrees.remove_checkout(main_checkout(common), stale)
-    return lifetimes.register(spawnfather, record)
+        _clean_stale_base_checkouts(_scratch_dirs(record, store), record.get("common_dir"))
+    return lifetimes.register(spawnfather, record, store=store)
 
 
 def holders(record: Record, store: state.Store, spawnfather: lifetimes.Spawnfather, main: str,
@@ -485,7 +557,7 @@ def holders(record: Record, store: state.Store, spawnfather: lifetimes.Spawnfath
             refusals.append(f"an agent still holds {worktree} (locked: {lock}); run {prog} {verb} {lane_id} "
                             "once it exits")
     unowned = [f"Spawnfather does not own {problem}"
-               for problem in on_demand(spawnfather, record, clean_stale_base=clean_stale_base)]
+               for problem in on_demand(spawnfather, record, store=store, clean_stale_base=clean_stale_base)]
     hard_refusals += unowned
     planned = spawnfather.reap(lifetimes.owner(record), proof, dry_run=True, reason=f"lanefather {verb} {lane_id}")
     kept = [f"Spawnfather keeps {k}" for k in planned.kept
@@ -507,16 +579,19 @@ def remove(record: Record, store: state.Store, spawnfather: lifetimes.Spawnfathe
     lane_id, project = record["id"], store.project
     worktree = record.get("worktree")
     freed, removed = 0, list[str]()
-    scratch = [str(p) for p in record.get("scratch", []) if p]
+    scratch = lifetimes.record_scratch_paths(record)
+    canonical = lifetimes.canonical_scratch(record, store)
+    if canonical is not None and str(canonical) not in scratch:
+        scratch = [*scratch, str(canonical)]
     harness = f"worktree-{os.path.basename(worktree)}" if worktree else None
     kept_set = set(keep_branches)
     branches = [b for b in (record["branch"], harness)
                 if b and b not in kept_set and git_ok(main, "rev-parse", "--verify", "--quiet", "refs/heads/" + b)]
-    unowned = on_demand(spawnfather, record, clean_stale_base=True)
+    unowned = on_demand(spawnfather, record, store=store, clean_stale_base=True)
     if unowned:
         raise LaneError(f"{verb} refused: Spawnfather does not own what the lane holds:\n- "
                         + "\n- ".join(unowned))
-    sizes = {path: worktrees.size(path) for _, path in lifetimes.lane_paths(record)}
+    sizes = {path: worktrees.size(path) for _, path in lifetimes.lane_paths(record, store=store)}
     reaped = spawnfather.reap(lifetimes.owner(record), proof, dry_run=False, reason=f"lanefather {verb} {lane_id}")
     for process in reaped.stopped:
         journal.ledger(f"{verb} {lane_id}: Spawnfather stopped {process} in {worktree}", kind="process.stopped",
@@ -525,9 +600,14 @@ def remove(record: Record, store: state.Store, spawnfather: lifetimes.Spawnfathe
         removed.append(f"stopped {process}")
     if reaped.kept:
         raise LaneError(f"{verb} refused: Spawnfather kept what the lane holds:\n- " + "\n- ".join(reaped.kept))
+    already_removed: set[str] = set()
     for path in reaped.removed:
         freed += sizes.get(path, 0)
         removed.append(path)
+        already_removed.add(os.path.realpath(path))
+    extra_freed, extra_removed = _reap_remaining_store_scratch(record, store, main, already_removed)
+    freed += extra_freed
+    removed.extend(extra_removed)
     git(main, "worktree", "prune")
     for branch in branches:
         if not git_ok(main, "rev-parse", "--verify", "--quiet", "refs/heads/" + branch):
@@ -539,7 +619,7 @@ def remove(record: Record, store: state.Store, spawnfather: lifetimes.Spawnfathe
         removed.append(f"branch {branch}")
     protected = [main, str(Path.home()), str(store.directory.resolve())]
     # The lane's worktree, and the base checkouts a red check classified in, under its scratch (#568).
-    checkouts = [path for path in (worktree, *scratch[:1]) if path]
+    checkouts = [path for path in (worktree, *scratch) if path]
     for partition in worktrees.shared_partitions(*checkouts, project=project) if checkouts else []:
         with open(str(partition) + ".lock", "a") as handle:
             try:
@@ -1075,9 +1155,9 @@ def abandon_lane(lane_id: str, reason: str, store: state.Store, *,
     return abandoned_info
 
 
-def footprint(record: Record) -> int:
+def footprint(record: Record, *, store: state.Store | None = None) -> int:
     """The bytes done would free at least: the worktree, the lane's build directories and its scratch."""
-    return sum(worktrees.size(path) for path in removal_paths(record))
+    return sum(worktrees.size(path) for path in removal_paths(record, store=store))
 
 
 def finish_finished(dry_run: bool, *, skip_auto_off: bool) -> tuple[int, int, list[str]]:
@@ -1114,7 +1194,7 @@ def finish_finished(dry_run: bool, *, skip_auto_off: bool) -> tuple[int, int, li
                         print(f"  {where.name} {record['id']}: not finished ({why})")
                     continue
                 if dry_run:
-                    size = footprint(record)
+                    size = footprint(record, store=store)
                     freed += size
                     listed += 1
                     print(f"  {where.name} {record['id']}: {size / 1e9:.1f} GB  {record.get('worktree') or '-'}")

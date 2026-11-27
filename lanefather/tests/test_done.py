@@ -134,6 +134,91 @@ class DoneTests(LaneCase):
         self.assertIn("not landed", self.lane("done", "u", ok=False))
         self.assertTrue(pathlib.Path(worktree).exists())
 
+    def test_done_reaps_unrecorded_canonical_scratch_with_stale_base_checkout(self):
+        """fathers#259: done reaps `<state>/<id>.scratch` even when missing from record['scratch'] and cleans stale
+        `base-*` checkouts inside it first."""
+        worktree, record, *_ = self.landed_agent_lane()
+        canonical = self.state / "d.scratch"
+        self.write(canonical, "probe.log", "leftover evidence\n")
+        stale_base = canonical / "base-0123456789ab"
+        self.git(self.repo, "worktree", "add", "-q", "--detach", str(stale_base), "integrate/q")
+        # Simulate a legacy or damaged record whose scratch list omits the canonical path.
+        rec_path = self.state / "d.json"
+        mutated = dict(record)
+        mutated["scratch"] = []
+        rec_path.write_text(json.dumps(mutated))
+        self.lane("done", "d")
+        self.assertFalse(worktree.exists())
+        self.assertFalse(canonical.exists())
+        self.assertNotIn(str(stale_base), self.git(self.repo, "worktree", "list"))
+        self.assertEqual(self.record("d")["status"], "done")
+
+    def test_done_never_follows_symlinked_scratch_outside_state_dir(self):
+        """fathers#259: done never follows a symlinked scratch pointing outside the state directory (both when
+        previously owned by Spawnfather and when unowned)."""
+        worktree, record, *_ = self.landed_agent_lane()
+        canonical = self.state / "d.scratch"
+        if canonical.exists():
+            shutil.rmtree(canonical)
+        outside = self.tmp / "precious-outside"
+        self.write(outside, "keep.txt", "do not delete\n")
+        # 1. Previously owned canonical scratch replaced with symlink -> refused cleanly, target untouched.
+        canonical.symlink_to(outside)
+        refused = self.lane("done", "d", ok=False)
+        self.assertIn("a symbolic link", refused)
+        self.assertTrue((outside / "keep.txt").exists(), "symlink target outside state dir must never be deleted")
+        # 2. Unowned symlinked scratch (not registered in Spawnfather) -> skipped safely, done succeeds, target intact.
+        canonical.unlink()
+        extra_link = self.state / "extra-link.scratch"
+        extra_link.symlink_to(outside)
+        mutated = dict(record)
+        mutated["scratch"] = [str(extra_link)]
+        (self.state / "d.json").write_text(json.dumps(mutated))
+        self.lane("done", "d")
+        self.assertFalse(worktree.exists())
+        self.assertTrue(extra_link.is_symlink())
+        self.assertTrue((outside / "keep.txt").exists(), "symlink target outside state dir must never be deleted")
+        self.assertEqual((outside / "keep.txt").read_text(), "do not delete\n")
+        self.assertEqual(self.record("d")["status"], "done")
+
+    def test_done_reaps_remaining_store_scratch_if_spawnfather_leaves_it_and_never_deletes_outside_store(self):
+        """fathers#259: if Spawnfather returns without removing `<state>/<id>.scratch`, done still reaps it inside
+        the store directory, while never directly deleting a scratch directory outside `store.directory`."""
+        from unittest import mock
+
+        from lanefather import config, done, lifetimes, state
+
+        worktree, record, *_ = self.landed_agent_lane()
+        canonical = self.state / "d.scratch"
+        self.write(canonical, "leftover.log", "x" * 1024)
+        outside = self.tmp / "outside-extra-scratch"
+        self.write(outside, "keep.txt", "outside")
+        rec_path = self.state / "d.json"
+        mutated = dict(record)
+        mutated["scratch"] = [str(canonical), str(outside)]
+        rec_path.write_text(json.dumps(mutated))
+
+        real_reap = lifetimes.Spawnfather.reap
+
+        def reap_leaving_scratch(self_sf: lifetimes.Spawnfather, lane: str, ev: lifetimes.Evidence,
+                                 *, dry_run: bool, reason: str) -> lifetimes.Reaped:
+            res = real_reap(self_sf, lane, ev, dry_run=dry_run, reason=reason)
+            if not dry_run:
+                # Recreate both dirs as if Spawnfather skipped dir cleanup while returning no kept refusals.
+                self.write(canonical, "leftover.log", "x" * 1024)
+                self.write(outside, "keep.txt", "outside")
+            return res
+
+        cfg = config.load(self.integration / ".lanefather.toml")
+        store = state.Store(cfg, directory=self.state)
+        with (mock.patch.dict("os.environ", self.env, clear=False),
+              mock.patch.object(lifetimes.Spawnfather, "reap", reap_leaving_scratch)):
+            freed = done.finish("d", None, store)
+        self.assertGreater(freed, 0)
+        self.assertFalse(worktree.exists())
+        self.assertFalse(canonical.exists(), "canonical scratch inside store must be reaped")
+        self.assertTrue((outside / "keep.txt").exists(), "fallback must never delete outside store.directory")
+
 
 class AutoDoneTests(LaneCase):
     """#446: land finishes the lane after a green post-merge smoke, so it no longer counts toward the lane cap."""

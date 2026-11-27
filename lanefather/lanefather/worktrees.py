@@ -184,6 +184,46 @@ def size(path: str) -> int:
     return int(result.stdout.split()[0]) * 1024 if result.returncode == 0 and result.stdout else 0
 
 
+def dir_bytes(path: Path) -> int:
+    """Total byte size of non-directory entries under `path`, without following symlinks or failing on races."""
+    total = 0
+    stack: list[Path] = [path]
+    while stack:
+        current = stack.pop()
+        try:
+            with os.scandir(current) as entries:
+                for entry in entries:
+                    try:
+                        if entry.is_symlink():
+                            total += entry.stat(follow_symlinks=False).st_size
+                        elif entry.is_dir(follow_symlinks=False):
+                            stack.append(Path(entry.path))
+                        else:
+                            total += entry.stat(follow_symlinks=False).st_size
+                    except OSError:
+                        continue
+        except OSError:
+            continue
+    return total
+
+
+def safe_rmtree(path: Path) -> bool:
+    """Remove directory tree `path` without following a top-level symlink, tolerating concurrent `FileNotFoundError`.
+
+    Returns True when `path` was removed, False when it was already absent or a symlink; propagates other `OSError`.
+    """
+    if path.is_symlink():
+        return False
+    for attempt in range(2):
+        try:
+            shutil.rmtree(path)
+            return True
+        except FileNotFoundError:
+            if not path.exists():
+                return attempt > 0
+    return not path.exists()
+
+
 def remove_tree(path: str, protected: list[str]) -> int:
     """`rm -rf` of a shared cache partition (done, under its lock). A lane's own worktree, scratch and build
     directories are Spawnfather's to remove (fathers#171); the shared partitions stay here, cache collection rather

@@ -139,6 +139,12 @@ class ConfigTests(ConfigCase):
                             ('[gc]\nbranches = [""]\n', "[gc] branches takes non-empty patterns"),
                             ('[gc]\ncollect_uncommitted_sessions = "yes"\n',
                              "collect_uncommitted_sessions must be a boolean"),
+                            ('[gc]\nlog_max_age_days = -1\n', "[gc] log_max_age_days must be a non-negative integer"),
+                            ('[gc]\nlog_max_age_days = true\n', "[gc] log_max_age_days must be a non-negative integer"),
+                            ('[gc]\nlog_max_age_days = "14"\n', "[gc] log_max_age_days must be a non-negative integer"),
+                            ('[gc]\nlog_max_mb = -5\n', "[gc] log_max_mb must be a non-negative integer"),
+                            ('[gc]\nlog_max_mb = false\n', "[gc] log_max_mb must be a non-negative integer"),
+                            ('[gc]\nlog_max_mb = 1.5\n', "[gc] log_max_mb must be a non-negative integer"),
                             ('[[promote.install]]\nargv = ["x"]\n', "needs a name and an argv"),
                             ('checks = "x"\n', "[checks] must be a table"),
                             ('[env]\nLANEFATHER_X = 1\n', "[env] maps"),
@@ -158,8 +164,12 @@ class ConfigTests(ConfigCase):
         self.assertFalse(default.gc_collect_uncommitted_sessions)
         self.assertIn("node_modules", default.gc_disposable)
         self.assertEqual(default.gc_branches, ("worktree-agent-*", "lane/*", "claude/*", "codex/*"))
-        found = self.use('[gc]\ndirs = "agent-*"\nbranches = []\n')
+        self.assertEqual((default.gc_log_max_age_days, default.gc_log_max_mb), (14, 256))
+        found = self.use('[gc]\ndirs = "agent-*"\nbranches = []\nlog_max_age_days = 7\nlog_max_mb = 64\n')
         self.assertEqual((found.gc_dirs, found.gc_branches), (("agent-*",), ()))
+        self.assertEqual((found.gc_log_max_age_days, found.gc_log_max_mb), (7, 64))
+        disabled = self.use('[gc]\nlog_max_age_days = 0\nlog_max_mb = 0\n')
+        self.assertEqual((disabled.gc_log_max_age_days, disabled.gc_log_max_mb), (0, 0))
 
     def test_find_reads_the_repository_top_or_lanefather_config(self):
         repo = self.tmp / "repo"

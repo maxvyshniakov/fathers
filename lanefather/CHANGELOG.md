@@ -477,6 +477,17 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
 
 ### Fixed
 
+- Reap lane `*.scratch` directories on close/gc and prune `<state>/logs/` in `lanefather gc` (fathers#259):
+  - `done`, `drop`, `park`, and `abandon` now always reap both recorded `record["scratch"]` entries and the canonical
+    `<state>/<lane-id>.scratch` directory when present, cleaning stale `base-*` worktrees inside them first and never
+    following symlinks or deleting outside the state directory.
+  - `lanefather gc` (with `--dry-run` and `freed` / `removed` reporting) now sweeps orphaned and finished-lane
+    `*.scratch` directories in `<state>/` while sparing live (`planned`, `active`, `landed`, `released`) lanes' scratch
+    and symlinks.
+  - `lanefather gc` now rotates `<state>/logs/` using `[gc]` `log_max_age_days` (default `14`, `0` disables) and
+    `log_max_mb` (default `256` MiB, `0` disables), deleting oldest entries first while sparing live lanes' logs and
+    symlinks.
+
 - `lanefather promote`'s batch gate no longer freezes at `--jobs 1` when transient peer leases occupy the machine at
   launch (fathers#257): on multi-slot machines it now requests a floor of 2 slots (`GATE_MIN_JOBS = 2`, via
   `ranged_jobs`) at the gate's priority (`interactive` by default), waiting in the queue with no lease timeout for a

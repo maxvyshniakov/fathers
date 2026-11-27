@@ -1,4 +1,4 @@
-"""Conservative collection of merged idle agent worktrees and their unused branches.
+"""Conservative collection of merged idle agent worktrees, unused branches, orphaned scratch dirs and old logs.
 
 The candidates are the worktrees under the main checkout's .claude/worktrees whose name, path or branch matches the
 project's [gc] dirs and branches (agent, lane, Claude Code and Codex session worktrees by default, fathers#44); the
@@ -9,11 +9,15 @@ branch, clean, idle and unused is enough. Any other candidate is a session workt
 it is kept unless its HEAD reached origin/dev or origin/main, it has a commit of its own, and it holds no ignored
 file outside [gc] disposable. No candidate that holds another worktree or Git repository is removed.
 
-One Project value owns the configuration and state snapshot for this pass. The policy lives here; the removal is
+One Project value owns the configuration and state snapshot for this pass. The policy lives here; worktree removal is
 Spawnfather's (fathers#171): `spawnfather reap --worktree PATH`, with the merge targets as --base and [gc]
 disposable as --disposable, checks its own guards (processes inside, a lock, ignored files, work not merged) again
-and removes the worktree, unlocking a dead agent's lock first. Without Spawnfather every candidate is kept. Project
-build caches and scratchpads are outside this module: [gc] after_remove runs only after a worktree was removed.
+and removes the worktree, unlocking a dead agent's lock first. Without Spawnfather every worktree candidate is kept.
+Project build caches stay outside this module: [gc] after_remove runs only after a worktree was removed.
+
+In the lane state directory (fathers#259), `gc` also sweeps orphaned or finished-lane `*.scratch` directories
+(sparing any non-done lane's scratch and never following symlinks or deleting outside the state directory) and
+prunes `logs/` by `[gc]` `log_max_age_days` and `log_max_mb` (oldest first, sparing live lanes' logs).
 """
 from __future__ import annotations
 
@@ -25,6 +29,7 @@ import json
 import os
 from pathlib import Path
 import re
+import stat
 import subprocess
 import time
 from typing import Any, cast
@@ -39,6 +44,20 @@ AGENT_DIRS = ("agent-*", "lane-*")
 AGENT_BRANCHES = ("worktree-agent-*", "lane/*")
 # A HEAD reflog entry that records work done in the worktree, not a checkout or reset.
 OWN_WORK = ("commit", "merge", "cherry-pick", "rebase", "pull", "revert", "am")
+_LOG_FILE = re.compile(r"(?P<label>.+)-\d{8}T\d{6}\.log")
+_SECONDS_PER_DAY = 86400
+_BYTES_PER_MIB = 1024 * 1024
+
+
+@dataclass(frozen=True)
+class _LogEntry:
+    path: Path
+    real: str
+    name: str
+    is_dir: bool
+    size: int
+    mtime: float
+    protected: bool
 
 
 class Kept(Exception):
@@ -70,6 +89,7 @@ class Project:
     def run(self, dry_run: bool = False) -> Result:
         result = Result()
         with self._store.locked("state"):
+            all_records = self._store.lanes(strict=True)
             promoted_refs = [f"refs/remotes/origin/{b}" for b in self._settings.promoted]
             targets = git(self._root, "for-each-ref", "--format=%(refname)", *promoted_refs,
                           "refs/heads/integrate/").splitlines()
@@ -78,7 +98,7 @@ class Project:
             else:
                 self._proof = lifetimes.Evidence(bases=tuple(targets), disposable=self._settings.gc_disposable,
                                                  stop_inside=lifetimes.stop_inside(self._settings))
-                records = [r for r in self._store.lanes(strict=True) if not lifecycle.finished(r)]
+                records = [r for r in all_records if not lifecycle.finished(r)]
                 entries = worktree_list(self._root)
                 removed: set[str] = set()
                 wt_root = os.path.realpath(worktrees.worktrees_root_from_main(self._root, self._settings))
@@ -123,7 +143,169 @@ class Project:
                     except LaneError as error:
                         result.errors.append(str(error))
         self._drop_gone(dry_run, result)
+        with self._store.locked("state"):
+            current_records = self._store.lanes(strict=True)
+            self._sweep_scratch(current_records, dry_run, result)
+            self._prune_logs(current_records, dry_run, result)
         return result
+
+    def _sweep_scratch(self, all_records: list[state.Record], dry_run: bool, result: Result) -> None:
+        """Sweep orphaned or finished-lane `*.scratch` directories under `store.directory` (fathers#259)."""
+        store_dir = self._store.directory
+        if store_dir.is_symlink() or not store_dir.is_dir():
+            return
+        live_records = [r for r in all_records if not lifecycle.finished(r)]
+        live_ids = {str(r["id"]) for r in live_records}
+        live_scratch_reals = _record_scratch_reals(live_records)
+        records_by_id = {str(r["id"]): r for r in all_records}
+        try:
+            with os.scandir(store_dir) as it:
+                entries = sorted(it, key=lambda e: e.name)
+        except FileNotFoundError:
+            return
+        except OSError as error:
+            result.errors.append(f"{store_dir}: {error}")
+            return
+        for entry in entries:
+            if not entry.name.endswith(".scratch") or entry.name == ".scratch":
+                continue
+            entry_path = Path(entry.path)
+            try:
+                if entry.is_symlink():
+                    result.kept.append({"path": str(entry_path), "reason": "symbolic link"})
+                    continue
+                if not entry.is_dir(follow_symlinks=False):
+                    continue
+            except FileNotFoundError:
+                continue
+            except OSError as error:
+                result.errors.append(f"{entry_path}: {error}")
+                continue
+            if not lifetimes.within_dir(entry_path, store_dir):
+                result.kept.append({"path": str(entry_path), "reason": "outside state directory"})
+                continue
+            target_real = os.path.realpath(entry_path)
+            if self._invoked_from == target_real or self._invoked_from.startswith(target_real + os.sep):
+                result.kept.append({
+                    "path": target_real,
+                    "reason": "the collector is running inside this scratch directory",
+                })
+                continue
+            lane_id = entry.name.removesuffix(".scratch")
+            if lane_id in live_ids or target_real in live_scratch_reals:
+                continue
+            size = worktrees.dir_bytes(entry_path)
+            if dry_run:
+                result.removed.append({"kind": "scratch", "path": target_real, "bytes": size})
+                result.freed += size
+                continue
+            try:
+                _clean_scratch_base_worktrees(entry_path, records_by_id.get(lane_id), self._root)
+                removed_ok = worktrees.safe_rmtree(entry_path)
+            except (LaneError, OSError) as error:
+                result.errors.append(f"{target_real}: {error}")
+                continue
+            if removed_ok:
+                result.removed.append({"kind": "scratch", "path": target_real, "bytes": size})
+                result.freed += size
+
+    def _prune_logs(self, all_records: list[state.Record], dry_run: bool, result: Result,
+                    *, now: float | None = None) -> None:
+        """Prune old or oversized entries in `<store.directory>/logs`, sparing live lanes' logs (fathers#259)."""
+        max_age_days = self._settings.gc_log_max_age_days
+        max_mb = self._settings.gc_log_max_mb
+        if max_age_days == 0 and max_mb == 0:
+            return
+        store_dir = self._store.directory
+        logs_dir = store_dir / "logs"
+        if logs_dir.is_symlink():
+            result.kept.append({"path": str(logs_dir), "reason": "symbolic link"})
+            return
+        if not logs_dir.is_dir():
+            return
+        if not lifetimes.within_dir(logs_dir, store_dir):
+            result.kept.append({"path": str(logs_dir), "reason": "outside state directory"})
+            return
+        live_ids = {str(r["id"]) for r in all_records if not lifecycle.finished(r)}
+        current_time = time.time() if now is None else now
+        try:
+            with os.scandir(logs_dir) as it:
+                raw_entries = sorted(it, key=lambda e: e.name)
+        except FileNotFoundError:
+            return
+        except OSError as error:
+            result.errors.append(f"{logs_dir}: {error}")
+            return
+        candidates: list[_LogEntry] = []
+        for entry in raw_entries:
+            entry_path = Path(entry.path)
+            try:
+                st = entry.stat(follow_symlinks=False)
+            except FileNotFoundError:
+                continue
+            except OSError as error:
+                result.errors.append(f"{entry_path}: {error}")
+                continue
+            if stat.S_ISLNK(st.st_mode):
+                result.kept.append({"path": str(entry_path), "reason": "symbolic link"})
+                continue
+            if not lifetimes.within_dir(entry_path, logs_dir):
+                result.kept.append({"path": str(entry_path), "reason": "outside logs directory"})
+                continue
+            entry_real = os.path.realpath(entry_path)
+            if stat.S_ISREG(st.st_mode):
+                is_dir = False
+                size = st.st_size
+                mtime = st.st_mtime
+            elif stat.S_ISDIR(st.st_mode):
+                is_dir = True
+                size = worktrees.dir_bytes(entry_path)
+                mtime = _dir_mtime(entry_path, st.st_mtime)
+            else:
+                continue
+            protected = _log_belongs_to_live_lane(entry.name, is_dir, live_ids)
+            candidates.append(_LogEntry(
+                path=entry_path, real=entry_real, name=entry.name,
+                is_dir=is_dir, size=size, mtime=mtime, protected=protected,
+            ))
+        cutoff = current_time - max_age_days * _SECONDS_PER_DAY if max_age_days > 0 else None
+        to_remove: list[_LogEntry] = []
+        remaining: list[_LogEntry] = []
+        for item in candidates:
+            if cutoff is not None and not item.protected and item.mtime < cutoff:
+                to_remove.append(item)
+            else:
+                remaining.append(item)
+        if max_mb > 0:
+            max_bytes = max_mb * _BYTES_PER_MIB
+            total_bytes = sum(item.size for item in remaining)
+            if total_bytes > max_bytes:
+                evictable = sorted((item for item in remaining if not item.protected),
+                                   key=lambda i: (i.mtime, i.name))
+                for item in evictable:
+                    if total_bytes <= max_bytes:
+                        break
+                    to_remove.append(item)
+                    total_bytes -= item.size
+        for item in sorted(to_remove, key=lambda i: (i.mtime, i.name)):
+            if dry_run:
+                result.removed.append({"kind": "log", "path": item.real, "bytes": item.size})
+                result.freed += item.size
+                continue
+            try:
+                if item.is_dir:
+                    removed_ok = worktrees.safe_rmtree(item.path)
+                else:
+                    item.path.unlink()
+                    removed_ok = True
+            except FileNotFoundError:
+                continue
+            except OSError as error:
+                result.errors.append(f"{item.real}: {error}")
+                continue
+            if removed_ok:
+                result.removed.append({"kind": "log", "path": item.real, "bytes": item.size})
+                result.freed += item.size
 
     def _drop_gone(self, dry_run: bool, result: Result) -> None:
         """Drop this repository's gone lanes (fathers#237): drop's own proof holds for them, so nothing can be lost.
@@ -249,6 +431,89 @@ class Project:
 def upstream(targets: list[str]) -> list[str]:
     """The targets that are origin's: work merged only into a local integrate/* branch is not yet upstream."""
     return [t for t in targets if t.startswith("refs/remotes/")]
+
+
+def _record_scratch_reals(records: list[state.Record]) -> set[str]:
+    found: set[str] = set()
+    for record in records:
+        for path in lifetimes.record_scratch_paths(record):
+            with contextlib.suppress(OSError):
+                found.add(os.path.realpath(path))
+    return found
+
+
+def _clean_scratch_base_worktrees(scratch: Path, record: state.Record | None, fallback_root: str) -> None:
+    """Remove any stale `base-*` worktrees inside `scratch` through git before removing the scratch directory."""
+    record_main: str | None = None
+    if record is not None:
+        common = record.get("common_dir")
+        if isinstance(common, str) and common and os.path.isdir(common):
+            record_main = main_checkout(common)
+    for stale in sorted(scratch.glob("base-*")):
+        if stale.is_symlink() or not stale.is_dir():
+            continue
+        repo_root = record_main
+        if repo_root is None and (stale / ".git").exists():
+            try:
+                repo_root = main_checkout(common_dir(str(stale)))
+            except LaneError:
+                repo_root = fallback_root
+        worktrees.remove_checkout(repo_root or fallback_root, stale)
+
+
+def _dir_mtime(path: Path, default: float) -> float:
+    newest = default
+    stack: list[Path] = [path]
+    while stack:
+        current = stack.pop()
+        try:
+            with os.scandir(current) as entries:
+                for entry in entries:
+                    try:
+                        st = entry.stat(follow_symlinks=False)
+                        newest = max(newest, st.st_mtime)
+                        if not entry.is_symlink() and entry.is_dir(follow_symlinks=False):
+                            stack.append(Path(entry.path))
+                    except OSError:
+                        continue
+        except OSError:
+            continue
+    return newest
+
+
+def _log_belongs_to_live_lane(name: str, is_dir: bool, live_ids: set[str]) -> bool:
+    """Whether a file or kept-run directory in `<state>/logs/` belongs to a lane in `live_ids`."""
+    if not live_ids:
+        return False
+    if not is_dir:
+        match = _LOG_FILE.fullmatch(name)
+        if not match:
+            return False
+        label = match["label"]
+        if label.startswith("post-merge-"):
+            return label.removeprefix("post-merge-") in live_ids
+        if label.startswith("recheck-"):
+            return label.removeprefix("recheck-") in live_ids
+        if label.startswith("review-"):
+            rest = label.removeprefix("review-")
+            return rest in live_ids or (rest.endswith("-delta") and rest.removesuffix("-delta") in live_ids)
+        if label.startswith("lane-"):
+            rest = label.removeprefix("lane-")
+            return (
+                rest in live_ids
+                or (rest.endswith("-alone") and rest.removesuffix("-alone") in live_ids)
+                or (rest.endswith("-base") and rest.removesuffix("-base") in live_ids)
+                or any(rest.startswith(f"{lid}-base-") for lid in live_ids)
+            )
+        return False
+    if name.startswith("lane-"):
+        rest = name.removeprefix("lane-")
+        return rest in live_ids or any(rest.startswith(f"{lid}-base-") for lid in live_ids)
+    for prefix in ("post-merge-", "recheck-", "review-"):
+        if name.startswith(prefix):
+            rest = name.removeprefix(prefix)
+            return rest in live_ids or any(rest.startswith(f"{lid}-") for lid in live_ids)
+    return False
 
 
 def _own_work(path: str) -> bool:

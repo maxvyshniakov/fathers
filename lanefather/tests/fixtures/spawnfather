@@ -61,6 +61,8 @@ def remove(entry, override):
     path = entry["id"]
     if not os.path.lexists(path):
         return "gone", ""
+    if entry["kind"] == "dir" and os.path.islink(path):
+        return "failed", "kept: a symbolic link"
     keep = os.environ.get("FAKE_SPAWNFATHER_KEEP")
     if keep and re.search(keep, path) and not override:
         return "failed", "kept: in use by pid 4242 (fake)"
@@ -140,6 +142,8 @@ def main(args):
                 keep = os.environ.get("FAKE_SPAWNFATHER_KEEP")
                 if not os.path.lexists(entry["id"]):
                     results.append(row(entry, "gone", "reap"))
+                elif entry["kind"] == "dir" and os.path.islink(entry["id"]):
+                    results.append(row(entry, "would-fail", "reap; kept: a symbolic link"))
                 elif keep and re.search(keep, entry["id"]) and not override:
                     results.append(row(entry, "would-fail", "reap; kept: in use by pid 4242 (fake)"))
                 else:

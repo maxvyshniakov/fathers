@@ -94,6 +94,52 @@ class DropTests(LaneCase):
         self.lane("land", "a")
         self.assertIn("is landed: lanefather done a", self.lane("drop", "a", ok=False))
 
+    def test_drop_reaps_unrecorded_canonical_scratch_with_stale_base_checkout(self):
+        """fathers#259: drop reaps `<state>/<id>.scratch` even when omitted from record['scratch'] and cleans stale
+        `base-*` checkouts inside it."""
+        worktree = self.created("e", "lib/**")
+        canonical = self.state / "e.scratch"
+        self.write(canonical, "probe.log", "scratch evidence\n")
+        stale_base = canonical / "base-abcdef012345"
+        self.git(self.repo, "worktree", "add", "-q", "--detach", str(stale_base), "integrate/q")
+        rec_path = self.state / "e.json"
+        rec = self.record("e")
+        rec["scratch"] = []
+        rec_path.write_text(json.dumps(rec))
+        self.lane("drop", "e")
+        self.assertFalse(pathlib.Path(worktree).exists())
+        self.assertFalse(canonical.exists())
+        self.assertNotIn(str(stale_base), self.git(self.repo, "worktree", "list"))
+        self.assertEqual(self.record("e")["status"], "done")
+
+    def test_drop_never_follows_symlinked_scratch_outside_state_dir(self):
+        """fathers#259: drop never follows a symlinked scratch pointing outside the state directory."""
+        import shutil
+
+        worktree = self.created("e", "lib/**")
+        canonical = self.state / "e.scratch"
+        if canonical.exists():
+            shutil.rmtree(canonical)
+        outside = self.tmp / "precious-drop-outside"
+        self.write(outside, "keep.txt", "safe\n")
+        # 1. Previously owned canonical scratch replaced with symlink -> refused cleanly, target untouched.
+        canonical.symlink_to(outside)
+        refused = self.lane("drop", "e", ok=False)
+        self.assertIn("a symbolic link", refused)
+        self.assertTrue((outside / "keep.txt").exists())
+        # 2. Unowned symlinked scratch entry -> skipped safely, drop succeeds, target untouched.
+        canonical.unlink()
+        extra_link = self.state / "extra-drop-link.scratch"
+        extra_link.symlink_to(outside)
+        rec = self.record("e")
+        rec["scratch"] = [str(extra_link)]
+        (self.state / "e.json").write_text(json.dumps(rec))
+        self.lane("drop", "e")
+        self.assertFalse(pathlib.Path(worktree).exists())
+        self.assertTrue(extra_link.is_symlink())
+        self.assertTrue((outside / "keep.txt").exists())
+        self.assertEqual((outside / "keep.txt").read_text(), "safe\n")
+
 
 class ClearedPostMergeTests(LaneCase):
     """A landed lane whose post-merge smoke went red for a reason outside it becomes done-able without

@@ -372,3 +372,256 @@ class SessionWorktreeTests(GcCase):
         self.assertEqual((inner / "lib/api.txt").read_text(), "unsaved inside")
         self.assertTrue(outer.exists())
         self.assertIn("holds the worktree", self.kept(report, outer))
+
+
+class ScratchAndLogGcTests(GcCase):
+    """fathers#259: gc sweeps orphaned/finished `*.scratch` directories and rotates `<state>/logs/`."""
+
+    def configure(self, text: str) -> None:
+        cfg = self.integration / ".lanefather.toml"
+        base = cfg.read_text().split("\n[gc]", 1)[0]
+        cfg.write_text(base + "\n[gc]\n" + text)
+
+    def _write_lane_record(self, lane_id: str, status: str, **extra: Any) -> None:
+        self.state.mkdir(parents=True, exist_ok=True)
+        record: dict[str, Any] = {
+            "id": lane_id,
+            "ticket": "404",
+            "branch": f"lane/{lane_id}",
+            "base": "integrate/q",
+            "base_sha": self.tip(),
+            "claims": [f"{lane_id}/**"],
+            "after": [],
+            "common_dir": os.path.realpath(self.repo / ".git"),
+            "integration": str(self.integration),
+            "worktree": None,
+            "status": status,
+            "created": "2026-11-20T00:00:00Z",
+            "scratch": [str(self.state / f"{lane_id}.scratch")],
+            "overrides": [],
+            "rules": [],
+            **extra,
+        }
+        (self.state / f"{lane_id}.json").write_text(json.dumps(record))
+
+    def test_gc_sweeps_orphaned_and_finished_scratch_while_sparing_live_lanes_and_symlinks(self):
+        self.state.mkdir(parents=True, exist_ok=True)
+        # Orphaned (no record) + finished (done, dropped, abandoned) -> swept.
+        orphan = self.state / "ghost-lane.scratch"
+        self.write(orphan, "data.bin", "x" * 2048)
+        stale_base = orphan / "base-0123456789ab"
+        self.git(self.repo, "worktree", "add", "-q", "--detach", str(stale_base), "integrate/q")
+
+        self._write_lane_record("finished-done", "done", outcome="landed")
+        done_scratch = self.state / "finished-done.scratch"
+        self.write(done_scratch, "out.log", "y" * 1024)
+
+        self._write_lane_record("finished-drop", "done", dropped={"at": "2026-11-20T00:00:00Z", "why": "empty"})
+        drop_scratch = self.state / "finished-drop.scratch"
+        self.write(drop_scratch, "out.log", "z" * 512)
+
+        self._write_lane_record("finished-abandon", "done", outcome="abandoned")
+        abandon_scratch = self.state / "finished-abandon.scratch"
+        self.write(abandon_scratch, "out.log", "w" * 256)
+
+        # Live lanes (planned, active, landed, released) -> spared.
+        live_dirs: list[Path] = []
+        for lane_id, status in (
+            ("live-planned", "planned"),
+            ("live-active", "active"),
+            ("live-landed", "landed"),
+            ("live-released", "released"),
+        ):
+            self._write_lane_record(lane_id, status)
+            sdir = self.state / f"{lane_id}.scratch"
+            self.write(sdir, "keep.log", "live")
+            live_dirs.append(sdir)
+
+        # Symlinked *.scratch pointing outside -> never followed or deleted.
+        outside = self.tmp / "outside-scratch-target"
+        self.write(outside, "precious.txt", "safe")
+        symlink_scratch = self.state / "linked-orphan.scratch"
+        symlink_scratch.symlink_to(outside)
+
+        # Dry run previews removals and freed bytes without deleting anything.
+        preview = self.collect("--dry-run")
+        preview_scratch = {item["path"]: item["bytes"] for item in preview["removed"] if item["kind"] == "scratch"}
+        for expected in (orphan, done_scratch, drop_scratch, abandon_scratch):
+            self.assertIn(str(expected.resolve()), preview_scratch)
+            self.assertTrue(expected.exists(), "dry-run must not delete scratch dirs")
+        for spared in live_dirs:
+            self.assertNotIn(str(spared.resolve()), preview_scratch)
+        self.assertEqual(preview["freed"], sum(preview_scratch.values()))
+        self.assertGreaterEqual(preview["freed"], 2048 + 1024 + 512 + 256)
+        self.assertTrue(any(k["path"] == str(symlink_scratch) and "symbolic link" in k["reason"]
+                            for k in preview["kept"]))
+
+        # Real gc sweeps orphaned & finished scratch, cleans stale base worktree, spares live lanes & symlink target.
+        report = self.collect()
+        removed_scratch = {item["path"]: item["bytes"] for item in report["removed"] if item["kind"] == "scratch"}
+        self.assertEqual(set(removed_scratch), {str(p.resolve()) for p in (orphan, done_scratch, drop_scratch, abandon_scratch)})
+        self.assertEqual(report["freed"], sum(removed_scratch.values()))
+        for expected in (orphan, done_scratch, drop_scratch, abandon_scratch):
+            self.assertFalse(expected.exists())
+        self.assertNotIn(str(stale_base), self.git(self.repo, "worktree", "list"))
+        for spared in live_dirs:
+            self.assertTrue(spared.exists(), f"{spared} must be spared")
+        self.assertTrue(symlink_scratch.is_symlink())
+        self.assertTrue((outside / "precious.txt").exists())
+
+    def test_gc_prunes_logs_by_age_ttl_while_sparing_live_lanes_and_symlinks(self):
+        self.configure("log_max_age_days = 14\nlog_max_mb = 0\n")
+        logs = self.state / "logs"
+        logs.mkdir(parents=True, exist_ok=True)
+        self._write_lane_record("live", "active")
+        self._write_lane_record("live-landed", "landed")
+        self._write_lane_record("old-done", "done", outcome="landed")
+
+        now = time.time()
+        old_time = now - 20 * 86400
+        fresh_time = now - 2 * 86400
+
+        def make_log(name: str, payload: str, mtime: float) -> Path:
+            p = logs / name
+            p.write_text(payload)
+            os.utime(p, (mtime, mtime))
+            return p
+
+        # Old finished/non-lane logs -> pruned.
+        old_done_log = make_log("lane-old-done-20261101T000000.log", "a" * 1000, old_time)
+        old_orphan_log = make_log("lane-ghost-20261101T000000.log", "b" * 2000, old_time)
+        old_gate_log = make_log("promote-abcdef0123-20261101T000000.log", "c" * 500, old_time)
+        old_run_dir = logs / "lane-old-done-base-run1"
+        self.write(old_run_dir, "report.json", "d" * 300)
+        os.utime(old_run_dir / "report.json", (old_time, old_time))
+        os.utime(old_run_dir, (old_time, old_time))
+
+        # Fresh finished log -> spared.
+        fresh_done_log = make_log("lane-old-done-20261125T000000.log", "fresh", fresh_time)
+
+        # Old logs belonging to live lanes (every phase + kept-run dir) -> ALWAYS spared.
+        live_logs = [
+            make_log("lane-live-20261001T000000.log", "live check", old_time),
+            make_log("lane-live-alone-20261001T000000.log", "live rerun", old_time),
+            make_log("lane-live-base-20261001T000000.log", "live base", old_time),
+            make_log("lane-live-base-lib-check-20261001T000000.log", "live base probe", old_time),
+            make_log("post-merge-live-landed-20261001T000000.log", "live smoke", old_time),
+            make_log("recheck-live-landed-20261001T000000.log", "live recheck", old_time),
+            make_log("review-live-landed-20261001T000000.log", "live review", old_time),
+            make_log("review-live-landed-delta-20261001T000000.log", "live delta", old_time),
+        ]
+        live_run_dir = logs / "lane-live-base-run1"
+        self.write(live_run_dir, "report.json", "live dir")
+        os.utime(live_run_dir / "report.json", (old_time, old_time))
+        os.utime(live_run_dir, (old_time, old_time))
+
+        # Symlink inside logs -> never followed or deleted.
+        outside_file = self.tmp / "outside-log.txt"
+        outside_file.write_text("precious log")
+        os.utime(outside_file, (old_time, old_time))
+        symlink_log = logs / "lane-ghost-20261001T000000.log"
+        symlink_log.symlink_to(outside_file)
+
+        # Dry run reports what would be pruned without deleting.
+        preview = self.collect("--dry-run")
+        preview_logs = {item["path"]: item["bytes"] for item in preview["removed"] if item["kind"] == "log"}
+        expected_paths = {str(p.resolve()) for p in (old_done_log, old_orphan_log, old_gate_log, old_run_dir)}
+        self.assertEqual(set(preview_logs), expected_paths)
+        self.assertEqual(preview["freed"], 1000 + 2000 + 500 + 300)
+        for p in (old_done_log, old_orphan_log, old_gate_log, old_run_dir):
+            self.assertTrue(p.exists())
+
+        # Real run deletes only expired non-live logs.
+        report = self.collect()
+        removed_logs = {item["path"]: item["bytes"] for item in report["removed"] if item["kind"] == "log"}
+        self.assertEqual(set(removed_logs), expected_paths)
+        self.assertEqual(report["freed"], 1000 + 2000 + 500 + 300)
+        for p in (old_done_log, old_orphan_log, old_gate_log, old_run_dir):
+            self.assertFalse(p.exists())
+        self.assertTrue(fresh_done_log.exists())
+        for p in [*live_logs, live_run_dir]:
+            self.assertTrue(p.exists(), f"live lane log {p.name} must be spared")
+        self.assertTrue(symlink_log.is_symlink())
+        self.assertTrue(outside_file.exists())
+
+    def test_gc_prunes_logs_to_max_mb_oldest_first_sparing_live_lanes(self):
+        self.configure("log_max_age_days = 0\nlog_max_mb = 1\n")
+        logs = self.state / "logs"
+        logs.mkdir(parents=True, exist_ok=True)
+        self._write_lane_record("active-lane", "active")
+
+        now = time.time()
+        chunk = "x" * (600 * 1024)  # 600 KiB each; 1 MiB cap = 1024 KiB
+
+        # Live lane log is oldest (t - 400s), 600 KiB -> MUST be spared even though oldest.
+        live_log = logs / "lane-active-lane-20261126T000000.log"
+        live_log.write_text(chunk)
+        os.utime(live_log, (now - 400, now - 400))
+
+        # Two finished/non-lane logs: 600 KiB each at t - 300s and t - 100s.
+        # Total = 1800 KiB > 1024 KiB. Oldest finished (t - 300s) evicted -> 1200 KiB > 1024 KiB ->
+        # second finished (t - 100s) evicted -> 600 KiB <= 1024 KiB!
+        # Let's make three finished logs: 400 KiB (oldest), 400 KiB (middle), 300 KiB (newest) + 600 KiB live = 1700 KiB.
+        # Evict 400 KiB -> 1300 KiB > 1024 KiB; evict 400 KiB -> 900 KiB <= 1024 KiB; keep newest 300 KiB!
+        f_old = logs / "lane-done1-20261126T000100.log"
+        f_old.write_text("a" * (400 * 1024))
+        os.utime(f_old, (now - 300, now - 300))
+
+        f_mid = logs / "lane-done2-20261126T000200.log"
+        f_mid.write_text("b" * (400 * 1024))
+        os.utime(f_mid, (now - 200, now - 200))
+
+        f_new = logs / "lane-done3-20261126T000300.log"
+        f_new.write_text("c" * (300 * 1024))
+        os.utime(f_new, (now - 100, now - 100))
+
+        preview = self.collect("--dry-run")
+        preview_paths = [item["path"] for item in preview["removed"] if item["kind"] == "log"]
+        self.assertEqual(preview_paths, [str(f_old.resolve()), str(f_mid.resolve())])
+        self.assertEqual(preview["freed"], 800 * 1024)
+        self.assertTrue(f_old.exists() and f_mid.exists())
+
+        report = self.collect()
+        removed_paths = [item["path"] for item in report["removed"] if item["kind"] == "log"]
+        self.assertEqual(removed_paths, [str(f_old.resolve()), str(f_mid.resolve())])
+        self.assertEqual(report["freed"], 800 * 1024)
+        self.assertFalse(f_old.exists())
+        self.assertFalse(f_mid.exists())
+        self.assertTrue(f_new.exists(), "newest finished log within budget must be kept")
+        self.assertTrue(live_log.exists(), "live lane log must be spared regardless of age or size")
+
+    def test_gc_handles_missing_logs_dir_and_vanishing_files_gracefully(self):
+        from unittest import mock
+
+        from lanefather import config, gc
+
+        # Missing logs dir: gc succeeds and does NOT create logs/.
+        self.assertFalse((self.state / "logs").exists())
+        report = self.collect()
+        self.assertEqual(report["errors"], [])
+        self.assertFalse((self.state / "logs").exists())
+
+        # Concurrent FileNotFoundError during unlink is ignored without recording an error.
+        logs = self.state / "logs"
+        logs.mkdir(parents=True, exist_ok=True)
+        vanishing = logs / "lane-gone-20261001T000000.log"
+        vanishing.write_text("vanishing")
+        old_time = time.time() - 30 * 86400
+        os.utime(vanishing, (old_time, old_time))
+        cfg = config.load(self.integration / ".lanefather.toml")
+        with mock.patch.dict(os.environ, self.env, clear=False):
+            proj = gc.Project(str(self.integration), cfg)
+            res = gc.Result()
+            real_unlink = Path.unlink
+
+            def flaky_unlink(self_path: Path, *args: Any, **kwargs: Any) -> None:
+                if self_path == vanishing:
+                    real_unlink(self_path)
+                    raise FileNotFoundError(str(self_path))
+                real_unlink(self_path, *args, **kwargs)
+
+            with mock.patch.object(Path, "unlink", flaky_unlink):
+                proj._prune_logs([], False, res)  # pyright: ignore[reportPrivateUsage]
+            self.assertEqual(res.errors, [])
+            self.assertEqual(res.removed, [])
+            self.assertEqual(res.freed, 0)
