@@ -142,6 +142,18 @@ class Checkout:
         return bool(getattr(found, "SUPPORTS_BASE", False)
                     or _has_capability(getattr(found, "CAPABILITIES", None), "base"))
 
+    def supports_no_reuse(self, *, lane_plan: dict[str, Any] | None = None,
+                          report: dict[str, Any] | None = None) -> bool:
+        if report and _has_capability(report.get("capabilities"), "no-reuse"):
+            return True
+        if lane_plan and _has_capability(lane_plan.get("capabilities"), "no-reuse"):
+            return True
+        found = self.module()
+        if found is None:
+            return False
+        return bool(getattr(found, "SUPPORTS_NO_REUSE", False)
+                    or _has_capability(getattr(found, "CAPABILITIES", None), "no-reuse"))
+
     def plan_for(self, base: str) -> dict[str, Any]:
         return plan_for(self, base, self.project)
 
@@ -264,6 +276,13 @@ def supports_base(root: Any, *, lane_plan: dict[str, Any] | None = None,
                   project: config.Config = config.DEFAULT) -> bool:
     """Whether the project's verifier advertises `--base <ref>` alongside `--checks` (fathers#253)."""
     return _as_checkout(root, project).supports_base(lane_plan=lane_plan, report=report)
+
+
+def supports_no_reuse(root: Any, *, lane_plan: dict[str, Any] | None = None,
+                      report: dict[str, Any] | None = None,
+                      project: config.Config = config.DEFAULT) -> bool:
+    """Whether the project's verifier advertises `--no-reuse` cache bypass."""
+    return _as_checkout(root, project).supports_no_reuse(lane_plan=lane_plan, report=report)
 
 
 def plan_for(root: Any, base: str, project: config.Config = config.DEFAULT) -> dict[str, Any]:

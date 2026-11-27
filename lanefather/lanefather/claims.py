@@ -54,6 +54,7 @@ def segments_overlap(a: tuple[str, ...], b: tuple[str, ...]) -> bool:
 
 
 _head_kinds: dict[tuple[str, str], str] = {}
+_merge_attrs: dict[tuple[str, str], str] = {}
 
 
 def project_root(project: config.Config = config.DEFAULT, fallback: str | Path | None = None) -> str:
@@ -62,6 +63,56 @@ def project_root(project: config.Config = config.DEFAULT, fallback: str | Path |
     if project.path is not None:
         return str(project.path.parent)
     return str(fallback) if fallback is not None else os.getcwd()
+
+
+def prefetch_merge_attrs(literals: Iterable[str], *, root: str | None = None,
+                         project: config.Config = config.DEFAULT) -> None:
+    """Ask git check-attr for the `merge` attribute of each literal path in one call; fail closed to '' on errors."""
+    where = root or project_root(project)
+    paths = list(dict.fromkeys(
+        c.strip("/") for c in literals
+        if c.strip("/") and not c.endswith("/") and "\n" not in c and "\x00" not in c
+        and not any(w in c for w in "*?[") and (where, c.strip("/")) not in _merge_attrs
+    ))
+    if not paths:
+        return
+    payload = b"\x00".join(p.encode("utf-8", errors="surrogateescape") for p in paths) + b"\x00"
+    try:
+        result = subprocess.run(
+            ["git", "check-attr", "-z", "--stdin", "merge"],
+            cwd=where, capture_output=True, input=payload,
+        )
+    except OSError:
+        for path in paths:
+            _merge_attrs[(where, path)] = ""
+        return
+    if result.returncode != 0:
+        for path in paths:
+            _merge_attrs[(where, path)] = ""
+        return
+    parts = result.stdout.split(b"\x00")
+    if parts and parts[-1] == b"":
+        parts = parts[:-1]
+    if len(parts) != 3 * len(paths):
+        for path in paths:
+            _merge_attrs[(where, path)] = ""
+        return
+    for i in range(0, len(parts), 3):
+        raw_path = parts[i].decode("utf-8", errors="surrogateescape")
+        value = parts[i + 2].decode("utf-8", errors="surrogateescape")
+        _merge_attrs[(where, raw_path)] = "" if value in ("unspecified", "unset", "set") else value
+
+
+def merge_attr(path: str, *, root: str | None = None, project: config.Config = config.DEFAULT) -> str:
+    """The git `merge` attribute for a literal repository path, or '' when unset or outside a git repo."""
+    if path.endswith("/") or any(w in path for w in "*?["):
+        return ""
+    norm = path.strip("/")
+    if not norm:
+        return ""
+    where = root or project_root(project)
+    prefetch_merge_attrs([norm], root=where, project=project)
+    return _merge_attrs.get((where, norm), "")
 
 
 def head_kind(path: str, *, root: str | None = None, project: config.Config = config.DEFAULT) -> str:
@@ -87,9 +138,20 @@ def prefetch_kinds(literals: Iterable[str], *, root: str | None = None,
     if len(answers) != len(paths):
         answers = [""] * len(paths)  # no repository (or no HEAD) here: HEAD has none of them
     for path, answer in zip(paths, answers, strict=True):
-        # A submodule answers `<sha> submodule`; a path HEAD lacks, `HEAD:<path> missing`.
+        # A submodule answers `<sha> submodule` on Git >= 2.45; older Git answers `HEAD:<path> missing`.
         kind = "commit" if answer.endswith(" submodule") else answer
         _head_kinds[(where, path)] = kind if kind in ("tree", "blob", "commit") else ""
+    missing = [path for path, answer in zip(paths, answers, strict=True) if answer.endswith(" missing")]
+    if missing:
+        ls = subprocess.run(["git", "ls-tree", "-z", "HEAD", "--", *missing], cwd=where, capture_output=True)
+        if ls.returncode == 0:
+            for entry in ls.stdout.split(b"\x00"):
+                if b"\t" not in entry:
+                    continue
+                meta, raw_path = entry.split(b"\t", 1)
+                meta_parts = meta.decode("utf-8", errors="replace").split()
+                if len(meta_parts) >= 2 and meta_parts[1] in ("tree", "blob", "commit"):
+                    _head_kinds[(where, raw_path.decode("utf-8", errors="surrogateescape"))] = meta_parts[1]
 
 
 def names_directory(literal: str, *, root: str | None = None, project: config.Config = config.DEFAULT) -> bool:
@@ -142,14 +204,38 @@ def overlapping(claims: Iterable[str], other: Record, *, root: str | None = None
                 project: config.Config = config.DEFAULT) -> list[tuple[str, str]]:
     where = root or project_root(project)
     claims_list = list(claims)
-    prefetch_kinds([*claims_list, *other["claims"]], root=where)
-    return [(mine, theirs) for mine in claims_list for theirs in other["claims"]
-            if claims_overlap(mine, theirs, root=where)]
+    all_claims = [*claims_list, *other["claims"]]
+    prefetch_kinds(all_claims, root=where, project=project)
+    prefetch_merge_attrs(all_claims, root=where, project=project)
+    return [
+        (mine, theirs)
+        for mine in claims_list
+        for theirs in other["claims"]
+        if not claim_is_unclaimed(mine, root=where, project=project)
+        and not claim_is_unclaimed(theirs, root=where, project=project)
+        and claims_overlap(mine, theirs, root=where, project=project)
+    ]
 
 
-def unclaimed(path: str, project: config.Config = config.DEFAULT) -> bool:
-    """A path every lane may change (release notes merge by union), never claimed."""
-    return path.startswith(project.unclaimed)
+def unclaimed(path: str, project: config.Config = config.DEFAULT, *, root: str | None = None) -> bool:
+    """A path every lane may change (configured unclaimed prefix/glob or git `merge=union`), never claimed."""
+    if path.startswith(project.unclaimed):
+        return True
+    where = root or project_root(project)
+    if any(matches(pat, path, root=where, project=project) for pat in project.unclaimed):
+        return True
+    if not any(w in path for w in "*?[") and not names_directory(path, root=where, project=project):
+        return merge_attr(path, root=where, project=project) == "union"
+    return False
+
+
+def claim_is_unclaimed(claim: str, *, root: str | None = None,
+                       project: config.Config = config.DEFAULT) -> bool:
+    """Whether a lane claim names only an unclaimed path (never exempting broad globs or directories)."""
+    where = root or project_root(project)
+    if not any(w in claim for w in "*?[") and not names_directory(claim, root=where, project=project):
+        return unclaimed(claim, project, root=where)
+    return claim.startswith(project.unclaimed) or claim in project.unclaimed
 
 
 def widen_claims(store: state.Store, lane_id: str,
@@ -157,12 +243,18 @@ def widen_claims(store: state.Store, lane_id: str,
     """Add the changed paths outside the lane's claims to them (#574): the paths added, and each overlap of one with
     the claims of another planned or active lane. Lanes declared in sequence (--after either way) may overlap."""
     where = project_root(store.project)
+    prefetch_kinds(paths, root=where, project=store.project)
+    prefetch_merge_attrs(paths, root=where, project=store.project)
     added: list[str] = []
     overlaps: list[dict[str, Any]] = []
 
     def _widen(record: Record) -> bool:
         nonlocal added, overlaps
-        added = [p for p in dict.fromkeys(paths) if not any(matches(c, p, root=where) for c in record["claims"])]
+        added = [
+            p for p in dict.fromkeys(paths)
+            if not unclaimed(p, store.project, root=where)
+            and not any(matches(c, p, root=where, project=store.project) for c in record["claims"])
+        ]
         if not added:
             return False
         others = [r for r in state.occupying(state.of_project(store.lanes(), record.get("common_dir")))

@@ -42,6 +42,14 @@ class VerifyUnitTests(unittest.TestCase):
             verify.Selection.checks(["a"], only=["t1"], base="deadbeef").argv(),
             ("--checks", "a", "--base", "deadbeef", "--only", "t1"),
         )
+        self.assertEqual(
+            verify.Selection.checks(["a"], no_reuse=True).argv(),
+            ("--checks", "a", "--no-reuse"),
+        )
+        self.assertEqual(
+            verify.Selection.checks(["a"], only=["t1"], base="deadbeef", no_reuse=True).argv(),
+            ("--checks", "a", "--base", "deadbeef", "--only", "t1", "--no-reuse"),
+        )
 
     def test_outer_lease_warning_and_lease_count(self):
         import io
@@ -1022,6 +1030,350 @@ class UnblockedAfterRerunPureTests(unittest.TestCase):
         e_reg = next(e for e in after_b_reg["checks"] if e["check"] == "E")
         self.assertEqual(e_reg["prerequisites"], ["B", "D"])
         self.assertIn("failed prerequisites: B (regression), D (regression)", e_reg["reason"])
+
+
+class ReusedRerunClassificationTests(unittest.TestCase):
+    """Retro #7: reused cached results in alone/base reruns must never produce false regressions or flakes."""
+
+    def test_evaluate_base_row_reused_is_unclassified_never_regression(self) -> None:
+        from lanefather import verify
+        prior = {"check": "unit", "alone": {"status": "failed", "log": "/tmp/alone.log"}}
+        entry = verify.evaluate_base_row(
+            "unit",
+            prior,
+            base="a" * 40,
+            present=True,
+            row={"id": "unit", "status": "passed", "reused": True},
+            base_log="/tmp/base.log",
+        )
+        self.assertEqual(entry["class"], str(verify.CheckClass.UNCLASSIFIED))
+        self.assertTrue(entry["base"].get("reused"))
+        self.assertIn("reused", entry["reason"].lower())
+
+    def test_evaluate_alone_row_reused_is_unclassified_never_flaky_under_load(self) -> None:
+        from lanefather import verify
+        entry, needs_base = verify.evaluate_alone_row(
+            "unit",
+            {"id": "unit", "status": "passed", "reused": True},
+            first_row={"id": "unit", "status": "failed"},
+            log="/tmp/alone.log",
+            problem=None,
+            load={"first_run": [1.0, 1.0, 1.0], "alone": [0.5, 0.5, 0.5]},
+        )
+        self.assertFalse(needs_base)
+        self.assertEqual(entry["class"], str(verify.CheckClass.UNCLASSIFIED))
+        self.assertTrue(entry["alone"].get("reused"))
+        self.assertIn("reused", entry["reason"].lower())
+
+
+class ReusedRerunIntegrationTests(LaneCase):
+    """End-to-end classify_failures and check --rerun tests for --no-reuse and reused-row retry."""
+
+    def _evidence(self) -> dict[str, Any]:
+        return {
+            "version": 1,
+            "comparable": True,
+            "context": "node-22",
+            "cases": [{"id": "case-1", "signature": "AssertionError: boom"}],
+        }
+
+    def _make_lane(self, lane_id: str, claim: str = "lib/**") -> tuple[pathlib.Path, dict[str, Any]]:
+        wt = pathlib.Path(self.created(lane_id, claim))
+        self.commit(wt, {"lib/api.txt": "foo\nchanged\n"})
+        return wt, self.record(lane_id)
+
+    def _install_custom_verify(self, body: str) -> pathlib.Path:
+        calls_log = self.tmp / f"verify-calls-{time.monotonic_ns()}.jsonl"
+        runs_root = self.tmp / "verify-runs"
+        script = (
+            "#!/usr/bin/env python3\n"
+            "import json, os, pathlib, sys, uuid\n"
+            f"CALLS_LOG = pathlib.Path({str(calls_log)!r})\n"
+            f"RUNS_ROOT = pathlib.Path({str(runs_root)!r})\n"
+            "args = sys.argv[1:]\n"
+            "root = pathlib.Path(__file__).resolve().parent\n"
+            + body
+        )
+        self.commit(self.integration, {"verify.sh": script}, "install custom verify")
+        os.chmod(self.integration / "verify.sh", 0o755)
+        return calls_log
+
+    def _read_calls(self, path: pathlib.Path) -> list[dict[str, Any]]:
+        if not path.exists():
+            return []
+        return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+
+    def test_classify_failures_with_no_reuse_capability_passes_flag_on_first_reruns(self) -> None:
+        from lanefather import config, state, verify
+        ev = repr(self._evidence())
+        calls_log = self._install_custom_verify(f"""
+if args[:1] == ["--changed"]:
+    print(json.dumps({{"full": False, "paths": ["lib/api.txt"], "unowned": [], "suites": ["lib"],
+                       "reasons": {{"lib": ["lib/api.txt"]}},
+                       "checks": [{{"id": "lib-check", "suite": "lib", "paths": ["lib/api.txt"], "producer": False}}],
+                       "capabilities": ["no-reuse"]}}))
+    sys.exit(0)
+label = os.environ.get("LANEFATHER_SLOT_LABEL", "")
+with CALLS_LOG.open("a") as fh:
+    fh.write(json.dumps({{"label": label, "args": args}}) + "\\n")
+run_dir = RUNS_ROOT / uuid.uuid4().hex[:8]
+run_dir.mkdir(parents=True, exist_ok=True)
+rep = run_dir / "report.json"
+rep.write_text(json.dumps({{
+    "exit": 1,
+    "capabilities": ["no-reuse"],
+    "checks": [{{"id": "lib-check", "status": "failed", "failure_evidence": {ev}}}],
+}}))
+print(f"Verification report: {{rep}}")
+sys.exit(1)
+""")
+        wt, rec = self._make_lane("nr-cap")
+        cfg = config.load(self.integration / ".lanefather.toml")
+        store = state.Store(cfg, directory=self.state)
+        initial_report = {
+            "exit": 1,
+            "capabilities": ["no-reuse"],
+            "checks": [{"id": "lib-check", "status": "failed", "failure_evidence": self._evidence()}],
+        }
+        fresh = [{"suite": "lib", "status": "failed", "exit": 1, "failed_checks": ["lib-check"], "log": "/tmp/init.log"}]
+        cls = verify.classify_failures(store, rec, str(wt), rec["base_sha"], fresh, initial_report, jobs=2)
+        assert cls is not None
+        self.assertEqual(cls["checks"][0]["class"], str(verify.CheckClass.PRE_EXISTING))
+        calls = self._read_calls(calls_log)
+        self.assertEqual(len(calls), 2)
+        self.assertIn("--no-reuse", calls[0]["args"])
+        self.assertIn("--no-reuse", calls[1]["args"])
+
+    def test_classify_failures_retries_once_when_base_returns_reused_without_capability(self) -> None:
+        from lanefather import config, state, verify
+        ev = repr(self._evidence())
+        calls_log = self._install_custom_verify(f"""
+if args[:1] == ["--changed"]:
+    print(json.dumps({{"full": False, "paths": ["lib/api.txt"], "unowned": [], "suites": ["lib"],
+                       "reasons": {{"lib": ["lib/api.txt"]}},
+                       "checks": [{{"id": "lib-check", "suite": "lib", "paths": ["lib/api.txt"], "producer": False}}]}}))
+    sys.exit(0)
+label = os.environ.get("LANEFATHER_SLOT_LABEL", "")
+no_reuse = "--no-reuse" in args
+with CALLS_LOG.open("a") as fh:
+    fh.write(json.dumps({{"label": label, "args": args}}) + "\\n")
+run_dir = RUNS_ROOT / uuid.uuid4().hex[:8]
+run_dir.mkdir(parents=True, exist_ok=True)
+rep = run_dir / "report.json"
+if "-base" in label and not no_reuse:
+    rep.write_text(json.dumps({{
+        "exit": 0,
+        "checks": [{{"id": "lib-check", "status": "passed", "reused": True}}],
+    }}))
+    print(f"Verification report: {{rep}}")
+    sys.exit(0)
+rep.write_text(json.dumps({{
+    "exit": 1,
+    "checks": [{{"id": "lib-check", "status": "failed", "failure_evidence": {ev}}}],
+}}))
+print(f"Verification report: {{rep}}")
+sys.exit(1)
+""")
+        wt, rec = self._make_lane("nr-retry")
+        cfg = config.load(self.integration / ".lanefather.toml")
+        store = state.Store(cfg, directory=self.state)
+        initial_report = {
+            "exit": 1,
+            "checks": [{"id": "lib-check", "status": "failed", "failure_evidence": self._evidence()}],
+        }
+        fresh = [{"suite": "lib", "status": "failed", "exit": 1, "failed_checks": ["lib-check"], "log": "/tmp/init.log"}]
+        cls = verify.classify_failures(store, rec, str(wt), rec["base_sha"], fresh, initial_report, jobs=2)
+        assert cls is not None
+        self.assertEqual(cls["checks"][0]["class"], str(verify.CheckClass.PRE_EXISTING))
+        calls = self._read_calls(calls_log)
+        # 1: alone (no --no-reuse), 2: base (no --no-reuse, returned reused:true), 3: base retry (--no-reuse)
+        self.assertEqual(len(calls), 3)
+        self.assertNotIn("--no-reuse", calls[0]["args"])
+        self.assertNotIn("--no-reuse", calls[1]["args"])
+        self.assertIn("--no-reuse", calls[2]["args"])
+
+    def test_classify_failures_stays_unclassified_when_verifier_ignores_or_rejects_no_reuse(self) -> None:
+        from lanefather import config, state, verify
+        ev = repr(self._evidence())
+        # Subcase 1: verifier ignores --no-reuse and still returns reused: true.
+        calls_ignore = self._install_custom_verify(f"""
+if args[:1] == ["--changed"]:
+    print(json.dumps({{"full": False, "paths": ["lib/api.txt"], "unowned": [], "suites": ["lib"],
+                       "reasons": {{"lib": ["lib/api.txt"]}},
+                       "checks": [{{"id": "lib-check", "suite": "lib", "paths": ["lib/api.txt"], "producer": False}}]}}))
+    sys.exit(0)
+label = os.environ.get("LANEFATHER_SLOT_LABEL", "")
+with CALLS_LOG.open("a") as fh:
+    fh.write(json.dumps({{"label": label, "args": args}}) + "\\n")
+run_dir = RUNS_ROOT / uuid.uuid4().hex[:8]
+run_dir.mkdir(parents=True, exist_ok=True)
+rep = run_dir / "report.json"
+if "-base" in label:
+    rep.write_text(json.dumps({{
+        "exit": 0,
+        "checks": [{{"id": "lib-check", "status": "passed", "reused": True}}],
+    }}))
+    print(f"Verification report: {{rep}}")
+    sys.exit(0)
+rep.write_text(json.dumps({{
+    "exit": 1,
+    "checks": [{{"id": "lib-check", "status": "failed", "failure_evidence": {ev}}}],
+}}))
+print(f"Verification report: {{rep}}")
+sys.exit(1)
+""")
+        wt1, rec1 = self._make_lane("nr-ignore")
+        cfg = config.load(self.integration / ".lanefather.toml")
+        store = state.Store(cfg, directory=self.state)
+        initial_report = {
+            "exit": 1,
+            "checks": [{"id": "lib-check", "status": "failed", "failure_evidence": self._evidence()}],
+        }
+        fresh = [{"suite": "lib", "status": "failed", "exit": 1, "failed_checks": ["lib-check"], "log": "/tmp/init.log"}]
+        cls1 = verify.classify_failures(store, rec1, str(wt1), rec1["base_sha"], fresh, initial_report, jobs=2)
+        assert cls1 is not None
+        self.assertEqual(cls1["checks"][0]["class"], str(verify.CheckClass.UNCLASSIFIED))
+        self.assertTrue(cls1["checks"][0]["base"].get("reused"))
+        self.assertEqual(len(self._read_calls(calls_ignore)), 3)
+
+        # Subcase 2: verifier rejects --no-reuse with exit 2 and no report.
+        calls_reject = self._install_custom_verify(f"""
+if args[:1] == ["--changed"]:
+    print(json.dumps({{"full": False, "paths": ["lib/api.txt"], "unowned": [], "suites": ["lib"],
+                       "reasons": {{"lib": ["lib/api.txt"]}},
+                       "checks": [{{"id": "lib-check", "suite": "lib", "paths": ["lib/api.txt"], "producer": False}}]}}))
+    sys.exit(0)
+label = os.environ.get("LANEFATHER_SLOT_LABEL", "")
+with CALLS_LOG.open("a") as fh:
+    fh.write(json.dumps({{"label": label, "args": args}}) + "\\n")
+if "--no-reuse" in args:
+    print("unknown flag: --no-reuse", file=sys.stderr)
+    sys.exit(2)
+run_dir = RUNS_ROOT / uuid.uuid4().hex[:8]
+run_dir.mkdir(parents=True, exist_ok=True)
+rep = run_dir / "report.json"
+if "-base" in label:
+    rep.write_text(json.dumps({{
+        "exit": 0,
+        "checks": [{{"id": "lib-check", "status": "passed", "reused": True}}],
+    }}))
+    print(f"Verification report: {{rep}}")
+    sys.exit(0)
+rep.write_text(json.dumps({{
+    "exit": 1,
+    "checks": [{{"id": "lib-check", "status": "failed", "failure_evidence": {ev}}}],
+}}))
+print(f"Verification report: {{rep}}")
+sys.exit(1)
+""")
+        wt2, rec2 = self._make_lane("nr-reject", claim="calls/**")
+        cls2 = verify.classify_failures(store, rec2, str(wt2), rec2["base_sha"], fresh, initial_report, jobs=2)
+        assert cls2 is not None
+        self.assertEqual(cls2["checks"][0]["class"], str(verify.CheckClass.UNCLASSIFIED))
+        self.assertEqual(len(self._read_calls(calls_reject)), 3)
+
+        # Subcase 3: verifier never emits reused: true -> never receives --no-reuse.
+        calls_plain = self._install_custom_verify(f"""
+if args[:1] == ["--changed"]:
+    print(json.dumps({{"full": False, "paths": ["lib/api.txt"], "unowned": [], "suites": ["lib"],
+                       "reasons": {{"lib": ["lib/api.txt"]}},
+                       "checks": [{{"id": "lib-check", "suite": "lib", "paths": ["lib/api.txt"], "producer": False}}]}}))
+    sys.exit(0)
+label = os.environ.get("LANEFATHER_SLOT_LABEL", "")
+with CALLS_LOG.open("a") as fh:
+    fh.write(json.dumps({{"label": label, "args": args}}) + "\\n")
+run_dir = RUNS_ROOT / uuid.uuid4().hex[:8]
+run_dir.mkdir(parents=True, exist_ok=True)
+rep = run_dir / "report.json"
+if "-base" in label:
+    rep.write_text(json.dumps({{"exit": 0, "checks": [{{"id": "lib-check", "status": "passed"}}]}}))
+    print(f"Verification report: {{rep}}")
+    sys.exit(0)
+rep.write_text(json.dumps({{
+    "exit": 1,
+    "checks": [{{"id": "lib-check", "status": "failed", "failure_evidence": {ev}}}],
+}}))
+print(f"Verification report: {{rep}}")
+sys.exit(1)
+""")
+        wt3, rec3 = self._make_lane("nr-plain", claim="tooling/**")
+        cls3 = verify.classify_failures(store, rec3, str(wt3), rec3["base_sha"], fresh, initial_report, jobs=2)
+        assert cls3 is not None
+        self.assertEqual(cls3["checks"][0]["class"], str(verify.CheckClass.REGRESSION))
+        plain_calls = self._read_calls(calls_plain)
+        self.assertEqual(len(plain_calls), 2)
+        for call in plain_calls:
+            self.assertNotIn("--no-reuse", call["args"])
+
+    def test_check_rerun_passes_no_reuse_when_supported(self) -> None:
+        calls_log = self._install_custom_verify("""
+if args[:1] == ["--changed"]:
+    print(json.dumps({"full": False, "paths": ["lib/api.txt"], "unowned": [], "suites": ["lib"],
+                      "reasons": {"lib": ["lib/api.txt"]},
+                      "checks": [{"id": "lib-check", "suite": "lib", "paths": ["lib/api.txt"], "producer": False}],
+                      "capabilities": ["no-reuse"]}))
+    sys.exit(0)
+with CALLS_LOG.open("a") as fh:
+    fh.write(json.dumps({"args": args}) + "\\n")
+run_dir = RUNS_ROOT / uuid.uuid4().hex[:8]
+run_dir.mkdir(parents=True, exist_ok=True)
+rep = run_dir / "report.json"
+rep.write_text(json.dumps({"exit": 0, "capabilities": ["no-reuse"], "checks": [{"id": "lib-check", "status": "passed"}]}))
+print(f"Verification report: {rep}")
+sys.exit(0)
+""")
+        self._make_lane("nr-chk")
+        self.lane("check", "nr-chk")
+        self.lane("check", "nr-chk", "--rerun")
+        calls = self._read_calls(calls_log)
+        self.assertEqual(len(calls), 2)
+        self.assertNotIn("--no-reuse", calls[0]["args"])
+        self.assertIn("--no-reuse", calls[1]["args"])
+
+    def test_classify_failures_retries_once_when_alone_returns_reused_without_capability(self) -> None:
+        from lanefather import config, state, verify
+        calls_log = self._install_custom_verify("""
+if args[:1] == ["--changed"]:
+    print(json.dumps({"full": False, "paths": ["lib/api.txt"], "unowned": [], "suites": ["lib"],
+                      "reasons": {"lib": ["lib/api.txt"]},
+                      "checks": [{"id": "lib-check", "suite": "lib", "paths": ["lib/api.txt"], "producer": False}]}))
+    sys.exit(0)
+label = os.environ.get("LANEFATHER_SLOT_LABEL", "")
+no_reuse = "--no-reuse" in args
+with CALLS_LOG.open("a") as fh:
+    fh.write(json.dumps({"label": label, "args": args}) + "\\n")
+run_dir = RUNS_ROOT / uuid.uuid4().hex[:8]
+run_dir.mkdir(parents=True, exist_ok=True)
+rep = run_dir / "report.json"
+if "-alone" in label and not no_reuse:
+    rep.write_text(json.dumps({
+        "exit": 0,
+        "checks": [{"id": "lib-check", "status": "passed", "reused": True}],
+    }))
+    print(f"Verification report: {rep}")
+    sys.exit(0)
+rep.write_text(json.dumps({
+    "exit": 0,
+    "checks": [{"id": "lib-check", "status": "passed"}],
+}))
+print(f"Verification report: {rep}")
+sys.exit(0)
+""")
+        wt, rec = self._make_lane("nr-alone-retry")
+        cfg = config.load(self.integration / ".lanefather.toml")
+        store = state.Store(cfg, directory=self.state)
+        initial_report = {
+            "exit": 1,
+            "checks": [{"id": "lib-check", "status": "failed", "failure_evidence": self._evidence()}],
+        }
+        fresh = [{"suite": "lib", "status": "failed", "exit": 1, "failed_checks": ["lib-check"], "log": "/tmp/init.log"}]
+        cls = verify.classify_failures(store, rec, str(wt), rec["base_sha"], fresh, initial_report, jobs=2)
+        assert cls is not None
+        self.assertEqual(cls["checks"][0]["class"], str(verify.CheckClass.FLAKY_UNDER_LOAD))
+        calls = self._read_calls(calls_log)
+        self.assertEqual(len(calls), 2)
+        self.assertNotIn("--no-reuse", calls[0]["args"])
+        self.assertIn("--no-reuse", calls[1]["args"])
 
 
 if __name__ == "__main__":

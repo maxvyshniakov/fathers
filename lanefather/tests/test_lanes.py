@@ -1063,5 +1063,109 @@ class ParkAndAbandonTests(LaneCase):
         self.assertEqual(resumed["base_sha"], original_base)
 
 
+class MergeUnionAndGlobUnclaimedTests(LaneCase):
+    """Retro #7: gitattributes merge=union files and glob patterns in unclaimed."""
+
+    def test_merge_union_files_do_not_conflict_across_lanes_or_broad_globs(self) -> None:
+        self.env["LANEFATHER_CAP"] = "6"
+        self.commit(
+            self.integration,
+            {
+                ".gitattributes": "packages/*/CHANGELOG.md merge=union\n",
+                "packages/a/CHANGELOG.md": "## Unreleased\n",
+                "packages/a/src/foo.ts": "export const x = 1;\n",
+            },
+            "add gitattributes merge=union",
+        )
+        # Two parallel lanes both claiming a merge=union file start cleanly.
+        self.start("u1", "packages/a/CHANGELOG.md")
+        self.start("u2", "packages/a/CHANGELOG.md")
+
+        # queue_states marks both ready when claiming a merge=union file.
+        from lanefather import config, gitops, queue, state
+        project = config.load(self.integration / ".lanefather.toml")
+        store = state.Store(project, directory=self.state)
+        entries = [
+            {"id": "q1", "ticket": "1", "claims": ["packages/a/CHANGELOG.md"], "after": []},
+            {"id": "q2", "ticket": "2", "claims": ["packages/a/CHANGELOG.md"], "after": []},
+        ]
+        states = queue.queue_states(
+            entries,
+            store.lanes(),
+            gitops.common_dir(self.integration),
+            root=str(self.integration),
+            project=project,
+        )
+        self.assertEqual([(e["id"], reason) for e, reason in states], [("q1", None), ("q2", None)])
+
+        # Lane claiming merge=union file and lane claiming packages/a/** do NOT overlap.
+        self.start("u3", "packages/a/**")
+
+        # Negative guard: two lanes claiming packages/a/** STILL fail with overlap refusal.
+        overlap_broad = self.start("u4", "packages/a/**", ok=False)
+        self.assertIn("u3", overlap_broad)
+        self.assertIn("packages/a/**", overlap_broad)
+
+        # Negative guard: two lanes claiming a normal file without merge=union STILL fail with overlap refusal.
+        self.start("n1", "packages/b/src/foo.ts")
+        overlap_normal = self.start("n2", "packages/b/src/foo.ts", ok=False)
+        self.assertIn("n1", overlap_normal)
+        self.assertIn("packages/b/src/foo.ts", overlap_normal)
+
+    def test_check_widening_skips_merge_union_files_and_does_not_warn(self) -> None:
+        self.commit(
+            self.integration,
+            {
+                ".gitattributes": "packages/*/CHANGELOG.md merge=union\n",
+                "packages/a/CHANGELOG.md": "## Unreleased\n",
+                "packages/a/src/foo.ts": "export const x = 1;\n",
+            },
+            "add gitattributes merge=union",
+        )
+        # Another lane holds packages/a/**; our lane edits lib/api.txt + packages/a/CHANGELOG.md.
+        self.start("holder", "packages/a/**")
+        wt = pathlib.Path(self.created("editor", "lib/**"))
+        self.commit(wt, {"lib/api.txt": "foo\nupdated\n", "packages/a/CHANGELOG.md": "## Unreleased\n- entry\n"})
+        out = self.lane("check", "editor")
+        self.assertNotIn("packages/a/CHANGELOG.md", self.record("editor")["claims"])
+        self.assertNotIn("overlaps the claims of lane holder", out)
+
+    def test_config_unclaimed_supports_globs_alongside_prefixes(self) -> None:
+        cfg_path = self.integration / ".lanefather.toml"
+        lines = [line for line in cfg_path.read_text().splitlines() if not line.startswith("unclaimed =")]
+        cfg_text = 'unclaimed = ["release-notes/", "packages/*/CHANGELOG.md"]\n' + "\n".join(lines) + "\n"
+        self.commit(
+            self.integration,
+            {
+                ".lanefather.toml": cfg_text,
+                "packages/a/CHANGELOG.md": "## Unreleased\n",
+                "release-notes/v1.md": "notes\n",
+            },
+            "configure unclaimed prefix and glob",
+        )
+        lane = load_lane()
+        project = lane.config.load(cfg_path)
+        self.assertTrue(lane.claims.unclaimed("release-notes/v1.md", project, root=str(self.integration)))
+        self.assertTrue(lane.claims.unclaimed("packages/a/CHANGELOG.md", project, root=str(self.integration)))
+        self.assertFalse(lane.claims.unclaimed("packages/a/src/foo.ts", project, root=str(self.integration)))
+        # Two parallel lanes claiming glob-unclaimed file start cleanly.
+        self.start("g1", "packages/a/CHANGELOG.md")
+        self.start("g2", "packages/a/CHANGELOG.md")
+
+    def test_non_git_directory_and_repo_without_gitattributes_fail_closed(self) -> None:
+        import shutil
+        import tempfile
+        lane = load_lane()
+        # Repo without .gitattributes fails closed to False.
+        project = lane.config.load(self.integration / ".lanefather.toml")
+        self.assertFalse(lane.claims.unclaimed("lib/api.txt", project, root=str(self.integration)))
+        # Non-git directory fails closed cleanly without raising.
+        non_git = pathlib.Path(tempfile.mkdtemp(prefix="non-git-claims-"))
+        self.addCleanup(shutil.rmtree, non_git, True)
+        (non_git / "CHANGELOG.md").write_text("# Changelog\n")
+        self.assertEqual(lane.claims.merge_attr("CHANGELOG.md", root=str(non_git)), "")
+        self.assertFalse(lane.claims.unclaimed("CHANGELOG.md", project, root=str(non_git)))
+
+
 if __name__ == "__main__":
     unittest.main()

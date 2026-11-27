@@ -393,6 +393,7 @@ class Selection:
     items: tuple[str, ...] = ()
     only: tuple[str, ...] = ()
     base: str | None = None
+    no_reuse: bool = False
 
     @classmethod
     def full(cls) -> Selection:
@@ -403,18 +404,28 @@ class Selection:
         return cls("suites", tuple(names))
 
     @classmethod
-    def checks(cls, ids: Iterable[str], *, only: Iterable[str] = (), base: str | None = None) -> Selection:
-        return cls("checks", tuple(ids), only=tuple(only), base=base or None)
+    def checks(
+        cls,
+        ids: Iterable[str],
+        *,
+        only: Iterable[str] = (),
+        base: str | None = None,
+        no_reuse: bool = False,
+    ) -> Selection:
+        return cls("checks", tuple(ids), only=tuple(only), base=base or None, no_reuse=bool(no_reuse))
 
     def argv(self) -> tuple[str, ...]:
         if self.kind == "full":
-            return ()
-        if self.kind == "checks":
-            parts: tuple[str, ...] = ("--checks", ",".join(self.items))
+            parts: tuple[str, ...] = ()
+        elif self.kind == "checks":
+            parts = ("--checks", ",".join(self.items))
             if self.base:
                 parts = (*parts, "--base", self.base)
-            return (*parts, "--only", ",".join(self.only)) if self.only else parts
-        return ("--suites", ",".join(self.items))
+            if self.only:
+                parts = (*parts, "--only", ",".join(self.only))
+        else:
+            parts = ("--suites", ",".join(self.items))
+        return (*parts, "--no-reuse") if self.no_reuse else parts
 
     def describe(self) -> str:
         if self.kind == "full":
@@ -1366,13 +1377,14 @@ def run_rerun(
     toolchain: Any = UNRESOLVED,
     only: Iterable[str] = (),
     base: str | None = None,
+    no_reuse: bool = False,
 ) -> tuple[str, dict[str, Any] | None, Path | None, Path | None, str | None]:
     """Execute one rerun via `verify.Run` and return `(run_id, report, log, run_dir, problem)`."""
     only_tuple = tuple(only)
     lease = Lease(wait=rerun_wait(store.project), kind="rerun") if queued else None
     run = Run(
         root,
-        Selection.checks(ids, only=only_tuple, base=base),
+        Selection.checks(ids, only=only_tuple, base=base, no_reuse=no_reuse),
         label,
         "rerun",
         jobs,
@@ -1537,6 +1549,19 @@ def evaluate_alone_row(
             },
             False,
         )
+    if row.get("reused"):
+        return (
+            {
+                "check": check_id,
+                "class": str(CheckClass.UNCLASSIFIED),
+                "reason": (
+                    f"the alone rerun reused a cached result ({row['status']}); cannot classify without executing"
+                ),
+                "alone": {"status": row["status"], "log": str(log), "reused": True},
+                **({"tests": check_tests} if check_tests else {}),
+            },
+            False,
+        )
     if outside:
         return (
             {
@@ -1617,17 +1642,26 @@ def evaluate_base_row(
         return entry
     actual_row = row or {"status": "not_run"}
     own = kept_dir / Path(actual_row["log"]).name if kept_dir and actual_row.get("log") else None
-    evidence = {
+    evidence: dict[str, Any] = {
         "sha": base,
         "status": actual_row["status"],
         "log": str(own) if own and own.is_file() else str(base_log),
         **({"blocked_by": actual_row["blocked_by"]} if actual_row.get("blocked_by") else {}),
+        **({"reused": True} if actual_row.get("reused") else {}),
     }
     outside = _outside_failed_tests(actual_row, set(check_tests)) if check_tests else []
     if check_tests:
         entry["tests"] = check_tests
     if problem:
         entry.update({"class": str(CheckClass.UNCLASSIFIED), "reason": problem, "base": evidence})
+    elif actual_row.get("reused"):
+        entry.update({
+            "class": str(CheckClass.UNCLASSIFIED),
+            "reason": (
+                f"the base rerun reused a cached result ({actual_row['status']}); cannot classify without executing"
+            ),
+            "base": evidence,
+        })
     elif outside:
         entry.update({
             "class": str(CheckClass.UNCLASSIFIED),
@@ -1730,6 +1764,7 @@ def classify_failures(
     """Rerun the red checks of a lane check (at most LANEFATHER_RERUNS) and classify each; None when nothing is red."""
     only_supported = plan.supports_only(worktree, lane_plan=lane_plan, report=report, project=store.project)
     base_supported = plan.supports_base(worktree, lane_plan=lane_plan, report=report, project=store.project)
+    no_reuse_supported = plan.supports_no_reuse(worktree, lane_plan=lane_plan, report=report, project=store.project)
     planned = plan_classification(
         fresh, report, cap=rerun_cap(store.project), budget=rerun_budget, only_supported=only_supported,
     )
@@ -1741,6 +1776,7 @@ def classify_failures(
     candidate_runs: list[ComparisonRun] = [
         ComparisonRun("the initial run", report, log=initial_log, selected=planned.candidates),
     ]
+    alone_comparison_by_check: dict[str, ComparisonRun] = {}
     load: dict[str, Any] = {"first_run": host.load_averages(store.project)}
     runs: list[dict[str, Any]] = []
     if planned.active_rerun and not planned.first:
@@ -1750,19 +1786,49 @@ def classify_failures(
         alone_run_id, alone_report, log, _, problem = run_rerun(
             store, worktree, planned.active_rerun, f"lane-{record['id']}-alone", alone_jobs,
             meta=lane_meta(store, record), ticket=lane_ticket(record), toolchain=toolchain,
-            only=planned.alone_tests, base=alone_base,
-        )
-        candidate_runs.append(
-            ComparisonRun("the alone rerun", alone_report, log=log, selected=planned.active_rerun),
+            only=planned.alone_tests, base=alone_base, no_reuse=no_reuse_supported,
         )
         runs.append({"run": alone_run_id, "rerun": "alone",
                      **({"tests": planned.alone_tests} if planned.alone_tests else {})})
+        reused_alone = (
+            [c for c in planned.active_rerun if report_row(alone_report, c).get("reused")]
+            if not no_reuse_supported and problem is None
+            else []
+        )
+        retry_alone_report: dict[str, Any] | None = None
+        retry_alone_log: Path | None = None
+        retry_alone_problem: str | None = None
+        retry_alone_tests: list[str] = []
+        if reused_alone:
+            retry_alone_jobs = rerun_jobs(
+                jobs, minimum=rerun_min_slots(reused_alone, lane_plan, fresh, project=store.project),
+            )
+            retry_alone_tests = (
+                _ordered_subset_tests(reused_alone, planned.failed_tests_by_check) if only_supported else []
+            )
+            retry_alone_run_id, retry_alone_report, retry_alone_log, _, retry_alone_problem = run_rerun(
+                store, worktree, reused_alone, f"lane-{record['id']}-alone-noreuse", retry_alone_jobs,
+                meta=lane_meta(store, record), ticket=lane_ticket(record), toolchain=toolchain,
+                only=retry_alone_tests, base=alone_base, no_reuse=True,
+            )
+            runs.append({"run": retry_alone_run_id, "rerun": "alone", "no_reuse": True,
+                         **({"tests": retry_alone_tests} if retry_alone_tests else {})})
         load["alone"] = host.load_averages(store.project)
+        reused_alone_set = set(reused_alone)
         for check_id in planned.active_rerun:
-            row = report_row(alone_report, check_id)
-            check_tests = planned.failed_tests_by_check.get(check_id) if planned.alone_tests else None
+            if check_id in reused_alone_set:
+                c_report, c_log, c_problem = retry_alone_report, retry_alone_log, retry_alone_problem
+                c_selected, c_has_tests = reused_alone, bool(retry_alone_tests)
+            else:
+                c_report, c_log, c_problem = alone_report, log, problem
+                c_selected, c_has_tests = planned.active_rerun, bool(planned.alone_tests)
+            alone_comparison_by_check[check_id] = ComparisonRun(
+                "the alone rerun", c_report, log=c_log, selected=c_selected,
+            )
+            row = report_row(c_report, check_id)
+            check_tests = planned.failed_tests_by_check.get(check_id) if c_has_tests else None
             entry, needs_base = evaluate_alone_row(
-                check_id, row, first_row=report_row(report, check_id), log=log, problem=problem, load=load,
+                check_id, row, first_row=report_row(report, check_id), log=c_log, problem=c_problem, load=load,
                 check_tests=check_tests,
             )
             entries[check_id] = entry
@@ -1788,7 +1854,7 @@ def classify_failures(
                 base_run_id, base_report, base_log, base_dir, base_problem = run_rerun(
                     store, path, present, base_label, base_jobs, queued=not planned.first,
                     meta={**lane_meta(store, record), "on": "base"}, ticket=lane_ticket(record),
-                    only=base_tests,
+                    only=base_tests, no_reuse=no_reuse_supported,
                 )
                 runs.append({"run": base_run_id, "rerun": "base",
                              **({"tests": base_tests} if base_tests else {})})
@@ -1818,7 +1884,7 @@ def classify_failures(
                             cid_run_id, cid_report, cid_log, cid_dir, cid_problem = run_rerun(
                                 store, path, [cid], cid_label, cid_jobs, queued=not planned.first,
                                 meta={**lane_meta(store, record), "on": "base"}, ticket=lane_ticket(record),
-                                only=cid_tests,
+                                only=cid_tests, no_reuse=no_reuse_supported,
                             )
                             runs.append({"run": cid_run_id, "rerun": "base",
                                          **({"tests": cid_tests} if cid_tests else {})})
@@ -1847,18 +1913,51 @@ def classify_failures(
                     else:
                         for cid in present:
                             base_outcomes[cid] = (base_report, base_log, kept, base_problem, base_tests, present)
+                if not no_reuse_supported and present:
+                    reused_base = [
+                        cid for cid in present
+                        if base_outcomes[cid][3] is None and report_row(base_outcomes[cid][0], cid).get("reused")
+                    ]
+                    if reused_base:
+                        retry_label = f"{base_label}-noreuse"
+                        retry_jobs = (
+                            1 if planned.first
+                            else rerun_jobs(jobs, minimum=rerun_min_slots(reused_base, lane_plan, fresh,
+                                                                          project=store.project))
+                        )
+                        retry_tests = (
+                            _ordered_subset_tests(reused_base, planned.failed_tests_by_check)
+                            if only_supported
+                            else []
+                        )
+                        retry_run_id, retry_report, retry_log, retry_dir, retry_problem = run_rerun(
+                            store, path, reused_base, retry_label, retry_jobs, queued=not planned.first,
+                            meta={**lane_meta(store, record), "on": "base"}, ticket=lane_ticket(record),
+                            only=retry_tests, no_reuse=True,
+                        )
+                        runs.append({"run": retry_run_id, "rerun": "base", "no_reuse": True,
+                                     **({"tests": retry_tests} if retry_tests else {})})
+                        retry_kept = keep_run(store, retry_dir, retry_label)
+                        for cid in reused_base:
+                            base_outcomes[cid] = (
+                                retry_report, retry_log, retry_kept, retry_problem, retry_tests, reused_base,
+                            )
         for check_id in still_red:
             is_present = check_id in present
             c_report, c_log, c_kept, c_problem, c_tests, c_selected = base_outcomes.get(
                 check_id, (None, None, None, None, [], []),
             )
             base_run = ComparisonRun("the base rerun", c_report, log=c_log, selected=c_selected)
+            check_candidate_runs = [
+                *candidate_runs,
+                *([alone_comparison_by_check[check_id]] if check_id in alone_comparison_by_check else []),
+            ]
             row = report_row(c_report, check_id) if is_present else None
             check_tests = planned.failed_tests_by_check.get(check_id) if c_tests else None
             entries[check_id] = evaluate_base_row(
                 check_id, entries[check_id], base=base, present=is_present, row=row, base_log=c_log,
                 kept_dir=c_kept, problem=c_problem, check_tests=check_tests,
-                comparison_reports=[*candidate_runs, base_run], selected=planned.candidates,
+                comparison_reports=[*check_candidate_runs, base_run], selected=planned.candidates,
             )
     return finalize_classification(base, planned, entries, load=load, runs=runs)
 

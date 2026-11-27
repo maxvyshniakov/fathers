@@ -1723,7 +1723,13 @@ def fix_claims(
     findings = source.findings if isinstance(source, review_record.ReviewRecord) else source.get("findings", [])
     for finding in findings:
         path = posixpath.normpath(finding.get("file") or ".")
-        if path in (".", "..") or path.startswith(("/", "../")) or path in found or path in held:
+        if (
+            path in (".", "..")
+            or path.startswith(("/", "../"))
+            or path in found
+            or path in held
+            or claims.unclaimed(path, store.project)
+        ):
             continue
         holders = [
             (other, claim)

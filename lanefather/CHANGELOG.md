@@ -477,6 +477,15 @@ installed as 0.1.0 and is told apart by its commit. State compatibility: [README
 
 ### Fixed
 
+- Red-check classification (`alone` and `base` reruns) no longer treats cached `reused: true` check rows as real
+  passes (avoiding false `regression` or `flaky-under-load` verdicts): Lanefather now passes `--no-reuse` when the
+  verifier advertises the `no-reuse` capability (including on `lanefather check --rerun`), retries reused rows once
+  with `--no-reuse` when the capability is not advertised, and fails closed to `unclassified` (`reused: true`) if a
+  rerun row is still reused or `--no-reuse` is rejected.
+- Files marked `merge=union` in `.gitattributes` (such as `packages/*/CHANGELOG.md`) and glob patterns in
+  `.lanefather.toml` `unclaimed` (alongside prefix entries) are now treated as unclaimed during lane claim overlap
+  checks, queue readiness, `lanefather check` claim widening, and fix-lane claim resolution, while broad globs and
+  directories (such as `packages/a/**`) still conflict normally.
 - Reap lane `*.scratch` directories on close/gc and prune `<state>/logs/` in `lanefather gc` (fathers#259):
   - `done`, `drop`, `park`, and `abandon` now always reap both recorded `record["scratch"]` entries and the canonical
     `<state>/<lane-id>.scratch` directory when present, cleaning stale `base-*` worktrees inside them first and never

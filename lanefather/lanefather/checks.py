@@ -128,6 +128,7 @@ class Selected:
     added: list[str]
     overlaps: list[dict[str, Any]]
     decision: dict[str, Any]
+    rerun: bool = False
 
 
 @dataclass(frozen=True)
@@ -229,7 +230,9 @@ def select(
             )
         )
     where = claims.project_root(store.project)
-    outside = [p for p in lane_plan["paths"] if not claims.unclaimed(p, store.project)
+    claims.prefetch_kinds(lane_plan["paths"], root=where, project=store.project)
+    claims.prefetch_merge_attrs(lane_plan["paths"], root=where, project=store.project)
+    outside = [p for p in lane_plan["paths"] if not claims.unclaimed(p, store.project, root=where)
                and not any(claims.matches(c, p, root=where) for c in record["claims"])]
     added, overlaps = claims.widen_claims(store, record["id"], outside)
     if added:
@@ -251,7 +254,7 @@ def select(
         decision = {"jobs": 1, "reason": "nothing to run"}
     return Selected(toolchain=toolchain, platform=platform, base=base, lane_plan=lane_plan, fix_of=fix_of,
                     suites=suites, selected=selected, reused=reused, remaining=remaining, outside=outside,
-                    added=added, overlaps=overlaps, decision=decision)
+                    added=added, overlaps=overlaps, decision=decision, rerun=rerun)
 
 
 def run(store: state.Store, prepared: Prepared, selection: Selected) -> CheckRun:
@@ -262,7 +265,7 @@ def run(store: state.Store, prepared: Prepared, selection: Selected) -> CheckRun
     fresh, ran, triaged, classification, stopped, granted_jobs = _execute_lane_run(
         store, prepared.record, prepared.worktree, selection.base, selection.suites, selection.remaining,
         selection.decision["jobs"], selection.toolchain, lane_plan=selection.lane_plan,
-        min_jobs=selection.decision.get("min_jobs"))
+        min_jobs=selection.decision.get("min_jobs"), rerun=selection.rerun)
     return CheckRun(started=started, fresh=fresh, ran=ran, triage=triaged,
                     classification=classification, stopped=stopped, granted_jobs=granted_jobs)
 
@@ -396,6 +399,7 @@ def _execute_lane_run(
     toolchain: Any = verify.UNRESOLVED,
     lane_plan: dict[str, Any] | None = None,
     min_jobs: int | None = None,
+    rerun: bool = False,
 ) -> tuple[Rows, dict[str, dict[str, Any]], str | None, dict[str, Any] | None, Any, int | None]:
     """Run the lane's checks that are left, classify the red ones (#568), and run any checks unblocked by a
     prerequisite passing its own rerun (fathers#240)."""
@@ -415,8 +419,9 @@ def _execute_lane_run(
             and plan.supports_base(worktree, lane_plan=lane_plan, project=store.project)
             else None
         )
+        no_reuse = bool(rerun and plan.supports_no_reuse(worktree, lane_plan=lane_plan, project=store.project))
         choice = (
-            verify.Selection.checks(ids, base=scoped_base)
+            verify.Selection.checks(ids, base=scoped_base, no_reuse=no_reuse)
             if ids is not None
             else verify.Selection.suites(active_suites)
         )

@@ -416,7 +416,7 @@ self-contained configuration in the README for a Repo-Kit consumer.
 | `state_dir` | the lane records, receipts and ledger |
 | `legacy_env_prefix`, `[env]` | the variables older tools set, read after `LANEFATHER_*` |
 | `rules_dir`, `coding_standards`, `steering`, `report_doc` | rule/standards inputs and the report-link text |
-| `unclaimed`, `merge_config` | paths no lane claims; `git -c` settings for land's merge |
+| `unclaimed`, `merge_config` | path prefixes or globs no lane claims (files with `.gitattributes` `merge=union` are also unclaimed automatically, without exempting broad globs/directories); `git -c` settings for land's merge |
 | `[checks]` `verify`, `plan_module`, `triage`, `toolchain`, `toolchain_name`, `slot_env` | the check contract below |
 | `[review]` `blocks` | the unmarked review finding severities that hold the batch gate, promote and `findings` (default `["P1", "P2"]`; fathers#109) |
 | `[review]` `panel`, `panel_required` | the review panel (fathers#151): two or more model aliases of the models file that review every lane at once; `panel_required = true` holds the gate while a member gave no answer ([Reviewer configuration](#reviewer-configuration)) |
@@ -604,13 +604,17 @@ land's comment as the lane's evidence. The capability is `tickets.lifecycle`.
 
 ```
 <verify> --changed --base B --plan --json   {full, paths, unowned, checks: [{id, suite, paths, producer}], suites, reasons, capabilities?}
-<verify> --checks A,B [--base B] [--only T1,T2] | --suites S --keep-going --jobs N
+<verify> --checks A,B [--base B] [--only T1,T2] [--no-reuse] | --suites S --keep-going --jobs N
                                              prints `Verification report: <report.json>`
 <verify> --keep-going --jobs N               the full gate; prints `Verified tree <tree> stamped`
 ```
 
 The plan module (`plan_module`) answers `SUITES`, `checks(...)` and `smoke(root)`; `PERF = "<suite>"` names the perf
-suite, and `CAPABILITIES` may advertise `"only"`. A project without one gets whole suites. In post-merge `plan` mode
+suite, and `CAPABILITIES` may advertise `"only"`, `"base"`, and `"no-reuse"` (`SUPPORTS_NO_REUSE` / report or plan
+`capabilities` containing `"no-reuse"`). When `"no-reuse"` is advertised, `lanefather check --rerun` and red-check
+`alone`/`base` reruns pass `--no-reuse` to bypass cached check results; without it, any `alone` or `base` rerun row
+reporting `reused: true` is retried once with `--no-reuse`, and any row that remains `reused: true` fails closed to
+`unclassified` rather than `regression` or `flaky-under-load`. A project without a plan module gets whole suites. In post-merge `plan` mode
 (projects without `smoke(root)`), `land` reuses passing whole-suite results from the lane's current green check receipt
 when the merge tree equals the receipt tree (skipping plan preparation and the verifier) or when the diff from the lane
 tip to the merge touches no input of that suite (`narrowing.dropped_suites`, `narrowing.reused_suites`, and
